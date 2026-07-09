@@ -7,6 +7,7 @@ MySQL compilation:
 - nested `and`/`or`/`not` predicates;
 - comparisons, `IN`, null checks, named parameters, and inline values;
 - selections with raw aggregate expressions, ordering, limits, and offsets;
+- aliased joins and correlated `EXISTS` subqueries;
 - insert, update, and delete statements with `RETURNING` requirements.
 
 Run the focused suite with:
@@ -28,7 +29,5 @@ parameter binding, value-independent cache keys, shape-sensitive keys,
 capability preservation, pre-driver rejection of unsupported operations, and
 order preservation for volatile calls.
 
-Join generation is intentionally pending: the v0 runtime IR does not yet have a
-join node. It will join these generators when Epic G6 adds the corresponding IR
-and compiler surface; raw aggregate expressions exercise the aggregate compile
-path available today.
+Join and correlated-subquery generators feed the same normalization, parameter,
+cache-key, capability, and volatile-order properties as basic query shapes.

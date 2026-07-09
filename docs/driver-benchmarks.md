@@ -236,6 +236,7 @@ driver + shared runtime. Representative run (Node, no I/O):
 | `point.cold` | ~30 µs | query rebuilt every call — compile + guard run each time |
 | `point.warm` | ~3.2 µs | stable IR reused → compile/guard **memoized** (I2 cache hit) |
 | `point.prepared` | **~2.06 µs** | `.prepare()` handle → precompiled decoder + per-dialect compile (I3) |
+| `advanced.prepared` | **~2.59 µs** | Epic J left join + grouped aggregate through a static handle |
 | `bulk.safe` (100 rows) | ~37 µs | strict schema decode of every row |
 | `bulk.unsafe` (100 rows) | ~2.4 µs | `unsafe` mode skips decode (Epic E) |
 
@@ -244,6 +245,8 @@ Derived:
 - **warm → prepared: ~1.5–1.6× faster** — the handle shaves the last µs off the hot path.
 - **bulk safe → unsafe: ~15–18× faster** — the decode-skip lever, opt-in only.
 - `point.prepared` ≈ **2.06 µs**, essentially at the **1–2 µs target** (§15.12) — the residual is the Effect runtime floor.
+- The join + aggregate handle remains in the same low-single-digit-µs envelope
+  as the simple prepared point query (representative Epic J run: ~2.59 µs).
 
 **Staged CI gate (§15.16).** `pnpm bench:baseline` records `scripts/hotpath-baseline.json`;
 `pnpm bench:gate` re-runs the bench and **fails only on a >2.5× regression** (generous

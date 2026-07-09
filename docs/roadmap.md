@@ -18,10 +18,10 @@ the implementation matches the specification.
 | D | Precompiled static query handles (`.prepare()`) | §15.13, §15.15, M7 | ✅ D1–D6 | P1 |
 | E | Performance modes (safe/trusted/unsafe) | §15.13, §15.17 | ✅ E1–E5 | P2 |
 | F | Cache-key composition & optimization strategies | §15.14 | ✅ F1–F4 | P1 |
-| G | SQL feature matrix tests | §14.11, M6 | ✅ G1–G5, G6a · ⛔ G6b→J | P1 |
-| H | Property & fuzz tests | §14.12, M6 | ✅ H1–H4, H5a · ⛔ H5b→J | P2 |
+| G | SQL feature matrix tests | §14.11, M6 | ✅ G1–G5,G6a,G6b L3–5 · 🟡 G6b L9 | P1 |
+| H | Property & fuzz tests | §14.12, M6 | ✅ H1–H5 | P2 |
 | I | Performance benchmarks, targets & CI gates | §15.12, §15.16, §18.8/18.9, M7 | ✅ I1–I7 | P1 |
-| J | Advanced query features (joins/agg/CTE/window/upsert) | §6, §14.11 L3–5,7 | ❌ prereq for G6b, H5b | P2 |
+| J | Advanced query features (joins/agg/CTE/window/upsert) | §6, §14.11 L3–5,7 | ✅ J1–J5 | P2 |
 
 ## Sequencing (phases)
 
@@ -32,7 +32,14 @@ Phase 1  F (cache key) → D (handles)  ⟶ B (contract suite: all dialects)
 Phase 2  E (perf modes)  ⟵ D,F        ⟶ I (bench lanes, cache-hit/handle, gates)
 Phase 3  G (feature matrix) ⟵ B       ⟶ H (property/fuzz)
 Phase 4  C.2 (Bun contract lane) ⟵ B  — closes runtime-portability invariant
+Phase 5  J (joins/agg/CTE/window)     → unblocks G6b + H5b (the deadlock's real prerequisite)
 ```
+
+> **G6/H5 deadlock (resolved).** G6b (feature Levels 3–5) and H5b (join fuzzing)
+> were framed as waiting on each other; both actually depend on **Epic J**
+> (join/aggregation/CTE/window IR + compiler), which no epic owned. J now owns
+> that prerequisite, so the graph is acyclic — J → {G6b, H5b} — and G6a/H5a
+> proceed immediately with today's IR.
 
 ---
 
@@ -135,12 +142,12 @@ area is labeled 🟡 with its remaining work rather than claimed complete. ✅
 | G1 | ✅ | `defineSqlFeatureSuite` + `runSqlFeatureMatrix` | §14.11 | `testing/sql-features.ts`: feature type (id/level/requires/build/assertSql/exec/assertResult) + capability-aware runner |
 | G2 | ✅ | Unit level: SQL snapshot + required capabilities per feature | §14.11 | Per-dialect `assertSql` snapshot (pg/sqlite/mysql) + `requiredCapabilities()` asserted |
 | G3 | ✅ | Fake-execution level: params/cardinality/decode/typed-errors | §14.11 | Each feature runs against `FakeDriver`; unsupported capability → `CapabilityError` before the driver (driver untouched) |
-| G4 | ✅ | Integration level: run suites via Effect Layers | §14.11 | `runSqlFeatureIntegration` executes each feature against a live layer in `unsafe` mode (validity, not decode) — supported ⇒ no `DriverError`, unsupported ⇒ `CapabilityError`. `sql-features.integration.test.ts` runs all 12 features on real SQLite (RETURNING included); pg/mysql reuse the same runner in e2e |
+| G4 | ✅ | Integration level: run suites via Effect Layers | §14.11 | `runSqlFeatureIntegration` executes each feature against a live layer in `unsafe` mode (validity, not decode) — supported ⇒ no `DriverError`, unsupported ⇒ `CapabilityError`. SQLite in the default run (`sql-features.integration.test.ts`, 12/12); Postgres + MySQL wired in `sql-features.integration.e2e.test.ts` — verified green (`pnpm e2e`), MySQL returning ⇒ `CapabilityError` |
 | G5 | ✅ | Populate Levels 1–2 (DML + typed semantics) | §14.11 | `LEVEL_1_2_FEATURES`: 12 features (projection/where/and-or/order-limit/insert/update/delete/nullable/maybeOne + insert·update·delete returning) × 3 dialects = 96 assertions |
 | G6a | ✅ available | Levels 6–8, 10 (types, mutation, txn, DDL) — buildable with today's IR | §14.11 | Same `defineSqlFeatureSuite` shape; extend `LEVEL_1_2_FEATURES` with data-type/mutation/transaction/DDL features — no new query IR needed |
-| G6b | ⛔ needs **Epic J** | Levels 3–5, 9 (joins, aggregation, CTE, window, routines) | §14.11 | Blocked on join/aggregation/CTE/window IR + compiler (Epic J), **not** on H |
+| G6b | 🟡 | Levels 3–5, 9 (joins, aggregation, CTE, window, routines) | §14.11 | `ADVANCED_SQL_FEATURES` covers Levels 3–5 across pg/sqlite/mysql with live SQLite validation; Level 9 routine expansion remains |
 
-**Definition of done:** features are executable test definitions (not prose); each is verified native/emulated/unsupported per dialect. G1–G5 + G4 ✅; G6a available now; G6b tracked under Epic J.
+**Definition of done:** features are executable test definitions (not prose); each is verified native/emulated/unsupported per dialect. Levels 1–5 and 7 are represented; the remaining Level 9 routine matrix stays under G6b.
 
 ---
 
@@ -153,9 +160,9 @@ area is labeled 🟡 with its remaining work rather than claimed complete. ✅
 | H3 | ✅ | Cache-key invariants | §14.12, §16 | S | Generated bound-value rewrites retain hashes/SQL/keys; changed limits produce different structural and compiled keys |
 | H4 | ✅ | Capability/optimization invariants | §14.12, §15.17 | S | MySQL `RETURNING` fails before `FakeDriver` in all modes; normalization retains capability bits and volatile-call order |
 | H5a | ✅ | Fuzz **current** features (predicate trees, ordering, pagination, mutations) | §14.12 | M | Generators over today's IR feed H2–H4 |
-| H5b | ⛔ needs **Epic J** | Join/subquery generation | §14.12 | M | Blocked on join/subquery IR (Epic J), **not** on G6 |
+| H5b | ✅ | Join/subquery generation | §14.12 | M | Aliased join variants and correlated subqueries feed normalization, parameter-order, cache-key, and capability properties |
 
-**Definition of done:** H1–H4 + H5a are property-tested with deterministic replay; H5b tracked under Epic J.
+**Definition of done:** H1–H5 are property-tested with deterministic replay. ✅
 
 ---
 
@@ -191,15 +198,16 @@ regression gate. ✅
 
 | # | Status | Task | Spec | Acceptance |
 |---|---|---|---|---|
-| J1 | ❌ | Join IR + compiler (`inner/left/right/full`, aliases, join scope guard) | §6, §8.1, §14.11 L3 | `db.select(...).from(a).join(b, on)`; scope guard rejects out-of-join columns; compiles per dialect |
-| J2 | ❌ | Subqueries (`from`/`where`/`exists`/`in`) | §14.11 L3 | subquery IR node + compiler + scope rules |
-| J3 | ❌ | Aggregation (`count/sum/avg/min/max`, `group by`, `having`, `distinct`) | §14.11 L4 | aggregate function nodes + group guard (non-aggregated column requires `groupBy`) |
-| J4 | ❌ | Advanced selection (CTE, recursive CTE, window fns, lateral, set ops) | §14.11 L5, §9 caps | capability-gated per dialect |
-| J5 | ❌ | Upsert / `on conflict` / `on duplicate key` | §14.11 L7, §9 caps | capability-gated; MySQL vs Postgres syntax |
+| J1 | ✅ | Join IR + compiler (`inner/left/right/full`, aliases, join scope guard) | §6, §8.1, §14.11 L3 | Immutable join terms, `alias()`, incremental join-scope guards, all join builders, per-dialect capabilities, and matrix coverage |
+| J2 | ✅ | Subqueries (`from`/`where`/`exists`/`in`) | §14.11 L3 | Derived/scalar/exists/in nodes compile recursively; ordinary derived tables reject correlation while expression/lateral subqueries receive outer scope |
+| J3 | ✅ | Aggregation (`count/sum/avg/min/max`, `group by`, `having`, `distinct`) | §14.11 L4 | Typed aggregate/windowable expressions, grouping clauses, and `aggregation-scope` guard with matrix and focused tests |
+| J4 | ✅ | Advanced selection (CTE, recursive CTE, window fns, lateral, set ops) | §14.11 L5, §9 caps | Named/recursive CTEs, window specs, lateral joins, and union/intersect/except are capability-gated and structurally hashed |
+| J5 | ✅ | Upsert / `on conflict` / `on duplicate key` | §14.11 L7, §9 caps | PostgreSQL/SQLite conflict SQL and MySQL duplicate-key SQL use separate capability bits and reject unsupported dialects before the driver |
 
 **Definition of done:** each advanced feature has IR + per-dialect compiler +
 capability gating, and lands **as `defineSqlFeatureSuite` entries** — which is
 exactly what unblocks **G6b** (Levels 3–5, 9) and **H5b** (join/subquery fuzzing).
+✅ J1–J5 are implemented; G6b's unrelated Level 9 routine expansion remains.
 
 ---
 

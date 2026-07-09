@@ -278,7 +278,7 @@ validation, `generate` + `apply`, `drift`, and a full query round-trip.
 | 3 — Guards & capabilities | ✅ scope/shape/returning guards, capability bitset + PostgreSQL/SQLite/MySQL matrices, typed `CapabilityError` |
 | 4 — Dialect compilers | ✅ select/insert/update/delete, safe identifiers/placeholders, value-independent cache keys for PostgreSQL/SQLite/MySQL |
 | 5 — Effect execution | ✅ `Database` service, driver contract, PostgreSQL/SQLite/MySQL adapters, all/one/maybeOne/run, decode pipeline |
-| 6 — Testing | 🟡 shared capability-aware contract suite across all adapters; executable SQL matrix Levels 1–2; deterministic property/fuzz invariants · live feature-matrix execution, Levels 3–10, and join fuzzing remain |
+| 6 — Testing | 🟡 shared capability-aware contract suite across all adapters; executable SQL matrix Levels 1–5 and 7; deterministic property/fuzz invariants include joins/subqueries · remaining type/transaction/routine/DDL matrix levels are tracked in G6 |
 | 7 — Benchmarks | ✅ Node/Bun lanes, prepared off/on, cold/warm/static-handle and mode axes, ~2.06 µs handle tracking, and a noise-tolerant CI regression gate |
 | 8 — Migrations | 🟡 IR, `defineMigration`, DDL compiler, diff, guards, journal, checksum, CLI `init/create/status/check`, **live migrator** (`up`/`down`/`generate`/`apply`/`check`/`drift`) with dialect-aware lock/transaction lifecycle, verified by real-Postgres e2e tests · CLI file-loading of `up/down/pull` remains |
 | 9 — Routines | 🟡 typed descriptors & IR (`defineFunction/Procedure/TableFunction`) — expression/`from` lowering pending |
@@ -303,12 +303,14 @@ Progress against it, with tasks broken out in [`docs/roadmap.md`](docs/roadmap.m
 | Precompiled `.prepare()` query handles | §15.13, §15.15 | ✅ static handles precompute shape guards/hash/decoder and cache compilation + capability results per dialect profile (Epic D) |
 | Performance modes (safe/trusted/unsafe) | §15.13 | ✅ safe default, strict trusted mode, opt-in unsafe decode bypass; capability checks remain mandatory (Epic E) |
 | Cache-key composition + optimization audit | §15.14 | ✅ versioned dialect profiles, normalized IR hashes, full plan keys, and required strategy audit (Epic F) |
-| SQL feature matrix tests | §14.11 | 🟡 executable, capability-aware unit/fake matrix covers Levels 1–2 across all dialects; live and Levels 3–10 remain (G4/G6) |
-| Property & fuzz tests | §14.12 | 🟡 H1–H4 cover current IR across all dialects; join combinations await join IR (H5/G6) |
+| SQL feature matrix tests | §14.11 | 🟡 executable, capability-aware matrix covers Levels 1–5 and 7 across all dialects, with live SQLite validation; Levels 6 and 8–10 remain (G6) |
+| Property & fuzz tests | §14.12 | ✅ deterministic invariants cover basic queries, mutations, joins, and correlated subqueries across all dialect compilers (Epic H) |
 | Hot-path targets + CI perf gates | §15.12, §15.16 | ✅ Node/Bun tracking, staged `bench:gate`, baseline handling, and CI invocation are implemented |
 
 The cache-key layers and completed §15.14 checklist are documented in
 [`docs/optimization-strategies.md`](docs/optimization-strategies.md).
+Advanced query APIs and their capability boundaries are documented in
+[`docs/advanced-queries.md`](docs/advanced-queries.md).
 
 ## Prepared query handles
 
