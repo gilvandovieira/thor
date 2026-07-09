@@ -3,8 +3,10 @@
 > **Scope and caveat:** cross-driver throughput below compares the two Postgres
 > adapters. The historical postgres.js write advantage is an **unprepared-path**
 > result; the adapters converge when preparation is enabled. SQLite is measured
-> separately as an in-process stress test. MySQL passes the shared dialect
-> contract suite but does not yet have a recorded driver-comparison benchmark.
+> separately as an in-process stress test. MySQL is **tested** (it passes the
+> shared capability-aware contract suite and the SQL feature-matrix integration
+> against real MySQL 8.4 via `pnpm e2e`) but is **not yet benchmarked** — no
+> recorded MySQL driver-comparison numbers.
 
 Thor runs the same dialect (Postgres) behind interchangeable **driver adapters**.
 These notes record (1) what Thor does about prepared statements, and (2) the
@@ -58,43 +60,46 @@ lookup with a bound param), `select.bulk200` (param-free, decode 200 rows),
 
 ## Prepared statements: OFF vs ON (per driver)
 
-Speedup = ops/s with preparation ÷ ops/s without, across two runs (PG 17, loopback):
+> **Latest run:** Node 26.4, PG 17 (Docker, `tmpfs`, loopback). Single
+> representative run per `pnpm bench:e2e` — bigger `ops/s` = faster; speedup >1×
+> means preparation helps. Microbenchmark variance ±15–20% (see caveats).
 
-**node-postgres**
+Speedup = ops/s with preparation ÷ ops/s without:
 
-| Scenario | speedup (ON ÷ OFF) |
-|---|--:|
-| insert | 1.57× – 2.32× |
-| insert.returning | 1.17× – 2.27× |
-| select.point | 1.57× – 1.61× |
-| update.point | 1.08× – 1.26× |
-| select.bulk200 *(param-free)* | ~1.0× |
+**node-postgres** (prepared ON, ops/s)
 
-**postgres.js**
+| Scenario | off | on | speedup |
+|---|--:|--:|--:|
+| insert | 3,615 | 5,383 | 1.49× |
+| insert.returning | 3,698 | 6,519 | 1.76× |
+| select.point | 3,685 | 5,197 | 1.41× |
+| update.point | 6,289 | 8,321 | 1.32× |
+| select.bulk200 *(param-free)* | 743 | 707 | ~1.0× |
 
-| Scenario | speedup (ON ÷ OFF) |
-|---|--:|
-| insert | 1.20× – 1.35× |
-| insert.returning | 1.14× – 1.55× |
-| select.point | 1.34× – 1.43× |
-| update.point | 1.32× – 1.58× |
-| select.bulk200 *(param-free)* | ~1.0× |
+**postgres.js** (prepared ON, ops/s)
+
+| Scenario | off | on | speedup |
+|---|--:|--:|--:|
+| insert | 4,223 | 7,442 | 1.76× |
+| insert.returning | 4,381 | 6,296 | 1.44× |
+| select.point | 3,556 | 5,222 | 1.47× |
+| update.point | 5,445 | 7,781 | 1.43× |
+| select.bulk200 *(param-free)* | 741 | 692 | ~1.0× |
 
 ## Driver comparison (prepared ON)
 
-Ratio = node-postgres ÷ postgres.js, ops/s:
+Ratio = node-postgres ÷ postgres.js, ops/s (≈1.0× = even):
 
 | Scenario | ratio | reading |
 |---|--:|---|
-| insert | 0.92× – 1.34× | roughly even (noisy) |
-| insert.returning | 0.94× – 1.10× | even |
-| select.point | 0.94× – 1.10× | even |
-| update.point | 0.94× – 1.01× | even |
-| select.bulk200 | 0.99× – 1.10× | even (driver-independent) |
+| insert | 0.72× | postgres.js ahead |
+| insert.returning | 1.04× | even |
+| select.point | 1.00× | even |
+| update.point | 1.07× | even |
+| select.bulk200 | 1.02× | even (driver-independent) |
 
-Representative absolute throughput with preparation on: single-row ops land at
-**~5,800–7,700 ops/s** (~0.13–0.17 ms/op); the 200-row decode at **~220 ops/s**
-(~4.6 ms/op).
+Absolute throughput with preparation on: single-row ops land at **~5,200–8,300
+ops/s** (~0.12–0.19 ms/op); the 200-row decode at **~700 ops/s** (~1.4 ms/op).
 
 ## Takeaways
 
@@ -137,14 +142,16 @@ Representative absolute throughput with preparation on: single-row ops land at
 and the full execution against a **constant in-memory driver** (zero I/O), through
 a **shared runtime** (as in a real program, not a fresh fiber per call).
 
-| Stage | ns/µs per op | notes |
+Latest run (Node 26.4) — smaller = faster:
+
+| Stage | µs per op | notes |
 |---|--:|---|
-| build (construct query IR) | **~0.28 µs** | sub-µs |
-| compile → SQL + params | **~1.2 µs** | memoized per shape after first call |
-| guard (scope + capability) | **~1.2 µs** | memoized per shape after first call |
-| decode (precompiled) | **~0.28 µs/row** | one compiled decoder per selection |
-| Effect run floor | ~0.04 µs | shared-runtime `runSync` |
-| **execute point `.one()`** | **~3.1 µs** | full path: guard→compile→bind→drive→decode→cardinality→Effect |
+| build (construct query IR) | **~0.42 µs** | sub-µs |
+| compile → SQL + params | **~0.64 µs** | memoized per shape after first call |
+| guard (scope + capability) | **~0.58 µs** | memoized per shape after first call |
+| decode (precompiled) | **~0.26 µs/row** | one compiled decoder per selection |
+| Effect run floor | ~0.05 µs | shared-runtime `runSync` |
+| **execute point `.one()`** | **~3.2 µs** | full path: guard→compile→bind→drive→decode→cardinality→Effect |
 | execute bulk `.all()` (100 rows) | ~35 µs | ~0.35 µs/row |
 
 For a real prepared point-select (~150 µs loopback), **Thor's own code is ~2%**
@@ -188,10 +195,13 @@ mean bypassing Effect on the hot path, which the design explicitly rejects. At
 *microsecond*. There's no network or disk to hide behind, so this is the honest
 worst case for an abstraction. Per op:
 
+Latest run (Node 26.4) — raw/overhead in µs (smaller = faster); share = Thor's
+slice of the total (smaller = thinner layer):
+
 | Scenario | raw `node:sqlite` | Thor (prep off) | Thor (prep on) | Thor overhead | Thor share |
 |---|--:|--:|--:|--:|--:|
-| select.point | ~0.75 µs | ~7.8 µs | **~4.2 µs** | ~3.5 µs | **~82%** |
-| select.bulk200 | ~55 µs | ~105 µs | ~108 µs | ~53 µs (~0.27 µs/row) | ~49% |
+| select.point | ~0.63 µs | ~7.2 µs | **~3.8 µs** | ~3.2 µs | **~84%** |
+| select.bulk200 | ~52 µs | ~102 µs | ~103 µs | ~52 µs (~0.26 µs/row) | ~50% |
 
 This hits home three things:
 
@@ -214,12 +224,18 @@ Both own-code benchmarks run under Node (`node:sqlite`) and Bun (`bun:sqlite`) �
 the SQLite bench selects the runtime's driver via a variable dynamic import.
 `pnpm bench:overhead:bun` / `pnpm bench:sqlite:bun` run them under Bun.
 
-| Metric | Node 26 | Bun 1.3 |
+Latest run — µs, smaller = faster:
+
+| Metric | Node 26.4 | Bun 1.3 |
 |---|--:|--:|
-| execute point `.one()` (no I/O) | ~3.1–3.5 µs | ~2.9 µs |
-| decode (precompiled) | ~0.30 µs/row | ~0.17 µs/row |
-| SQLite point select, Thor prepared on | ~4.9 µs | ~3.4 µs |
-| raw in-memory SQLite point select | ~0.76 µs | ~0.44 µs |
+| `point.prepared` handle (no I/O) | ~2.24 µs | ~2.05 µs |
+| `point.cold` (rebuilt each call) | ~33 µs | ~19 µs |
+| decode (precompiled) | ~0.26 µs/row | ~0.17 µs/row |
+| SQLite point select, Thor prepared on | ~3.8 µs | ~3.4 µs |
+| raw in-memory SQLite point select | ~0.63 µs | ~0.44 µs |
+
+Bun is ~30–40% faster on the hot loops (JavaScriptCore + native SQLite); the
+shape is identical, so pick the runtime on operational grounds.
 
 Bun is a bit faster on the decode loop and SQLite (JavaScriptCore + its native
 SQLite), but the shape is identical: Thor's own code is a few µs, dominated by
@@ -229,33 +245,32 @@ the Effect runtime, and ~85% of a microsecond-fast query on both runtimes.
 
 `scripts/bench-hotpath.mts` isolates the wins from the optimization work (cache
 memoization, `.prepare()` handles, execution modes) against a constant no-op
-driver + shared runtime. Representative run (Node, no I/O):
+driver + shared runtime. Latest run (Node 26.4, no I/O) — µs/op, smaller = faster:
 
 | Scenario | µs/op | what it isolates |
 |---|--:|---|
-| `point.cold` | ~30 µs | query rebuilt every call — compile + guard run each time |
-| `point.warm` | ~3.2 µs | stable IR reused → compile/guard **memoized** (I2 cache hit) |
-| `point.prepared` | **~2.06 µs** | `.prepare()` handle → precompiled decoder + per-dialect compile (I3) |
-| `advanced.prepared` | **~2.59 µs** | Epic J left join + grouped aggregate through a static handle |
+| `point.cold` | ~33 µs | query rebuilt every call — compile + guard run each time |
+| `point.warm` | ~3.3 µs | stable IR reused → compile/guard **memoized** (I2 cache hit) |
+| `point.prepared` | **~2.3 µs** | `.prepare()` handle → precompiled decoder + per-dialect compile (I3) |
+| `advanced.prepared` | **~2.4 µs** | Epic J left join + grouped aggregate through a static handle |
 | `routine.prepared` | **~1.63 µs** | Declared scalar routine with capability check + return codec |
 | `bulk.safe` (100 rows) | ~37 µs | strict schema decode of every row |
-| `bulk.unsafe` (100 rows) | ~2.4 µs | `unsafe` mode skips decode (Epic E) |
+| `bulk.unsafe` (100 rows) | ~2.5 µs | `unsafe` mode skips decode (Epic E) |
 
-Derived:
-- **cold → warm: ~8–9× faster** — "compile cache hit must be much faster than cold compile" (§15.16). ✅
-- **warm → prepared: ~1.5–1.6× faster** — the handle shaves the last µs off the hot path.
-- **bulk safe → unsafe: ~15–18× faster** — the decode-skip lever, opt-in only.
-- `point.prepared` ≈ **2.06 µs**, essentially at the **1–2 µs target** (§15.12) — the residual is the Effect runtime floor.
-- The join + aggregate handle remains in the same low-single-digit-µs envelope
-  as the simple prepared point query (representative Epic J run: ~2.59 µs).
+Derived (× faster, bigger = better):
+- **cold → warm: ~10–11× faster** — "compile cache hit must be much faster than cold compile" (§15.16). ✅
+- **warm → prepared: ~1.4× faster** — the handle shaves the last µs off the hot path.
+- **bulk safe → unsafe: ~14–16× faster** — the decode-skip lever, opt-in only.
+- `point.prepared` ≈ **2.3 µs** (Node), **~2.05 µs** (Bun) — at/just over the **1–2 µs target** (§15.12); the residual is the Effect runtime floor.
+- The join + aggregate handle (`advanced.prepared` ~2.4 µs) stays in the **same
+  envelope** as the simple prepared point query — Epic J added no measurable hot-path cost.
 - Declared routine execution (`routine.prepared` ~1.63 µs) also stays inside the
   target envelope, including capability lookup and return-codec decoding.
 
 **Staged CI gate (§15.16).** `pnpm bench:baseline` records `scripts/hotpath-baseline.json`;
 `pnpm bench:gate` re-runs the bench and **fails only on a >2.5× regression** (generous
-for CI noise) — auto-recording the baseline on first run. Tighten the threshold once
-baselines stabilize. The Node CI job invokes the gate after build, typecheck,
-and tests.
+for CI noise) — auto-recording the baseline on first run. **Latest gate: OK** (within
+2.5× of baseline). The Node CI job invokes the gate after build, typecheck, and tests.
 
 ### Performance contribution checklist (§18.9)
 

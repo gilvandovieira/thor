@@ -61,6 +61,7 @@
   "devDependencies": {
     "@types/node": "^26.1.0",
     "@types/pg": "8.20.0",
+    "better-sqlite3": "12.11.1",
     "mysql2": "^3.22.5",
     "pg": "8.22.0",
     "postgres": "3.4.9",
