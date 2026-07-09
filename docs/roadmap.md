@@ -18,7 +18,7 @@ the implementation matches the specification.
 | D | Precompiled static query handles (`.prepare()`) | §15.13, §15.15, M7 | ✅ D1–D6 | P1 |
 | E | Performance modes (safe/trusted/unsafe) | §15.13, §15.17 | ✅ E1–E5 | P2 |
 | F | Cache-key composition & optimization strategies | §15.14 | ✅ F1–F4 | P1 |
-| G | SQL feature matrix tests | §14.11, M6 | ✅ G1–G5,G6a,G6b L3–5 · 🟡 G6b L9 | P1 |
+| G | SQL feature matrix tests | §14.11, M6 | ✅ G1–G5,G6b · 🟡 G6a | P1 |
 | H | Property & fuzz tests | §14.12, M6 | ✅ H1–H5 | P2 |
 | I | Performance benchmarks, targets & CI gates | §15.12, §15.16, §18.8/18.9, M7 | ✅ I1–I7 | P1 |
 | J | Advanced query features (joins/agg/CTE/window/upsert) | §6, §14.11 L3–5,7 | ✅ J1–J5 | P2 |
@@ -145,9 +145,10 @@ area is labeled 🟡 with its remaining work rather than claimed complete. ✅
 | G4 | ✅ | Integration level: run suites via Effect Layers | §14.11 | `runSqlFeatureIntegration` executes each feature against a live layer in `unsafe` mode (validity, not decode) — supported ⇒ no `DriverError`, unsupported ⇒ `CapabilityError`. SQLite in the default run (`sql-features.integration.test.ts`, 12/12); Postgres + MySQL wired in `sql-features.integration.e2e.test.ts` — verified green (`pnpm e2e`), MySQL returning ⇒ `CapabilityError` |
 | G5 | ✅ | Populate Levels 1–2 (DML + typed semantics) | §14.11 | `LEVEL_1_2_FEATURES`: 12 features (projection/where/and-or/order-limit/insert/update/delete/nullable/maybeOne + insert·update·delete returning) × 3 dialects = 96 assertions |
 | G6a | ✅ available | Levels 6–8, 10 (types, mutation, txn, DDL) — buildable with today's IR | §14.11 | Same `defineSqlFeatureSuite` shape; extend `LEVEL_1_2_FEATURES` with data-type/mutation/transaction/DDL features — no new query IR needed |
-| G6b | 🟡 | Levels 3–5, 9 (joins, aggregation, CTE, window, routines) | §14.11 | `ADVANCED_SQL_FEATURES` covers Levels 3–5 across pg/sqlite/mysql with live SQLite validation; Level 9 routine expansion remains |
+| G6b | ✅ | Levels 3–5, 9 (joins, aggregation, CTE, window, routines) | §14.11 | `ADVANCED_SQL_FEATURES` covers Levels 3–5; `ROUTINE_SQL_FEATURES` covers scalar/aggregate/window/table/procedure behavior, capability failures, and decoding at Level 9 |
 
-**Definition of done:** features are executable test definitions (not prose); each is verified native/emulated/unsupported per dialect. Levels 1–5 and 7 are represented; the remaining Level 9 routine matrix stays under G6b.
+**Definition of done:** G6b is complete with executable, capability-aware
+definitions for Levels 3–5 and 9. G6a separately tracks Levels 6–8 and 10. ✅
 
 ---
 
@@ -207,7 +208,7 @@ regression gate. ✅
 **Definition of done:** each advanced feature has IR + per-dialect compiler +
 capability gating, and lands **as `defineSqlFeatureSuite` entries** — which is
 exactly what unblocks **G6b** (Levels 3–5, 9) and **H5b** (join/subquery fuzzing).
-✅ J1–J5 are implemented; G6b's unrelated Level 9 routine expansion remains.
+✅ J1–J5 are implemented and G6b's Level 9 routine expansion is complete.
 
 ---
 
