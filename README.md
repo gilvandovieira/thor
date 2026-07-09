@@ -1,70 +1,140 @@
 # Thor
 
-An **Effect-native ORM / database toolkit**: fluent schema & query authoring, a
-typed + runtime IR, executable capability matrices, PostgreSQL, SQLite, and MySQL
-dialects, typed Effect execution, first-class testing, and first-class
-benchmarks.
+Thor is a database toolkit for TypeScript, built for [Effect](https://effect.website).
+You describe your tables and queries in plain, fluent TypeScript; Thor gives you
+back fully-typed results and runs them against **PostgreSQL, SQLite, or MySQL** —
+the same code, three databases.
 
-> Status: **v0 vertical slice**. The full architecture is wired end-to-end for
-> PostgreSQL, SQLite, and MySQL — schema → typed builder → runtime IR → guards → capability check →
-> compile → execute → decode. The
-> [updated v0 specification](docs/thor-project-spec-v0-updated.md) is the source
-> of truth; see [Milestone status](#milestone-status) for implementation scope.
+Two ideas make it different from most query builders:
+
+- **Nothing touches your database until you ask it to.** Building a query is a
+  pure value — you can print the SQL, inspect it, cache it, or throw it away, all
+  without a connection. Only the final `.all()` / `.one()` / `.run()` reaches out
+  to the database, and it does so as an Effect, so errors and resources are
+  handled the Effect way.
+- **No surprises at runtime.** Thor knows exactly what each database can and
+  can't do. Ask MySQL for `INSERT ... RETURNING` and you get a clear
+  `CapabilityError` *before* anything runs — never a silent workaround or a
+  cryptic driver error.
 
 ```
-Schema DSL → Typed Query Builder → Typed + Runtime IR → Guards
-   → Capability Matrix → Dialect Compiler → Effect Executor → Decoded Result
+Your tables  →  a query you build  →  checked against the database's abilities
+             →  compiled to SQL     →  run as an Effect  →  typed rows back
 ```
 
-## Packages
+## Install
 
-| Package | What |
-|---|---|
-| `@gilvandovieira/thor` | The toolkit. Flat package with subpath exports. |
-| `@gilvandovieira/cli` | The `thor` migration CLI. |
+```sh
+pnpm add @gilvandovieira/thor effect
+```
 
-Subpaths: `@gilvandovieira/thor/{schema,sql,postgres,sqlite,mysql,migrate,testing,routine,capabilities}`.
+Everything ships from one package. The common things (`db`, `pg`, `eq`, `param`,
+…) come from the top level; deeper surfaces live under subpaths like
+`@gilvandovieira/thor/postgres`, `/sqlite`, `/mysql`, `/migrate`, and `/testing`.
 
-## Quick start
+## A quick tour
+
+Say you're building a small blog. You have authors, and authors write posts.
+Here's the whole journey — from describing the tables to reading real data back.
+
+### 1. Describe your tables
 
 ```ts
-import { pg, db, eq, param } from "@gilvandovieira/thor"
-import { Schema, Effect } from "effect"
-import { PostgresLayer } from "@gilvandovieira/thor/postgres"
+import { pg } from "@gilvandovieira/thor"
 
-const users = pg.table("users", {
+const authors = pg.table("authors", {
   id: pg.uuid("id").primaryKey().defaultRandom(),
-  email: pg.text("email").notNull().unique(),
-  name: pg.text("name").notNull(),
-  age: pg.integer("age").nullable(),
-  createdAt: pg.timestamp("created_at").notNull().defaultNow()
+  name: pg.text("name").notNull()
 })
 
-// Pure builder — no Effect until you execute.
-const query = db
-  .select({ id: users.id, email: users.email })
-  .from(users)
-  .where(eq(users.email, param("email", Schema.String)))
-  .limit(1)
-
-query.toSql()      // { sql, paramOrder, cacheKey } — inspect without a DB
-query.inspect()    // { kind, tables, params, cardinality, capabilities }
-
-// Execution returns an Effect requiring the Database service.
-const program = query.one({ email: "lucas@example.com" })
-//    Effect<{ id: string; email: string }, DbError | NotFoundError | TooManyRowsError, Database>
-
-Effect.runPromise(program.pipe(Effect.provide(PostgresLayer(pgClient))))
+const posts = pg.table("posts", {
+  id: pg.uuid("id").primaryKey().defaultRandom(),
+  authorId: pg.uuid("author_id").notNull(),
+  title: pg.text("title").notNull(),
+  createdAt: pg.timestamp("created_at").notNull().defaultNow()
+})
 ```
 
-SQLite uses the same builder and migrator through its own dialect:
+Your row types come for free — no code generation, no manual interfaces:
 
 ```ts
-import { DatabaseSync } from "node:sqlite"
+import type { Select, Insert } from "@gilvandovieira/thor"
+
+type Post    = Select<typeof posts>  // { id: string; authorId: string; title: string; createdAt: Date }
+type NewPost = Insert<typeof posts>  // { authorId: string; title: string; id?: string; createdAt?: Date }
+```
+
+### 2. Write a query — and look at it before running anything
+
+```ts
+import { db, eq, param } from "@gilvandovieira/thor"
+import { Schema } from "effect"
+
+const postsByAuthor = db
+  .select({ id: posts.id, title: posts.title })
+  .from(posts)
+  .where(eq(posts.authorId, param("authorId", Schema.String)))
+
+// It's just a value. Inspect it with no database in sight:
+postsByAuthor.toSql()      // → { sql, paramOrder, cacheKey }
+postsByAuthor.inspect()    // → { kind, tables, params, cardinality, capabilities }
+```
+
+Notice `param("authorId", …)` — queries carry *named holes*, not baked-in
+values. You fill them in at run time, and the same compiled SQL is reused for
+every author.
+
+### 3. Run it
+
+Only now does Effect enter. `.one()` expects exactly one row and gives you a
+typed result; `.all()` returns every match; `.run()` is for writes.
+
+```ts
+import { Effect } from "effect"
+import { Client } from "pg"
+import { PostgresLayer } from "@gilvandovieira/thor/postgres"
+
+const program = postsByAuthor.all({ authorId: "ada-id" })
+//    Effect<ReadonlyArray<{ id: string; title: string }>, DbError, Database>
+
+const client = new Client({ connectionString: process.env.DATABASE_URL })
+Effect.runPromise(program.pipe(Effect.provide(PostgresLayer(client))))
+```
+
+### 4. Ask a real question — a join and a count
+
+Now the payoff. Which authors are most prolific? Join posts to their author and
+count per name — the same fluent builder, still fully typed:
+
+```ts
+import { count } from "@gilvandovieira/thor"
+
+const leaderboard = db
+  .select({ author: authors.name, posts: count() })
+  .from(posts)
+  .innerJoin(authors, eq(posts.authorId, authors.id))
+  .groupBy(authors.name)
+
+await Effect.runPromise(leaderboard.all().pipe(Effect.provide(PostgresLayer(client))))
+// → [{ author: "Ada", posts: 12 }, { author: "Grace", posts: 7 }, …]
+```
+
+Thor supports the queries real apps need: inner/left/right/full joins,
+subqueries (correlated too), `count`/`sum`/`avg`/`min`/`max`, `groupBy` +
+`having`, window functions, CTEs (including recursive), set operations
+(`union`/`intersect`/`except`), and upserts. See
+[`docs/advanced-queries.md`](docs/advanced-queries.md) for the full menu.
+
+## Same query, other databases
+
+The builder never changes — only the layer you provide at execution, and
+(optionally) the dialect you compile against.
+
+```ts
+// SQLite
 import { db, sqlite } from "@gilvandovieira/thor"
 import { SQLiteDialect, SQLiteLayer } from "@gilvandovieira/thor/sqlite"
 
-const client = new DatabaseSync(":memory:")
 const notes = sqlite.table("notes", {
   id: sqlite.uuid("id").primaryKey().defaultRandom(),
   body: sqlite.text("body").notNull()
@@ -73,18 +143,15 @@ const notes = sqlite.table("notes", {
 db.insert(notes).values({ body: "hello" }).returning({ id: notes.id }).one()
   .pipe(Effect.provide(SQLiteLayer(client)))
 
-// Pure compilation is explicit when the default PostgreSQL dialect is not wanted.
+// Compile against a specific dialect without executing:
 db.select({ body: notes.body }).from(notes).toSql(SQLiteDialect)
 ```
 
-MySQL uses the mysql2 Promise API structurally, without a runtime dependency:
-
 ```ts
-import mysql2 from "mysql2/promise"
+// MySQL (uses the mysql2 promise API; no runtime dependency on it)
 import { db, mysql } from "@gilvandovieira/thor"
 import { MySQLLayer } from "@gilvandovieira/thor/mysql"
 
-const connection = await mysql2.createConnection(process.env.MYSQL_URL!)
 const users = mysql.table("users", {
   id: mysql.uuid("id").primaryKey().defaultRandom(),
   email: mysql.text("email").notNull()
@@ -94,293 +161,113 @@ db.insert(users).values({ email: "ada@example.com" }).run()
   .pipe(Effect.provide(MySQLLayer(connection)))
 ```
 
-MySQL does not support DML `RETURNING`; Thor rejects it with `CapabilityError`
-before calling the driver. Generated DDL uses a named migration lock but is not
-wrapped in a transaction because MySQL DDL implicitly commits.
+MySQL has no `RETURNING`, so Thor stops that query with a `CapabilityError`
+before it ever reaches the driver — the "no surprises" promise in action.
 
-Schema-derived types (spec §5.1):
+## Testing without a database
 
-```ts
-import type { Select, Insert, Update } from "@gilvandovieira/thor"
-
-type UserRow    = Select<typeof users>  // { readonly id: string; email: string; age: number | null; ... }
-type NewUser    = Insert<typeof users>  // { email: string; name: string; id?: string; age?: number | null; ... }
-type UserPatch  = Update<typeof users>  // all non-generated columns optional
-```
-
-## Drivers & the contract suite (spec §14.10)
-
-A single dialect can run behind interchangeable **driver adapters**, so the
-`Driver` seam is client-agnostic. Postgres ships two:
-
-```ts
-import { PostgresLayer, PostgresJsLayer } from "@gilvandovieira/thor/postgres"
-
-PostgresLayer(new Client({ connectionString }))          // node-postgres
-PostgresJsLayer(postgres(connectionString, { max: 1 }))  // postgres.js
-```
-
-Both **Postgres** drivers pass the identical shared, capability-aware contract
-suite against a real database. The same suite also covers `node:sqlite` in the
-default test run, `bun:sqlite` in its explicit Bun harness, and `mysql2` against
-real MySQL. CI runs the Node suite, the Bun contract harness, and a live
-Postgres/MySQL service matrix.
-
-The two Postgres drivers are benchmarked independently; see
-[`docs/driver-benchmarks.md`](docs/driver-benchmarks.md). The historical
-postgres.js write advantage applies to **unprepared** execution. With prepared
-statements enabled the drivers converge, while Thor's own hot-path cost is about
-2 µs for a static prepared handle and matters most for in-process databases.
-
-```ts
-import { PostgresDialect } from "@gilvandovieira/thor/postgres"
-import { makeDialectContractSuite } from "@gilvandovieira/thor/testing"
-
-// Runner-agnostic: inject describe/it/expect, provide a driver layer.
-makeDialectContractSuite({ describe, it, beforeAll, afterAll, beforeEach, expect }, {
-  name: "postgres.js",
-  dialect: PostgresDialect,
-  reset: [
-    "drop table if exists contract_users",
-    "create table contract_users (id uuid primary key default gen_random_uuid(), email text not null unique, name text, age integer)"
-  ],
-  layer: PostgresJsLayer(sql),
-  teardown: () => sql.end()
-})
-```
-
-## Testing without a database (spec §14)
+You don't need Postgres running to test your queries. `FakeDriver` records what
+was compiled and hands back rows you queue up:
 
 ```ts
 import { FakeDriver, FakeDatabaseLayer, expectSql } from "@gilvandovieira/thor/testing"
 
-expectSql(query).sql        // assert compiled SQL
-const driver = new FakeDriver().enqueue({ rows: [{ id: "u1", email: "a@b.c" }] })
-Effect.provide(query.all(), FakeDatabaseLayer(driver))
-driver.calls                // assert SQL was compiled + params bound
+expectSql(postsByAuthor).sql               // assert the compiled SQL
+const driver = new FakeDriver().enqueue({ rows: [{ id: "p1", title: "Hello" }] })
+Effect.provide(postsByAuthor.all({ authorId: "ada-id" }), FakeDatabaseLayer(driver))
+driver.calls                               // inspect the SQL + bound params
 ```
 
-## API documentation
+The testing subpath also ships the **contract suite** every dialect must pass,
+so all three databases behave consistently.
 
-Source modules and named callables use standard JSDoc, including parameter,
-return, error-channel, and generic contracts where relevant. The conventions
-and templates live in [`docs/api-documentation.md`](docs/api-documentation.md).
-Run `pnpm docs:check` to audit new source before submitting it.
+## Migrations
 
-## Design laws (spec §4)
-
-- **Pure builder, Effect executor.** `db.select(...)` returns a plain `Query`;
-  only `.all()/.one()/.maybeOne()/.run()` return an `Effect`.
-- **Runtime IR is the source of truth.** The type-level IR sharpens inference;
-  the runtime IR drives guards, compilation, decoding, and observability.
-- **No silent emulation.** An unsupported capability fails with a typed
-  `CapabilityError` before execution unless emulation is explicitly enabled.
-- **Capabilities are executable metadata.** Encoded as a compact `bigint` bitset
-  on the hot path; readable names at the boundary.
-
-## Migrations (live, spec §13.7)
-
-The programmatic migrator runs against a real `Database` and delegates locking
-and transaction behavior to the active dialect. PostgreSQL uses an advisory lock
-and transactional DDL, SQLite uses `begin immediate` without an external lock,
-and MySQL uses a named lock while leaving implicitly committing DDL outside a
-transaction. Every dialect journals applied migrations with checksums and fails
-hard on checksum mismatch.
+Thor has a live migrator and a `thor` CLI. Migrations are transactional and
+journaled with checksums; Thor picks the right locking strategy per database
+(advisory lock on Postgres, `begin immediate` on SQLite, a named lock on MySQL).
 
 ```ts
-import { Effect, Layer } from "effect"
-import { PostgresLayer } from "@gilvandovieira/thor/postgres"
-import { Migrator, MigratorLive, defineMigration, sql, rawSql } from "@gilvandovieira/thor/migrate"
-import { Client } from "pg"
+import { Migrator, MigratorLive, defineMigration, sql } from "@gilvandovieira/thor/migrate"
 
 const migrations = [
   defineMigration({
-    id: "0001_create_users",
-    name: "create_users",
-    up: sql`create table users (id uuid primary key, email text not null unique);`,
-    down: sql`drop table users;`
-  }),
-  defineMigration({
-    id: "0002_backfill",
-    name: "backfill",
-    up: rawSql`update users set email = lower(email)`, // an Effect step, runs in the tx
-    down: rawSql`select 1`
+    id: "0001_create_authors",
+    name: "create_authors",
+    up: sql`create table authors (id uuid primary key, name text not null);`,
+    down: sql`drop table authors;`
   })
 ]
 
-// Back the migrator with a single-connection client (it issues begin/commit + locks).
-const app = Layer.provideMerge(MigratorLive({ migrations, schema: [users] }), PostgresLayer(client))
-
 const program = Effect.gen(function* () {
   const m = yield* Migrator
-  yield* m.up()                         // apply pending, transactionally + journaled
-  yield* m.check()                      // validate order + journal checksums
-  const plan = yield* m.generate("init", [])  // diff schema -> create-only plan
-  yield* m.apply(plan)                  // apply a generated plan
-  yield* m.drift()                      // ops needed to reconcile DB vs code
-  // yield* m.down()                    // roll back the last migration if reversible
+  yield* m.up()      // apply everything pending, transactionally
+  yield* m.check()   // verify order + checksums
+  yield* m.drift()   // what would it take to match your schema to the DB?
 })
-
-Effect.runPromise(Effect.provide(program, app))
 ```
-
-## CLI
 
 ```sh
-thor init                    # config + migrations/ + journal
-thor create add_users_table  # new manual migration
-thor status                  # applied / pending
-thor check                   # validate order + destructive ops
-# up / down / generate / drift / snapshot / pull — share the same migration IR
+thor init          # scaffold config + migrations/ + journal
+thor create <name> # new migration file
+thor status        # applied vs pending
+thor check         # validate order + flag destructive ops
+# up · down · generate · drift · snapshot · pull
 ```
 
-## Develop
+## Where things stand
+
+Thor's full pipeline works end-to-end today on **all three databases**: schema →
+typed builder → runtime IR → capability check → compile → execute → decode.
+
+| Area | State |
+|---|---|
+| Schema & typed row derivation | ✅ Done |
+| Query builder (select/insert/update/delete, predicates, params) | ✅ Done |
+| Advanced queries (joins, aggregation, windows, CTEs, sets, upserts) | ✅ Done |
+| Guards & capability checks | ✅ Done |
+| PostgreSQL / SQLite / MySQL dialects | ✅ Done |
+| Effect execution + drivers (2 Postgres drivers, Node & Bun SQLite, mysql2) | ✅ Done |
+| Prepared handles & performance modes | ✅ Done |
+| Benchmarks + CI regression gate | ✅ Done |
+| Testing helpers & cross-dialect contract suite | ✅ Done |
+| Migrations (live migrator + CLI) | 🟡 Core done; some CLI file-loading remains |
+| SQL feature-matrix tests | 🟡 Levels 1–5, 7, and 9 covered; Levels 6, 8, and 10 remain |
+| Stored routines (functions/procedures) | 🟡 Scalar/aggregate expressions, table-function sources, procedure commands, capability guards, and return decoding done; advanced named/out arguments and routine DDL remain |
+
+Task-level detail lives in [`docs/roadmap.md`](docs/roadmap.md); the design of
+record is [`docs/thor-project-v1-spec.md`](docs/thor-project-v1-spec.md).
+
+## Working on Thor
 
 ```sh
 pnpm install
-pnpm build        # tsc -b across packages
-pnpm test         # vitest unit tests (schema types, compile, guards, execution, migrate, caps)
-pnpm bench        # micro-benchmarks for build / compile hot paths
+pnpm build        # tsc -b across packages (project references)
+pnpm test         # vitest — but build first (tests import the built package, not src)
 pnpm typecheck
+pnpm docs:check   # JSDoc completeness — required before submitting src changes
 ```
 
-### End-to-end tests (real Postgres and MySQL)
+> **Gotcha:** tests import the package by name, which resolves to `dist`, not
+> `src`. Run `pnpm build` before `pnpm test` after editing source. The
+> `e2e`/`contract`/`bench` scripts build for you; bare `pnpm test` does not.
 
-E2E tests run both Postgres adapters, the live Postgres migrator, and the MySQL
-adapter against Dockerized databases. Each live suite is skipped when its
-corresponding `DATABASE_URL` or `MYSQL_URL` is absent. SQLite's Node contract
-runs in `pnpm test`; its Bun contract has a separate explicit command.
+End-to-end tests run against real Postgres and MySQL in Docker (skipped unless
+`DATABASE_URL` / `MYSQL_URL` are set); SQLite runs in-memory in the default
+suite:
 
 ```sh
-pnpm e2e          # docker compose up --wait → build → e2e tests → compose down -v
-
-# or manually:
-pnpm db:up
-DATABASE_URL=postgres://thor:thor@localhost:5433/thor \
-MYSQL_URL=mysql://thor:thor@localhost:3307/thor pnpm test:e2e
-pnpm db:down
-
-pnpm test:contract:sqlite:bun
+pnpm e2e          # compose up → build → e2e tests → compose down
+pnpm db:up        # or start postgres@5433 + mysql@3307 yourself
 ```
 
-The live suite covers the shared capability-aware driver contract on Postgres
-and MySQL. Postgres additionally covers migration `up` (SQL + Effect steps,
-journaled), idempotent re-run, `down`, transactional rollback, checksum
-validation, `generate` + `apply`, `drift`, and a full query round-trip.
+## Learn more
 
-## Milestone status
-
-| Milestone | Status |
-|---|---|
-| 0 — Repo & package skeleton | ✅ pnpm workspace, TS project refs, exports, tests, bench |
-| 1 — Core schema & IR | ✅ table/column DSL, Select/Insert/Update derivation, query IR, errors, capability types |
-| 2 — Query builder | ✅ select/insert/update/delete, predicates, params, returning, cardinality methods |
-| 3 — Guards & capabilities | ✅ scope/shape/returning guards, capability bitset + PostgreSQL/SQLite/MySQL matrices, typed `CapabilityError` |
-| 4 — Dialect compilers | ✅ select/insert/update/delete, safe identifiers/placeholders, value-independent cache keys for PostgreSQL/SQLite/MySQL |
-| 5 — Effect execution | ✅ `Database` service, driver contract, PostgreSQL/SQLite/MySQL adapters, all/one/maybeOne/run, decode pipeline |
-| 6 — Testing | 🟡 shared capability-aware contract suite across all adapters; executable SQL matrix Levels 1–5 and 7; deterministic property/fuzz invariants include joins/subqueries · remaining type/transaction/routine/DDL matrix levels are tracked in G6 |
-| 7 — Benchmarks | ✅ Node/Bun lanes, prepared off/on, cold/warm/static-handle and mode axes, ~2.06 µs handle tracking, and a noise-tolerant CI regression gate |
-| 8 — Migrations | 🟡 IR, `defineMigration`, DDL compiler, diff, guards, journal, checksum, CLI `init/create/status/check`, **live migrator** (`up`/`down`/`generate`/`apply`/`check`/`drift`) with dialect-aware lock/transaction lifecycle, verified by real-Postgres e2e tests · CLI file-loading of `up/down/pull` remains |
-| 9 — Routines | 🟡 typed descriptors & IR (`defineFunction/Procedure/TableFunction`) — expression/`from` lowering pending |
-| Cross-cutting — Dialects | ✅ PostgreSQL, SQLite, and MySQL query/migration dialects with declared capability profiles |
-| Cross-cutting — Runtime portability | ✅ Node and Bun SQLite contract harnesses run locally and in separate CI lanes |
-| Cross-cutting — Modes & handles | ✅ safe/trusted/unsafe modes and reusable `.prepare()` handles with capability checks preserved |
-
-Legend: ✅ implemented · 🟡 partial, with remaining work stated explicitly.
-
-## Spec v0 (updated) alignment
-
-The [updated spec](docs/thor-project-spec-v0-updated.md) extends v0 with multi-dialect
-targets, runtime portability, a performance program, and a broader test matrix.
-Progress against it, with tasks broken out in [`docs/roadmap.md`](docs/roadmap.md):
-
-| Workstream | Spec | Status |
-|---|---|---|
-| Dialects: PostgreSQL / SQLite / MySQL | §2A.1 | ✅ three dialects with capability matrices + subpath exports |
-| Multi-dialect contract-suite coverage | §2A.1, §18.6 | ✅ identical suite passes two Postgres drivers, Node SQLite, Bun SQLite, and MySQL; CI runs unit, Bun, and live-database lanes |
-| Runtime portability (Node + Bun) | §2A.2, §18.7 | ✅ explicit Node and Bun SQLite contract harnesses run in separate CI jobs (C3) |
-| Runtime capabilities (`runtime.*`) | §2A.3 | ✅ detected profiles, mandatory driver declarations, and early adapter validation (Epic C1–C2) |
-| Precompiled `.prepare()` query handles | §15.13, §15.15 | ✅ static handles precompute shape guards/hash/decoder and cache compilation + capability results per dialect profile (Epic D) |
-| Performance modes (safe/trusted/unsafe) | §15.13 | ✅ safe default, strict trusted mode, opt-in unsafe decode bypass; capability checks remain mandatory (Epic E) |
-| Cache-key composition + optimization audit | §15.14 | ✅ versioned dialect profiles, normalized IR hashes, full plan keys, and required strategy audit (Epic F) |
-| SQL feature matrix tests | §14.11 | 🟡 executable, capability-aware matrix covers Levels 1–5 and 7 across all dialects, with live SQLite validation; Levels 6 and 8–10 remain (G6) |
-| Property & fuzz tests | §14.12 | ✅ deterministic invariants cover basic queries, mutations, joins, and correlated subqueries across all dialect compilers (Epic H) |
-| Hot-path targets + CI perf gates | §15.12, §15.16 | ✅ Node/Bun tracking, staged `bench:gate`, baseline handling, and CI invocation are implemented |
-
-The cache-key layers and completed §15.14 checklist are documented in
-[`docs/optimization-strategies.md`](docs/optimization-strategies.md).
-Advanced query APIs and their capability boundaries are documented in
-[`docs/advanced-queries.md`](docs/advanced-queries.md).
-
-## Prepared query handles
-
-Hoist static query shapes with `.prepare(name)`. A handle snapshots the IR,
-precomputes its decoder, structural guard, capability bits, parameter order,
-hash, and tracing metadata, then compiles and validates once per dialect
-profile:
-
-```ts
-const FindUserByEmail = db
-  .select({ id: users.id, email: users.email })
-  .from(users)
-  .where(eq(users.email, param("email", Schema.String)))
-  .prepare("FindUserByEmail")
-
-yield* FindUserByEmail.one({ email: "ada@example.com" })
-```
-
-Prepared handles never capture parameter values. Mutation handles use named
-parameters in `values()` or `set()` and receive values at execution:
-
-```ts
-const CreateUser = db
-  .insert(users)
-  .values({ email: param("email", Schema.String) })
-  .returning({ id: users.id })
-  .prepare("CreateUser")
-
-yield* CreateUser.one({ email: "ada@example.com" })
-```
-
-Attempting to prepare a shape containing an inline-bound value throws the tagged
-`GuardError` with guard `prepared-values`. The hot-path benchmark measures the
-static handle at about 2.06 µs, roughly 1.5–1.6× faster than the memoized fluent
-path; see [`docs/driver-benchmarks.md`](docs/driver-benchmarks.md).
-
-## Runtime portability
-
-Database capabilities and JavaScript runtime capabilities are independent. A
-driver declares its runtime contract through `Driver.runtime`; structural
-drivers are runtime-neutral, while the built-in SQLite wrappers validate their
-host before any statement reaches the client:
-
-```ts
-import { detectRuntimeCapabilities } from "@gilvandovieira/thor/capabilities"
-import { BunSQLiteLayer, NodeSQLiteLayer } from "@gilvandovieira/thor/sqlite"
-
-const runtime = detectRuntimeCapabilities()
-runtime.capabilities.has("runtime.sqlite.bun")
-
-NodeSQLiteLayer(nodeClient) // requires runtime.node + runtime.sqlite.node
-BunSQLiteLayer(bunClient)   // requires runtime.bun + runtime.sqlite.bun
-```
-
-A mismatch throws the tagged `RuntimeCapabilityError` while constructing the
-adapter. The shared SQLite dialect/compiler remains unchanged. Top-level
-`/node` and `/bun` package subpaths are intentionally deferred because the
-runtime-specific surface is currently SQLite-only and fits the `/sqlite`
-boundary.
-
-The runtime contract harnesses are separate and explicit:
-
-```sh
-pnpm test:contract:sqlite:node  # Vitest + node:sqlite + NodeSQLiteLayer
-pnpm test:contract:sqlite:bun   # bun:test + bun:sqlite + BunSQLiteLayer
-pnpm test:contract:sqlite       # run both parity lanes
-```
-
-Both register the same `makeDialectContractSuite` and
-`SQLITE_CONTRACT_RESET`; CI keeps them in separate Node and Bun jobs.
-
-See the [updated specification](docs/thor-project-spec-v0-updated.md) for the full
-document (the earlier [`thor-project-spec.md`](docs/thor-project-spec.md) is superseded).
+- [`docs/advanced-queries.md`](docs/advanced-queries.md) — joins, subqueries, aggregation, CTEs, upserts
+- [`docs/routines.md`](docs/routines.md) — declared functions, table-valued sources, procedures, and capability behavior
+- [`docs/driver-benchmarks.md`](docs/driver-benchmarks.md) — the two Postgres drivers, prepared vs unprepared, hot-path cost
+- [`docs/optimization-strategies.md`](docs/optimization-strategies.md) — cache keys and the hot path
+- [`docs/api-documentation.md`](docs/api-documentation.md) — JSDoc conventions
+- [`docs/thor-project-v1-spec.md`](docs/thor-project-v1-spec.md) — the specification · [`docs/roadmap.md`](docs/roadmap.md) — progress by epic
+</content>
+</invoke>
