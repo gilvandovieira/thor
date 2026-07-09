@@ -19,8 +19,10 @@ import type { CompiledQuery } from "./driver.js"
 import { Database, type DatabaseService } from "./database.js"
 
 /**
- * Runtime safety/performance mode (spec §15.13). `safe` is the only mode wired
- * today; `trusted`/`unsafe` land with Epic E and must be opt-in.
+ * Runtime safety/performance mode (spec §15.13). All three modes are wired:
+ * `safe` (default) always guards and decodes; `trusted` skips re-guarding
+ * shapes with a recorded prior pass; `unsafe` additionally skips decode. The
+ * non-default modes are opt-in only via {@link withMode}.
  */
 export type ExecutionMode = "safe" | "trusted" | "unsafe"
 

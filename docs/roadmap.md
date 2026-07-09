@@ -1,6 +1,6 @@
-# Thor roadmap — closing the drift to spec v0 (updated)
+# Thor roadmap — closing the drift to spec v0
 
-Source of truth: [`thor-project-spec-v0-updated.md`](./thor-project-spec-v0-updated.md).
+Source of truth: [`thor-project-spec-v0.md`](./thor-project-spec-v0.md).
 This roadmap breaks every item flagged in the drift review into concrete tasks so
 the implementation matches the specification.
 
@@ -47,13 +47,13 @@ Phase 5  J (joins/agg/CTE/window)     → unblocks G6b + H5b (the deadlock's rea
 
 | # | Status | Task | Spec | Effort | Acceptance |
 |---|---|---|---|---|---|
-| A1 | ✅ | Repoint README to the updated spec; mark the old spec superseded | — | S | README links `thor-project-spec-v0-updated.md` from its status and alignment sections; the old spec opens with a superseded banner |
+| A1 | ✅ | Repoint README to the v0 spec; consolidate the two v0 spec drafts | — | S | The original and "updated" v0 drafts were merged into a single [`thor-project-spec-v0.md`](./thor-project-spec-v0.md); README and this roadmap link it as the v0 source of truth |
 | A2 | ✅ | Refresh README milestone table | M0–M9 | S | M6 reflects the partial feature/fuzz matrix; M7 names Node/Bun lanes, the prepared-handle benchmark, 1–2 µs tracking, and CI regression gate; cross-cutting dialect/runtime/mode rows are explicit |
 | A3 | ✅ | Scope the "contract suite" claim in README/benchmarks | §2A.1, §18.6 | S | README distinguishes the identical suite across two Postgres drivers, Node/Bun SQLite, and MySQL from the Postgres-only cross-driver benchmark and documents their separate CI lanes |
 | A4 | ✅ | Update `driver-benchmarks.md` for perf modes + static handles | §15.13, §15.15 | S | Headline and scope call out unprepared results; the doc distinguishes server preparation from `.prepare()` and points historical pre-handle numbers to current handle/mode measurements |
 | A5 | ✅ resolved | Report the spec's duplicate `§14.11` numbering | §14.11 | S | The correction is incorporated in the current source of truth: feature matrix §14.11, property tests §14.12, migration tests §14.13; the superseded spec retains migration tests at its historical §14.11 |
 
-**Definition of done:** no doc contradicts the updated spec; every incomplete
+**Definition of done:** no doc contradicts the v0 spec; every incomplete
 area is labeled 🟡 with its remaining work rather than claimed complete. ✅
 
 ---
@@ -143,12 +143,13 @@ area is labeled 🟡 with its remaining work rather than claimed complete. ✅
 | G2 | ✅ | Unit level: SQL snapshot + required capabilities per feature | §14.11 | Per-dialect `assertSql` snapshot (pg/sqlite/mysql) + `requiredCapabilities()` asserted |
 | G3 | ✅ | Fake-execution level: params/cardinality/decode/typed-errors | §14.11 | Each feature runs against `FakeDriver`; unsupported capability → `CapabilityError` before the driver (driver untouched) |
 | G4 | ✅ | Integration level: run suites via Effect Layers | §14.11 | `runSqlFeatureIntegration` executes each feature against a live layer in `unsafe` mode (validity, not decode) — supported ⇒ no `DriverError`, unsupported ⇒ `CapabilityError`. SQLite in the default run (`sql-features.integration.test.ts`, 12/12); Postgres + MySQL wired in `sql-features.integration.e2e.test.ts` — verified green (`pnpm e2e`), MySQL returning ⇒ `CapabilityError` |
-| G5 | ✅ | Populate Levels 1–2 (DML + typed semantics) | §14.11 | `LEVEL_1_2_FEATURES`: 12 features (projection/where/and-or/order-limit/insert/update/delete/nullable/maybeOne + insert·update·delete returning) × 3 dialects = 96 assertions |
-| G6a | ✅ available | Levels 6–8, 10 (types, mutation, txn, DDL) — buildable with today's IR | §14.11 | Same `defineSqlFeatureSuite` shape; extend `LEVEL_1_2_FEATURES` with data-type/mutation/transaction/DDL features — no new query IR needed |
-| G6b | ✅ | Levels 3–5, 9 (joins, aggregation, CTE, window, routines) | §14.11 | `ADVANCED_SQL_FEATURES` covers Levels 3–5; `ROUTINE_SQL_FEATURES` covers scalar/aggregate/window/table/procedure behavior, capability failures, and decoding at Level 9 |
+| G5 | ✅ | Populate Levels 1–2 (DML + typed semantics) | §14.11 | `LEVEL_1_2_FEATURES`: 12 features (projection/where/and-or/order-limit/insert/update/delete/nullable/maybeOne + insert·update·delete returning) across 3 dialects → 96 generated cases |
+| G6a | 🟡 not started | Levels 6, 8, 10 (data types, transactions, DDL) — buildable with today's IR | §14.11 | Same `defineSqlFeatureSuite` shape; add a data-type/transaction/DDL feature array — no new query IR needed. No such array exists yet (only `LEVEL_1_2_FEATURES`, `ADVANCED_SQL_FEATURES`, `ROUTINE_SQL_FEATURES`). Level 7 (upsert) is **already done** under G6b |
+| G6b | ✅ | Levels 3–5, 7, 9 (joins, aggregation, CTE, window, upsert, routines) | §14.11 | `ADVANCED_SQL_FEATURES` (13 features) covers Levels 3–5 plus the Level 7 upserts (`insert.onConflict`, `insert.onDuplicateKey`); `ROUTINE_SQL_FEATURES` (5 features) covers scalar/aggregate/window/table/procedure behavior, capability failures, and decoding at Level 9 |
 
 **Definition of done:** G6b is complete with executable, capability-aware
-definitions for Levels 3–5 and 9. G6a separately tracks Levels 6–8 and 10. ✅
+definitions for Levels 3–5, 7, and 9. G6a separately tracks the unstarted
+Levels 6, 8, and 10 (data types, transactions, DDL). 🟡
 
 ---
 
@@ -172,7 +173,7 @@ definitions for Levels 3–5 and 9. G6a separately tracks Levels 6–8 and 10. �
 | # | Status | Task | Spec | Acceptance |
 |---|---|---|---|---|
 | I1 | ✅ | Fake/no-op driver hot-path benchmark | §15.12 | `bench:overhead` + `bench:hotpath` measure Thor overhead over a constant driver |
-| I2 | ✅ | Cache-hit vs cold-compile benchmark | §15.16 | `bench:hotpath` measures `point.cold` (rebuild each call) vs `point.warm` (memoized IR) → **~8–9× faster** cache hit |
+| I2 | ✅ | Cache-hit vs cold-compile benchmark | §15.16 | `bench:hotpath` measures `point.cold` (rebuild each call) vs `point.warm` (memoized IR) → **~10× faster** cache hit (≈9.7× in the recorded baseline) |
 | I3 | ✅ | Prepared-handle benchmark | M7 | `point.warm` vs `point.prepared` → **~1.5–1.6× faster**; `point.prepared` lands at **~2.06 µs**, essentially at the 1–2 µs target |
 | I4 | ✅ | Node **and** Bun benchmark lanes | M7 | `bench:hotpath` + `bench:hotpath:bun` (also `:overhead`/`:sqlite`); the no-op driver needs no runtime-specific client |
 | I5 | ✅ | 1–2 µs hot-path overhead **tracking** | §15.12/18.8 | The script prints `point.prepared ≤ 2 µs — MET/over` each run; recorded in `driver-benchmarks.md` |
@@ -252,7 +253,7 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | O | Migration hardening v1 (dry-run, expand/contract, policies) | §15 | alpha.4 | migrator (§13 v0) | 🟡 |
 | P | Introspection & drift detection | §16 | alpha.4 | migrator `drift()` | ❌ |
 | Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J**, FK metadata | ❌ |
-| R | Routines v1 (functions/procedures, typed + guarded) | §14 | beta | routine module (scaffold) | ❌ |
+| R | Routines v1 (functions/procedures, typed + guarded) | §14 | beta | routine module (wired in v0) | 🟡 |
 | S | Observability (metadata, spans, param-redaction) | §17 | beta | annotations (§7.4 v0) | ❌ |
 | T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI (v0) | ❌ |
 | U | LLM skills (11 skill files + manifest + export) | §21 | beta | — | ❌ |
@@ -360,7 +361,12 @@ v1-beta     Observability, skills, API stability → R, S, T, U, V, W
 
 ## Epic R — Routines v1 (§14, beta)
 
-> Builds on the scaffolded `routine/` module (descriptors exist; execution/expression wiring pending).
+> Builds on the `routine/` module, whose descriptors **and** expression/`from`/execution
+> wiring already landed in v0 (Level 9 matrix, G6b). Implemented and tested in
+> `routine-query.test.ts`: scalar calls in expressions (R1), table-valued functions
+> in `from` (R4), procedure `.run()` execution (R3 core), and capability + return-decode
+> safety (R5). Remaining v1 work: advanced named/out arguments, full procedure
+> effect/idempotency/tx-metadata honoring, and routine DDL in migrations (R6, ties to O6).
 
 | # | Task | Spec | Acceptance |
 |---|---|---|---|
