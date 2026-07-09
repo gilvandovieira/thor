@@ -1,0 +1,43 @@
+# Postgres + MySQL for Thor's e2e / contract-suite tests.
+#   docker compose up -d --wait     # start + wait for healthy
+#   DATABASE_URL=postgres://thor:thor@localhost:5433/thor \
+#   MYSQL_URL=mysql://thor:thor@localhost:3307/thor pnpm test:e2e
+#   docker compose down -v          # stop + wipe volume
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: thor-e2e-postgres
+    environment:
+      POSTGRES_USER: thor
+      POSTGRES_PASSWORD: thor
+      POSTGRES_DB: thor
+    ports:
+      # Host 5433 -> container 5432, to avoid clashing with a local Postgres.
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U thor -d thor"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+    tmpfs:
+      # Ephemeral storage — fast, and every `up` starts clean.
+      - /var/lib/postgresql/data
+
+  mysql:
+    image: mysql:8.4
+    container_name: thor-e2e-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: thor
+      MYSQL_PASSWORD: thor
+      MYSQL_DATABASE: thor
+    ports:
+      # Host 3307 -> container 3306, to avoid clashing with a local MySQL.
+      - "3307:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u thor -pthor --silent"]
+      interval: 2s
+      timeout: 5s
+      retries: 40
+    tmpfs:
+      - /var/lib/mysql

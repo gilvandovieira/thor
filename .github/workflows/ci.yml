@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Node lane: build, typecheck, unit + SQLite contract + feature matrix (incl.
+  # integration), and the staged hot-path performance gate.
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r run build
+      - run: pnpm -r run typecheck
+      - run: pnpm test
+      - run: pnpm bench:gate
+
+  # Bun lane (§2A.2, §18.7): the SQLite dialect must pass the shared contract
+  # suite under Bun, not just Node.
+  bun:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: oven-sh/setup-bun@v2
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @gilvandovieira/thor run build
+      - run: pnpm test:contract:sqlite:bun
+
+  # Integration lane (§18.6): every dialect passes the identical suite against a
+  # real database, provided through Effect Layers.
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: thor
+          POSTGRES_PASSWORD: thor
+          POSTGRES_DB: thor
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U thor -d thor"
+          --health-interval 1s --health-timeout 5s --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_USER: thor
+          MYSQL_PASSWORD: thor
+          MYSQL_DATABASE: thor
+        ports: ["3307:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -u thor -pthor --silent"
+          --health-interval 2s --health-timeout 5s --health-retries 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @gilvandovieira/thor run build
+      - run: pnpm exec vitest run --no-file-parallelism e2e
+        env:
+          DATABASE_URL: postgres://thor:thor@localhost:5433/thor
+          MYSQL_URL: mysql://thor:thor@localhost:3307/thor
