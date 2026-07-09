@@ -7,11 +7,17 @@ import { describe, expect, it } from "vitest"
 import { PostgresDialect } from "@gilvandovieira/thor/postgres"
 import { SQLiteDialect } from "@gilvandovieira/thor/sqlite"
 import { MySQLDialect } from "@gilvandovieira/thor/mysql"
-import { type ContractTestApi, LEVEL_1_2_FEATURES, runSqlFeatureMatrix } from "@gilvandovieira/thor/testing"
+import {
+  ADVANCED_SQL_FEATURES,
+  type ContractTestApi,
+  LEVEL_1_2_FEATURES,
+  runSqlFeatureMatrix
+} from "@gilvandovieira/thor/testing"
 
 const noop = () => {}
 const api: ContractTestApi = { describe, it, beforeAll: noop, afterAll: noop, beforeEach: noop, expect: expect as never }
 
 for (const dialect of [PostgresDialect, SQLiteDialect, MySQLDialect]) {
   runSqlFeatureMatrix(api, { dialect, features: LEVEL_1_2_FEATURES })
+  runSqlFeatureMatrix(api, { dialect, features: ADVANCED_SQL_FEATURES })
 }

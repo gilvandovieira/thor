@@ -17,7 +17,8 @@ import { db } from "../sql/query-builder.js"
 import { withMode } from "../execution/plan.js"
 import { and, eq, gt, isNull, or } from "../sql/predicates.js"
 import { asc, desc, param } from "../sql/expressions.js"
-import { defineTable } from "../schema/table.js"
+import { avg, count, excluded, exists, max, min, rowNumber, scalar, sum } from "../sql/advanced-expressions.js"
+import { alias, defineTable } from "../schema/table.js"
 import { integer, text, timestamp, uuid } from "../schema/index.js"
 import type { Capability } from "../capabilities/capability.js"
 import { isSatisfied } from "../capabilities/matrix.js"
@@ -38,8 +39,13 @@ const users = defineTable("users", {
   age: integer("age").nullable(),
   createdAt: timestamp("created_at").notNull().defaultNow()
 })
+const posts = defineTable("posts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  title: text("title").notNull()
+})
 /** Shared schema fixtures passed to every SQL feature definition. */
-export const sqlFeatureFixtures = { users } as const
+export const sqlFeatureFixtures = { users, posts } as const
 
 /** Type of the shared schema fixtures passed to SQL feature builders. */
 export type SqlFeatureFixtures = typeof sqlFeatureFixtures
@@ -412,5 +418,215 @@ export const LEVEL_1_2_FEATURES: ReadonlyArray<SqlFeature> = [
     args: { email: "a@b.c" },
     driverRows: [{ id: "u1" }],
     assertResult: [{ id: "u1" }]
+  })
+]
+
+/** Epic J feature definitions spanning matrix Levels 3, 4, 5, and 7. */
+export const ADVANCED_SQL_FEATURES: ReadonlyArray<SqlFeature> = [
+  defineSqlFeatureSuite({
+    id: "join.inner.alias",
+    level: 3,
+    requires: [],
+    build: ({ users, posts }) => {
+      const p = alias(posts, "p")
+      return db.select({ email: users.email, title: p.title }).from(users).join(p, eq(users.id, p.userId))
+    },
+    assertSql: {
+      postgres: 'SELECT "users"."email" AS "email", "p"."title" AS "title" FROM "users" INNER JOIN "posts" "p" ON "users"."id" = "p"."user_id"',
+      sqlite: 'SELECT "users"."email" AS "email", "p"."title" AS "title" FROM "users" INNER JOIN "posts" "p" ON "users"."id" = "p"."user_id"',
+      mysql: "SELECT `users`.`email` AS `email`, `p`.`title` AS `title` FROM `users` INNER JOIN `posts` `p` ON `users`.`id` = `p`.`user_id`"
+    },
+    driverRows: [{ email: "a@b.c", title: "Hello" }],
+    assertResult: [{ email: "a@b.c", title: "Hello" }]
+  }),
+  defineSqlFeatureSuite({
+    id: "subquery.exists.correlated",
+    level: 3,
+    requires: [],
+    build: ({ users, posts }) => {
+      const matching = db.select({ id: posts.id }).from(posts).where(eq(posts.userId, users.id))
+      return db.select({ id: users.id }).from(users).where(exists(matching))
+    },
+    assertSql: {
+      postgres: 'SELECT "users"."id" AS "id" FROM "users" WHERE EXISTS (SELECT "posts"."id" AS "id" FROM "posts" WHERE "posts"."user_id" = "users"."id")',
+      sqlite: 'SELECT "users"."id" AS "id" FROM "users" WHERE EXISTS (SELECT "posts"."id" AS "id" FROM "posts" WHERE "posts"."user_id" = "users"."id")',
+      mysql: "SELECT `users`.`id` AS `id` FROM `users` WHERE EXISTS (SELECT `posts`.`id` AS `id` FROM `posts` WHERE `posts`.`user_id` = `users`.`id`)"
+    },
+    driverRows: [{ id: "u1" }],
+    assertResult: [{ id: "u1" }]
+  }),
+  defineSqlFeatureSuite({
+    id: "aggregate.group.having",
+    level: 4,
+    requires: [],
+    build: ({ users }) => db
+      .select({ email: users.email, total: count() })
+      .from(users)
+      .groupBy(users.email)
+      .having(gt(count(), 0)),
+    assertSql: {
+      postgres: 'SELECT "users"."email" AS "email", COUNT(*) AS "total" FROM "users" GROUP BY "users"."email" HAVING COUNT(*) > $1',
+      sqlite: 'SELECT "users"."email" AS "email", COUNT(*) AS "total" FROM "users" GROUP BY "users"."email" HAVING COUNT(*) > ?',
+      mysql: "SELECT `users`.`email` AS `email`, COUNT(*) AS `total` FROM `users` GROUP BY `users`.`email` HAVING COUNT(*) > ?"
+    },
+    driverRows: [{ email: "a@b.c", total: 1 }],
+    assertResult: [{ email: "a@b.c", total: 1 }]
+  }),
+  defineSqlFeatureSuite({
+    id: "select.cte",
+    level: 5,
+    requires: ["select.cte"],
+    build: ({ users }) => {
+      const active = db.cte("active_users", db.select({ id: users.id }).from(users).where(gt(users.age, 17)))
+      return db.select({ id: active.field("id") }).from(active)
+    },
+    assertSql: {
+      postgres: 'WITH "active_users" AS (SELECT "users"."id" AS "id" FROM "users" WHERE "users"."age" > $1) SELECT "active_users"."id" AS "id" FROM "active_users"',
+      sqlite: 'WITH "active_users" AS (SELECT "users"."id" AS "id" FROM "users" WHERE "users"."age" > ?) SELECT "active_users"."id" AS "id" FROM "active_users"',
+      mysql: "WITH `active_users` AS (SELECT `users`.`id` AS `id` FROM `users` WHERE `users`.`age` > ?) SELECT `active_users`.`id` AS `id` FROM `active_users`"
+    },
+    driverRows: [{ id: "u1" }],
+    assertResult: [{ id: "u1" }]
+  }),
+  defineSqlFeatureSuite({
+    id: "select.window.rowNumber",
+    level: 5,
+    requires: ["select.windowFunctions"],
+    build: ({ users }) => db.select({
+      id: users.id,
+      row: rowNumber().over({ orderBy: [asc(users.createdAt)] })
+    }).from(users),
+    assertSql: {
+      postgres: 'SELECT "users"."id" AS "id", ROW_NUMBER() OVER (ORDER BY "users"."created_at" ASC) AS "row" FROM "users"',
+      sqlite: 'SELECT "users"."id" AS "id", ROW_NUMBER() OVER (ORDER BY "users"."created_at" ASC) AS "row" FROM "users"',
+      mysql: "SELECT `users`.`id` AS `id`, ROW_NUMBER() OVER (ORDER BY `users`.`created_at` ASC) AS `row` FROM `users`"
+    },
+    driverRows: [{ id: "u1", row: 1 }],
+    assertResult: [{ id: "u1", row: 1 }]
+  }),
+  defineSqlFeatureSuite({
+    id: "select.set.union",
+    level: 5,
+    requires: ["select.setOperations"],
+    build: ({ users }) => db.select({ id: users.id }).from(users)
+      .union(db.select({ id: users.id }).from(users).where(isNull(users.name))),
+    assertSql: {
+      postgres: 'SELECT "users"."id" AS "id" FROM "users" UNION SELECT "users"."id" AS "id" FROM "users" WHERE "users"."name" IS NULL',
+      sqlite: 'SELECT "users"."id" AS "id" FROM "users" UNION SELECT "users"."id" AS "id" FROM "users" WHERE "users"."name" IS NULL',
+      mysql: "SELECT `users`.`id` AS `id` FROM `users` UNION SELECT `users`.`id` AS `id` FROM `users` WHERE `users`.`name` IS NULL"
+    },
+    driverRows: [{ id: "u1" }],
+    assertResult: [{ id: "u1" }]
+  }),
+  defineSqlFeatureSuite({
+    id: "join.full",
+    level: 3,
+    requires: ["select.fullJoin"],
+    build: ({ users, posts }) => db
+      .select({ email: users.email, title: posts.title })
+      .from(users)
+      .fullJoin(posts, eq(users.id, posts.userId)),
+    assertSql: {
+      postgres: 'SELECT "users"."email" AS "email", "posts"."title" AS "title" FROM "users" FULL JOIN "posts" ON "users"."id" = "posts"."user_id"',
+      sqlite: 'SELECT "users"."email" AS "email", "posts"."title" AS "title" FROM "users" FULL JOIN "posts" ON "users"."id" = "posts"."user_id"'
+    },
+    driverRows: [{ email: "a@b.c", title: "Hello" }],
+    assertResult: [{ email: "a@b.c", title: "Hello" }]
+  }),
+  defineSqlFeatureSuite({
+    id: "subquery.from.scalar",
+    level: 3,
+    requires: [],
+    build: ({ users }) => {
+      const selected = db.select({ id: users.id }).from(users).as("selected")
+      const first = db.select({ id: users.id }).from(users).limit(1)
+      return db.select({ id: selected.field("id") }).from(selected).where(eq(selected.field("id"), scalar(first)))
+    },
+    assertSql: {
+      postgres: 'SELECT "selected"."id" AS "id" FROM (SELECT "users"."id" AS "id" FROM "users") "selected" WHERE "selected"."id" = (SELECT "users"."id" AS "id" FROM "users" LIMIT 1)',
+      sqlite: 'SELECT "selected"."id" AS "id" FROM (SELECT "users"."id" AS "id" FROM "users") "selected" WHERE "selected"."id" = (SELECT "users"."id" AS "id" FROM "users" LIMIT 1)',
+      mysql: "SELECT `selected`.`id` AS `id` FROM (SELECT `users`.`id` AS `id` FROM `users`) `selected` WHERE `selected`.`id` = (SELECT `users`.`id` AS `id` FROM `users` LIMIT 1)"
+    },
+    driverRows: [{ id: "u1" }],
+    assertResult: [{ id: "u1" }]
+  }),
+  defineSqlFeatureSuite({
+    id: "aggregate.functions",
+    level: 4,
+    requires: [],
+    build: ({ users }) => db.select({
+      count: count(users.id),
+      sum: sum(users.age),
+      avg: avg(users.age),
+      min: min(users.age),
+      max: max(users.age)
+    }).from(users),
+    assertSql: {
+      postgres: 'SELECT COUNT("users"."id") AS "count", SUM("users"."age") AS "sum", AVG("users"."age") AS "avg", MIN("users"."age") AS "min", MAX("users"."age") AS "max" FROM "users"',
+      sqlite: 'SELECT COUNT("users"."id") AS "count", SUM("users"."age") AS "sum", AVG("users"."age") AS "avg", MIN("users"."age") AS "min", MAX("users"."age") AS "max" FROM "users"',
+      mysql: "SELECT COUNT(`users`.`id`) AS `count`, SUM(`users`.`age`) AS `sum`, AVG(`users`.`age`) AS `avg`, MIN(`users`.`age`) AS `min`, MAX(`users`.`age`) AS `max` FROM `users`"
+    },
+    driverRows: [{ count: 1, sum: 30, avg: 30, min: 30, max: 30 }],
+    assertResult: [{ count: 1, sum: 30, avg: 30, min: 30, max: 30 }]
+  }),
+  defineSqlFeatureSuite({
+    id: "select.recursiveCte",
+    level: 5,
+    requires: ["select.recursiveCte"],
+    build: ({ users }) => {
+      const selected = db.recursiveCte("selected_users", db.select({ id: users.id }).from(users))
+      return db.select({ id: selected.field("id") }).from(selected)
+    },
+    assertSql: {
+      postgres: 'WITH RECURSIVE "selected_users" AS (SELECT "users"."id" AS "id" FROM "users") SELECT "selected_users"."id" AS "id" FROM "selected_users"',
+      sqlite: 'WITH RECURSIVE "selected_users" AS (SELECT "users"."id" AS "id" FROM "users") SELECT "selected_users"."id" AS "id" FROM "selected_users"',
+      mysql: "WITH RECURSIVE `selected_users` AS (SELECT `users`.`id` AS `id` FROM `users`) SELECT `selected_users`.`id` AS `id` FROM `selected_users`"
+    },
+    driverRows: [{ id: "u1" }],
+    assertResult: [{ id: "u1" }]
+  }),
+  defineSqlFeatureSuite({
+    id: "select.lateral",
+    level: 5,
+    requires: ["select.lateralJoin"],
+    build: ({ users, posts }) => {
+      const matching = db.select({ title: posts.title }).from(posts).where(eq(posts.userId, users.id)).as("matching")
+      return db.select({ email: users.email, title: matching.field("title") }).from(users).lateralJoin(matching)
+    },
+    assertSql: {
+      postgres: 'SELECT "users"."email" AS "email", "matching"."title" AS "title" FROM "users" CROSS JOIN LATERAL (SELECT "posts"."title" AS "title" FROM "posts" WHERE "posts"."user_id" = "users"."id") "matching"',
+      mysql: "SELECT `users`.`email` AS `email`, `matching`.`title` AS `title` FROM `users` CROSS JOIN LATERAL (SELECT `posts`.`title` AS `title` FROM `posts` WHERE `posts`.`user_id` = `users`.`id`) `matching`"
+    },
+    driverRows: [{ email: "a@b.c", title: "Hello" }],
+    assertResult: [{ email: "a@b.c", title: "Hello" }]
+  }),
+  defineSqlFeatureSuite({
+    id: "insert.onConflict",
+    level: 7,
+    requires: ["insert.onConflict"],
+    build: ({ users }) => db.insert(users)
+      .values({ email: "a@b.c", name: "A" })
+      .onConflictDoUpdate([users.email], { name: excluded(users.name) }),
+    assertSql: {
+      postgres: 'INSERT INTO "users" ("email", "name") VALUES ($1, $2) ON CONFLICT ("email") DO UPDATE SET "name" = EXCLUDED."name"',
+      sqlite: 'INSERT INTO "users" ("email", "name") VALUES (?, ?) ON CONFLICT ("email") DO UPDATE SET "name" = EXCLUDED."name"'
+    },
+    exec: "run",
+    driverRowCount: 1,
+    assertResult: { rowCount: 1 }
+  }),
+  defineSqlFeatureSuite({
+    id: "insert.onDuplicateKey",
+    level: 7,
+    requires: ["insert.onDuplicateKey"],
+    build: ({ users }) => db.insert(users)
+      .values({ email: "a@b.c", name: "A" })
+      .onDuplicateKeyUpdate({ name: excluded(users.name) }),
+    assertSql: {
+      mysql: "INSERT INTO `users` (`email`, `name`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`)"
+    },
+    exec: "run",
+    driverRowCount: 1,
+    assertResult: { rowCount: 1 }
   })
 ]

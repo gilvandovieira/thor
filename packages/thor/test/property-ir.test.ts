@@ -87,6 +87,7 @@ const rewriteExpressionValues = (node: ExprNode, salt: number): ExprNode => {
   switch (node._tag) {
     case "ColumnRef":
     case "Literal":
+    case "ExcludedRef":
       return node
     case "Param":
       return "value" in node ? { ...node, value: replaceValue(node.value, salt) } : node
@@ -117,6 +118,27 @@ const rewriteExpressionValues = (node: ExprNode, salt: number): ExprNode => {
           rewriteExpressionValues(parameter, salt) as ParamNode
         )
       }
+    case "ScalarSubquery":
+    case "Exists":
+      return { ...node, query: rewriteQueryValues(node.query, salt) as SelectIR }
+    case "InSubquery":
+      return {
+        ...node,
+        expr: rewriteExpressionValues(node.expr, salt),
+        query: rewriteQueryValues(node.query, salt) as SelectIR
+      }
+    case "FunctionCall":
+      return { ...node, args: node.args.map((arg) => rewriteExpressionValues(arg, salt)) }
+    case "WindowFunction":
+      return {
+        ...node,
+        function: rewriteExpressionValues(node.function, salt) as typeof node.function,
+        partitionBy: node.partitionBy.map((item) => rewriteExpressionValues(item, salt)),
+        orderBy: node.orderBy.map((term) => ({
+          ...term,
+          expr: rewriteExpressionValues(term.expr, salt)
+        }))
+      }
   }
 }
 
@@ -143,8 +165,34 @@ const rewriteQueryValues = (ir: QueryIR, salt: number): QueryIR => {
     case "Select":
       return {
         ...ir,
+        from: "_tag" in ir.from && ir.from._tag === "SubquerySource"
+          ? { ...ir.from, query: rewriteQueryValues(ir.from.query, salt) as SelectIR }
+          : ir.from,
         selection: rewriteSelectionValues(ir.selection, salt)!,
+        ...(ir.ctes ? {
+          ctes: ir.ctes.map((cte) => ({
+            ...cte,
+            query: rewriteQueryValues(cte.query, salt) as SelectIR
+          }))
+        } : {}),
+        ...(ir.joins ? {
+          joins: ir.joins.map((join) => ({
+            ...join,
+            source: "_tag" in join.source && join.source._tag === "SubquerySource"
+              ? { ...join.source, query: rewriteQueryValues(join.source.query, salt) as SelectIR }
+              : join.source,
+            ...(join.on ? { on: rewriteExpressionValues(join.on, salt) } : {})
+          }))
+        } : {}),
         ...(ir.where ? { where: rewriteExpressionValues(ir.where, salt) } : {}),
+        ...(ir.groupBy ? { groupBy: ir.groupBy.map((item) => rewriteExpressionValues(item, salt)) } : {}),
+        ...(ir.having ? { having: rewriteExpressionValues(ir.having, salt) } : {}),
+        ...(ir.setOperations ? {
+          setOperations: ir.setOperations.map((operation) => ({
+            ...operation,
+            query: rewriteQueryValues(operation.query, salt) as SelectIR
+          }))
+        } : {}),
         orderBy: ir.orderBy.map((term) => ({
           ...term,
           expr: rewriteExpressionValues(term.expr, salt)
@@ -154,6 +202,15 @@ const rewriteQueryValues = (ir: QueryIR, salt: number): QueryIR => {
       return {
         ...ir,
         rows: ir.rows.map((row) => row.map((value) => rewriteExpressionValues(value, salt))),
+        ...(ir.conflict ? {
+          conflict: {
+            ...ir.conflict,
+            set: ir.conflict.set.map((assignment) => ({
+              ...assignment,
+              value: rewriteExpressionValues(assignment.value, salt)
+            }))
+          }
+        } : {}),
         ...(ir.returning ? { returning: rewriteSelectionValues(ir.returning, salt)! } : {})
       } satisfies InsertIR
     case "Update":

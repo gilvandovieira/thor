@@ -2,8 +2,10 @@ import fc from "fast-check"
 import { Schema } from "effect"
 import {
   and,
+  alias,
   db,
   eq,
+  exists,
   gt,
   gte,
   ilike,
@@ -31,6 +33,12 @@ export const fuzzRows = pg.table("property_rows", {
   email: pg.text("email").notNull(),
   score: pg.integer("score").nullable(),
   active: pg.boolean("active").notNull()
+})
+
+export const fuzzPosts = pg.table("property_posts", {
+  id: pg.uuid("id").primaryKey().defaultRandom(),
+  rowId: pg.uuid("row_id").notNull(),
+  title: pg.text("title").notNull()
 })
 
 type NumericOperator = "=" | "<>" | "<" | "<=" | ">" | ">="
@@ -206,10 +214,40 @@ const deleteIrArbitrary: fc.Arbitrary<QueryIR> = predicateCaseArbitrary.map((pre
   db.delete(fuzzRows).where(buildPredicate(predicate)).returning({ id: fuzzRows.id }).ir
 )
 
+const joinIrArbitrary: fc.Arbitrary<QueryIR> = fc
+  .tuple(
+    fc.constantFrom("inner" as const, "left" as const, "right" as const, "full" as const),
+    predicateCaseArbitrary
+  )
+  .map(([type, predicate]) => {
+    const posts = alias(fuzzPosts, "joined_posts")
+    const base = db
+      .select({ email: fuzzRows.email, title: posts.title })
+      .from(fuzzRows)
+      .where(buildPredicate(predicate))
+    const on = eq(fuzzRows.id, posts.rowId)
+    switch (type) {
+      case "inner": return base.join(posts, on).ir
+      case "left": return base.leftJoin(posts, on).ir
+      case "right": return base.rightJoin(posts, on).ir
+      case "full": return base.fullJoin(posts, on).ir
+    }
+  })
+
+const subqueryIrArbitrary: fc.Arbitrary<QueryIR> = predicateCaseArbitrary.map((predicate) => {
+  const matching = db
+    .select({ id: fuzzPosts.id })
+    .from(fuzzPosts)
+    .where(and(eq(fuzzPosts.rowId, fuzzRows.id), buildPredicate(predicate)))
+  return db.select({ email: fuzzRows.email }).from(fuzzRows).where(exists(matching)).ir
+})
+
 /** Query IR generator spanning nested selects and every current mutation kind. */
 export const queryIrArbitrary: fc.Arbitrary<QueryIR> = fc.oneof(
   selectIrArbitrary,
   insertIrArbitrary,
   updateIrArbitrary,
-  deleteIrArbitrary
+  deleteIrArbitrary,
+  joinIrArbitrary,
+  subqueryIrArbitrary
 )
