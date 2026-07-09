@@ -11,6 +11,7 @@ import {
   ADVANCED_SQL_FEATURES,
   type ContractTestApi,
   LEVEL_1_2_FEATURES,
+  ROUTINE_SQL_FEATURES,
   runSqlFeatureMatrix
 } from "@gilvandovieira/thor/testing"
 
@@ -20,4 +21,5 @@ const api: ContractTestApi = { describe, it, beforeAll: noop, afterAll: noop, be
 for (const dialect of [PostgresDialect, SQLiteDialect, MySQLDialect]) {
   runSqlFeatureMatrix(api, { dialect, features: LEVEL_1_2_FEATURES })
   runSqlFeatureMatrix(api, { dialect, features: ADVANCED_SQL_FEATURES })
+  runSqlFeatureMatrix(api, { dialect, features: ROUTINE_SQL_FEATURES })
 }

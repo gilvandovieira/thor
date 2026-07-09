@@ -27,6 +27,12 @@ import { CapabilityError } from "../errors/index.js"
 import type { CompiledQuery, RawRow } from "../execution/driver.js"
 import { Database } from "../execution/database.js"
 import type { QueryArgs } from "../execution/run.js"
+import {
+  defineAggregateFunction,
+  defineFunction,
+  defineProcedure,
+  defineTableFunction
+} from "../routine/index.js"
 import type { ContractTestApi } from "./contract-suite.js"
 import { FakeDriver } from "./fake-driver.js"
 import { FakeDatabaseLayer } from "./fake-database-layer.js"
@@ -256,6 +262,31 @@ export const runSqlFeatureIntegration = (api: ContractTestApi, options: SqlFeatu
 }
 
 const emailParam = param("email", Schema.String)
+const textArg = { dataType: "text" as const, codec: Schema.String }
+const integerArg = { dataType: "integer" as const, codec: Schema.Number }
+const lowerRoutine = defineFunction("lower", {
+  args: [textArg],
+  returns: textArg,
+  volatility: "immutable"
+})
+const sumRoutine = defineAggregateFunction("sum", {
+  args: [integerArg],
+  returns: integerArg,
+  volatility: "immutable"
+})
+const seriesRoutine = defineTableFunction("generate_series", {
+  args: { start: integerArg, stop: integerArg },
+  returns: { value: integerArg },
+  volatility: "immutable"
+})
+const cleanupRoutine = defineProcedure("maintenance.cleanup", {
+  args: { before: textArg },
+  effects: {
+    mutates: ["users"],
+    idempotency: "idempotent",
+    requiresTransaction: false
+  }
+})
 
 /** Level 1 (basic DML) + Level 2 (typed semantics) features (spec §14.11). */
 export const LEVEL_1_2_FEATURES: ReadonlyArray<SqlFeature> = [
@@ -624,6 +655,74 @@ export const ADVANCED_SQL_FEATURES: ReadonlyArray<SqlFeature> = [
       .onDuplicateKeyUpdate({ name: excluded(users.name) }),
     assertSql: {
       mysql: "INSERT INTO `users` (`email`, `name`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`)"
+    },
+    exec: "run",
+    driverRowCount: 1,
+    assertResult: { rowCount: 1 }
+  })
+]
+
+/** Level 9 routine features: scalar, aggregate, window, table, and procedure calls. */
+export const ROUTINE_SQL_FEATURES: ReadonlyArray<SqlFeature> = [
+  defineSqlFeatureSuite({
+    id: "routine.scalar",
+    level: 9,
+    requires: ["routine.functionCall"],
+    build: ({ users }) => db.select({ lowered: lowerRoutine(users.email) }).from(users),
+    assertSql: {
+      postgres: 'SELECT "lower"("users"."email") AS "lowered" FROM "users"',
+      mysql: "SELECT `lower`(`users`.`email`) AS `lowered` FROM `users`"
+    },
+    driverRows: [{ lowered: "a@b.c" }],
+    assertResult: [{ lowered: "a@b.c" }]
+  }),
+  defineSqlFeatureSuite({
+    id: "routine.aggregate",
+    level: 9,
+    requires: ["routine.functionCall"],
+    build: ({ users }) => db.select({ total: sumRoutine(users.age) }).from(users),
+    assertSql: {
+      postgres: 'SELECT "sum"("users"."age") AS "total" FROM "users"',
+      mysql: "SELECT `sum`(`users`.`age`) AS `total` FROM `users`"
+    },
+    driverRows: [{ total: 30 }],
+    assertResult: [{ total: 30 }]
+  }),
+  defineSqlFeatureSuite({
+    id: "routine.window",
+    level: 9,
+    requires: ["select.windowFunctions"],
+    build: ({ users }) => db.select({ row: rowNumber().over({ orderBy: [asc(users.id)] }) }).from(users),
+    assertSql: {
+      postgres: 'SELECT ROW_NUMBER() OVER (ORDER BY "users"."id" ASC) AS "row" FROM "users"',
+      sqlite: 'SELECT ROW_NUMBER() OVER (ORDER BY "users"."id" ASC) AS "row" FROM "users"',
+      mysql: "SELECT ROW_NUMBER() OVER (ORDER BY `users`.`id` ASC) AS `row` FROM `users`"
+    },
+    driverRows: [{ row: 1 }],
+    assertResult: [{ row: 1 }]
+  }),
+  defineSqlFeatureSuite({
+    id: "routine.tableValued",
+    level: 9,
+    requires: ["routine.tableValuedFunction"],
+    build: () => {
+      const series = seriesRoutine.call({ start: 1, stop: 3 }, "series")
+      return db.select({ value: series.field("value") }).from(series)
+    },
+    assertSql: {
+      postgres: 'SELECT "series"."value" AS "value" FROM "generate_series"($1, $2) "series"("value")'
+    },
+    driverRows: [{ value: 1 }],
+    assertResult: [{ value: 1 }]
+  }),
+  defineSqlFeatureSuite({
+    id: "routine.procedure",
+    level: 9,
+    requires: ["routine.procedureCall"],
+    build: () => cleanupRoutine.call({ before: "2026-01-01" }),
+    assertSql: {
+      postgres: 'CALL "maintenance"."cleanup"($1)',
+      mysql: "CALL `maintenance`.`cleanup`(?)"
     },
     exec: "run",
     driverRowCount: 1,
