@@ -174,13 +174,17 @@ export const runSqlFeatureMatrix = (api: ContractTestApi, options: SqlFeatureMat
 
 /** Live-layer integration options for the feature matrix (spec §14.11, level 3). */
 export interface SqlFeatureIntegrationOptions {
+  /** Dialect used for compilation, capability checks, and live execution. */
   readonly dialect: Dialect
+  /** Executable feature definitions to register. */
   readonly features: ReadonlyArray<SqlFeature>
   /** A live `Database` layer for the dialect under test. */
   readonly layer: Layer.Layer<Database>
   /** Dialect-specific statements run before each feature to (re)create + seed the `users` fixture. */
   readonly reset: ReadonlyArray<string>
+  /** @returns Optional live-database setup completion. */
   readonly setup?: () => void | Promise<void>
+  /** @returns Optional live-database teardown completion. */
   readonly teardown?: () => void | Promise<void>
 }
 
