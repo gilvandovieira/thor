@@ -224,3 +224,219 @@ exactly what unblocks **G6b** (Levels 3–5, 9) and **H5b** (join/subquery fuzzi
 1. **Phase 0 (A1–A5)** — a few small doc edits; removes all doc drift today.
 2. **F1–F2 + D1–D5** — cache key + `.prepare()` handles; the biggest functional gap and the backbone of the perf story.
 3. **B1–B3** — make SQLite/MySQL spec-valid by passing the shared suite.
+
+---
+---
+
+# Part II — v1 milestone
+
+Source of truth: [`thor-project-v1-spec.md`](./thor-project-v1-spec.md) (the
+production-readiness release). v1 keeps the v0 foundation (typed/runtime IR,
+guards, capabilities, Effect execution, tests, benchmarks — Epics A–J) and adds
+mature dialects, a compiled-query API, explicit relations, production migrations,
+introspection, Node+Bun runtimes, safe routines, observability, LLM skills, and
+benchmarked hot paths.
+
+**New epics use letters K onward.** Several build directly on v0 work (noted
+under "builds on"); **Epic J (joins/aggregation) is a hard prerequisite** for the
+relation layer's `join` strategy and the feature matrix's advanced levels.
+
+## v1 epic overview
+
+| Epic | Theme | v1 spec | Milestone | Builds on | Status |
+|---|---|---|---|---|---|
+| K | Compiled Query API (`.compile()` → executable handle) | §8 | alpha.1 | D (`.prepare`) | ❌ |
+| L | Query caches + precompilation modes | §9, §10 | alpha.1 | F, D, E | ❌ |
+| M | Dialect hardening v1 (full contract, MySQL/Postgres) | §11 | alpha.2 | B | 🟡 (v0 suites pass) |
+| N | Runtime lanes v1 (Node + Bun) | §12 | alpha.3 | C | 🟡 (caps + Bun harness) |
+| O | Migration hardening v1 (dry-run, expand/contract, policies) | §15 | alpha.4 | migrator (§13 v0) | 🟡 |
+| P | Introspection & drift detection | §16 | alpha.4 | migrator `drift()` | ❌ |
+| Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J**, FK metadata | ❌ |
+| R | Routines v1 (functions/procedures, typed + guarded) | §14 | beta | routine module (scaffold) | ❌ |
+| S | Observability (metadata, spans, param-redaction) | §17 | beta | annotations (§7.4 v0) | ❌ |
+| T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI (v0) | ❌ |
+| U | LLM skills (11 skill files + manifest + export) | §21 | beta | — | ❌ |
+| V | API stability levels + error model v1 | §6, §22 | beta | errors (v0) | ❌ |
+| W | Benchmarks v1 + docs v1 (cold/warm/hot, Node+Bun) | §19, §23 | beta | I | 🟡 |
+
+## v1 milestone → epic map
+
+```
+v1-alpha.1  Compiled query + cache foundation   → K, L, (W hot-path baselines)
+v1-alpha.2  Dialect contract expansion          → M
+v1-alpha.3  Runtime lanes                        → N
+v1-alpha.4  Migration hardening + introspection  → O, P
+v1-alpha.5  Relation layer                        → Q   (⟵ J)
+v1-beta     Observability, skills, API stability → R, S, T, U, V, W
+```
+
+---
+
+## Epic K — Compiled Query API (§8, alpha.1)
+
+> v0 memoizes internally (Epic D handles); v1 exposes a **stable, public**
+> compiled-query value that bypasses fluent rebuild / normalization / guard
+> traversal / recompilation / decoder reconstruction on the hot path.
+
+| # | Task | Spec | Acceptance |
+|---|---|---|---|
+| K1 | `.compile()` on terminal queries → `CompiledQuery` value | §8.2 | `query.one().compile()` returns a handle with `.execute(params)` |
+| K2 | `CompiledQuery<Params, Output, Error, Requirements, Dialect, Cardinality>` type | §8.3 | exposes `cacheKey`, `dialect`, `cardinality`, `capabilities: ReadonlySet<Capability>` |
+| K3 | `.execute(params)` binds values separately; never bakes values | §8.4 | compiled-query invariant: params supplied at execute time; cache key/SQL value-independent (reuse Epic D `PreparedExecutionPlan`) |
+| K4 | Cheap per-execute validation only (capability/version, param-by-mode) | §8.1 | warm path skips guard traversal; still does capability/version check + prepared lookup + decode-by-mode |
+| K5 | Docs + `@stable` marking (part of §6) | §6.1 | compiled query API listed stable and documented |
+
+## Epic L — Query caches + precompilation modes (§9, §10, alpha.1)
+
+> Formalize the ad-hoc WeakMaps (Epics F/D) into named, bounded cache layers.
+
+| # | Task | Spec | Acceptance |
+|---|---|---|---|
+| L1 | Name the 5 cache layers: shape, compile, prepared, decoder, capability | §9.1 | each keyed by **shape, not values** (§9.2); documented |
+| L2 | `db.withQueryCache({ maxSize, strategy: "lru" })` | §9.3 | bounded caches with eviction; default sizes |
+| L3 | `query.compile({ cache, prepare })` options | §9.3 | opt in/out of cache + prepared per compile |
+| L4 | `compile()` / `compilePrepared()` / `compileUnsafeHot()` | §9.4 | prepared when driver supports; `compileUnsafeHot` requires explicit unsafe opt-in on pre-validated paths |
+| L5 | `db.withMode("safe"\|"trusted"\|"unsafe-hot")` sugar over Epic E | §10 | rename `unsafe`→`unsafe-hot`; `withMode` on `db`, not only the layer |
+| L6 | Cache-layer benchmarks + hit/miss counters | §9, §19 | cold/warm/prepared measured per layer; feeds observability (S) |
+
+## Epic M — Dialect hardening v1 (§11, alpha.2)
+
+| # | Task | Spec | Acceptance |
+|---|---|---|---|
+| M1 | Postgres passes the **full** contract + feature matrix | §11.4, alpha.2 | no gaps vs Level 1–2 (and Level 3+ as J lands) |
+| M2 | MySQL capability-aware pass or **explicitly marked partial** | §25 | matrix records unsupported (`RETURNING`, …) and asserts `CapabilityError` |
+| M3 | SQLite real adapter path hardened (Node + Bun) | alpha.2 | contract suite green on both runtimes |
+| M4 | Dialect-specific behavior isolated (no leakage into IR/guards) | §11.5 | audit: shared core stays dialect-neutral |
+| M5 | `thor capabilities <dialect>` reflects the matrix | §20.3 | native/emulated/unsupported/unknown per capability |
+
+## Epic N — Runtime lanes v1 (§12, alpha.3)
+
+> Builds on C (runtime capabilities modeled; Bun contract harness ready — C3).
+
+| # | Task | Spec | Acceptance |
+|---|---|---|---|
+| N1 | Formal **Node lane** + **Bun lane** in CI | §12, §18 | both lanes run the shared suites; Bun for supported adapters |
+| N2 | Runtime capability matrix drives adapter selection | §12.1 | `runtime.sqlite.bun` etc. gate driver availability |
+| N3 | Bun-specific SQLite driver path sharing the SQLite dialect | §12.3 | `bun:sqlite` adapter passes the same suite/fixture |
+| N4 | Runtime benchmarks (Node vs Bun) recorded | §12, §19 | `bench:*:bun` lanes formalized; results in `driver-benchmarks.md` |
+| N5 | Runtime testing invariant enforced | §12.4 | "valid only when the adapter passes the suite under that runtime" |
+
+## Epic O — Migration hardening v1 (§15, alpha.4)
+
+> Builds on the v0 live migrator (up/down/generate/apply/check/drift ✅).
+
+| # | Task | Spec | Acceptance |
+|---|---|---|---|
+| O1 | `Migrator.dryRun()` + `Migrator.plan(schema)` | §15.3 | plan/dry-run without applying; reviewable |
+| O2 | Expand/contract generator (`--strategy expand-contract`) | §15.5 | emits add → backfill → require → drop steps; destructive steps blocked unless reviewed |
+| O3 | Migration policies incl. `expand-only`, `allow-reviewed-destructive` | §15.4 | production default blocks destructive auto-migration |
+| O4 | Seed/backfill helpers | §15.1 | typed data backfill steps through Effect |
+| O5 | Transactional-DDL capability awareness | §15.1 | wrap in tx where supported (PG), not where not (MySQL) |
+| O6 | Generated-migration tests + routine/function DDL support | §15.1 | generated SQL snapshot tests; create/drop function/procedure ops |
+
+## Epic P — Introspection & drift detection (§16, alpha.4)
+
+| # | Task | Spec | Acceptance |
+|---|---|---|---|
+| P1 | `Introspector` service: `currentSchema()` | §16.3 | reads live DB → Schema IR (tables/columns/indexes/constraints/FKs/enums/views/routines) |
+| P2 | `Introspector.drift(expectedSchema)` | §16.3, §16.5 | diffs live vs schema-as-code; reports before `up` unless policy ignores |
+| P3 | Per-dialect introspection queries (pg/sqlite/mysql) | §16.4 | `information_schema`/`pragma`/`SHOW` per dialect |
+| P4 | CLI `thor pull` / `introspect` / `inspect schema` / `inspect routines` | §16.2 | writes/prints introspected Schema IR |
+| P5 | Wire `drift` into `thor doctor` + migration flow | §16.5, §20.2 | drift surfaced pre-migration |
+
+## Epic Q — Relation layer (§13, alpha.5) — ⟵ Epic J
+
+> Sits **on top of** the IR (never bypasses it): relation query → planner → IR →
+> guards → caps → compiler → executor. Needs join support (J) + FK metadata.
+
+| # | Task | Spec | Acceptance |
+|---|---|---|---|
+| Q1 | `column.references(() => other)` foreign-key metadata | §13.2 | FK captured in schema IR (also feeds P) |
+| Q2 | `defineRelations({...})` with `one()` / `many()` | §13.2 | typed relation graph keyed by table |
+| Q3 | `db.relation(t).findMany({ with: { rel: { strategy } } })` | §13.2 | relation planner lowers to Query IR |
+| Q4 | Loading strategies: `join` (⟵ J), `query` (batched by keys), `manual` | §13.3 | explicit per relation; no default magic |
+| Q5 | **No hidden N+1** guard | §13.4 | a would-be N+1 is rejected, batched, or requires explicit opt-in |
+| Q6 | Relation planner tests + `@experimental` marking | §6.2, alpha.5 | planner unit tests; API marked experimental |
+
+## Epic R — Routines v1 (§14, beta)
+
+> Builds on the scaffolded `routine/` module (descriptors exist; execution/expression wiring pending).
+
+| # | Task | Spec | Acceptance |
+|---|---|---|---|
+| R1 | Scalar function calls usable in expressions | §14.1, §12.1(v0) | `pg.fn.lower(col)` / user `defineFunction` in select/where; lowers to `FunctionCall` IR |
+| R2 | Aggregate + window function nodes (⟵ J aggregation) | §14.2 | group/window guards; capability-gated |
+| R3 | Procedure execution through Effect | §14.5 | `db.procedure(p).call(args)` → typed Effect; effects/idempotency/tx metadata honored |
+| R4 | Table-valued functions in `from` | §14.2 | `defineTableFunction` usable as a source |
+| R5 | Routine safety + capability gating | §14.6 | names never interpolated; required extensions/capabilities enforced |
+| R6 | Routine DDL in migrations (create/drop function/procedure) | §15.1 | ties to O6 |
+
+## Epic S — Observability (§17, beta)
+
+| # | Task | Spec | Acceptance |
+|---|---|---|---|
+| S1 | Structured per-query metadata | §17.1 | kind/dialect/runtime/tables/hash/compile+prepared cache hit-miss/duration/rowCount/errorTag/txn id |
+| S2 | Effect tracing spans with `thor.*` names | §17.2 | `thor.query.select.users`, `thor.transaction.commit`, `thor.migration.apply` |
+| S3 | Parameter-logging modes `none` / `redacted` / `unsafe-full` | §17.3 | default never logs raw params; `unsafe-full` explicit |
+| S4 | `db.withObservability({ tracing, metrics, logSql, logParams })` | §17.4 | opt-in tracing/metrics/log levels |
+| S5 | Observability invariant test | §17.5 | no sensitive data leaks by default (asserted) |
+
+## Epic T — CLI v1 (§20, beta)
+
+> Wires the v0 CLI stubs (`up`/`down`/`generate`/`drift`/`pull`) to the live migrator + adds new commands.
+
+| # | Task | Spec | Acceptance |
+|---|---|---|---|
+| T1 | Wire DB-connected commands to the live migrator/introspector | §20.1 | `up`/`down`/`generate`/`drift`/`pull`/`inspect` run against a configured DB |
+| T2 | `thor doctor` | §20.2 | checks runtime/dialect/driver/connectivity/journal/pending/drift/capabilities/config |
+| T3 | `thor capabilities <dialect\|runtime>` | §20.3 | prints native/emulated/unsupported/unknown |
+| T4 | `thor bench <query\|compile\|decode\|runtime>` | §20.4 | runs the bench groups; `--node`/`--bun` |
+| T5 | `thor skills list\|export` | §20.5, §21 | exports skill files to an agent workspace (`--to`, `--format md\|json`) |
+
+## Epic U — LLM skills (§21, beta)
+
+| # | Task | Spec | Acceptance |
+|---|---|---|---|
+| U1 | Skill file format (goal/use-when/checks/safe+unsafe patterns/examples/verification) | §21.3 | one canonical shape |
+| U2 | Author the 11 required skills | §21.4 | `schema`, `query`, `effect-execution`, `migrations`, `capabilities`, `routines`, `testing`, `benchmarks`, `dialects`, `debugging`, `safety` |
+| U3 | Skill manifest | §21.5 | machine-readable index of skills |
+| U4 | `thor skills export` (md + json, `--to`) | §20.5, §21 | writes skills into `./.agents/skills/thor` |
+| U5 | LLM usage invariant | §21.6 | skills encode capability-checking + no-raw-interpolation safety rules |
+
+## Epic V — API stability + error model v1 (§6, §22, beta)
+
+| # | Task | Spec | Acceptance |
+|---|---|---|---|
+| V1 | Tag APIs `@stable` / `@experimental` / `@internal` | §6 | stable: schema DSL, builder, exec methods, compiled query, migration format, tagged errors, capability names, dialect interface, testing helpers, CLI migration cmds |
+| V2 | Document the boundaries | §6, §23 | stability doc; `inspect()` stable-for-debug only |
+| V3 | Freeze + document the public tagged error set | §22 | every public error tag listed with fields + `catchTag` guidance |
+| V4 | Error model completeness pass | §22 | no generic exceptions where a tagged error should exist |
+
+## Epic W — Benchmarks v1 + docs v1 (§19, §23, beta)
+
+> Extends Epic I with the v1 benchmark groups + baselines under both runtimes.
+
+| # | Task | Spec | Acceptance |
+|---|---|---|---|
+| W1 | Benchmark groups: build/IR/compile/decode/effect/cache/runtime | §19.1 | each stage measured separately |
+| W2 | Cold / warm / hot baselines under **Node and Bun** | §19.5, §25 | recorded baselines; gate per runtime |
+| W3 | Hot-path targets tracked (warm cached path) | §19.3 | overhead vs target reported (extends I5) |
+| W4 | Benchmark gates stabilized | §19.6, beta | tighten `bench:gate` threshold once baselines settle |
+| W5 | v1 docs pass | §23 | README + subpath docs cover compiled queries, relations, introspection, observability, skills, stability |
+
+---
+
+## v1 cross-cutting invariants
+
+- **Compiled query (§8.4):** validated shape, never values — cache keys/SQL value-independent → K.
+- **Relation (§13.4):** no hidden N+1; reject/batch/opt-in → Q.
+- **Drift (§16.5):** live-vs-code drift reported before migrating unless policy ignores → O, P.
+- **Observability (§17.5):** visible behavior, no param leakage by default → S.
+- **Routine safety (§14.6):** declared/typed/capability-aware; names never interpolated → R.
+- **Runtime (§12.4):** valid only when the adapter passes the suite under that runtime → N.
+
+## v1 suggested first cut
+
+1. **K + L** (alpha.1) — public `.compile()` + named caches; the hot-path API v1 is built around (backbone; reuses D/F/E).
+2. **J** (v0 tail) — joins/aggregation; unblocks **Q** (relation `join` strategy) and the feature-matrix advanced levels.
+3. **P + O** (alpha.4) — introspection/drift + migration hardening; the production-migration story.
