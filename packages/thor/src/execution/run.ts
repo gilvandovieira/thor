@@ -333,6 +333,12 @@ const snapshotQuery = (ir: QueryIR): QueryIR => {
         ...(ir.returning ? { returning: Object.freeze([...ir.returning]) } : {}),
         annotations
       })
+    case "Call":
+      return Object.freeze({
+        ...ir,
+        args: Object.freeze([...ir.args]),
+        annotations
+      })
   }
 }
 

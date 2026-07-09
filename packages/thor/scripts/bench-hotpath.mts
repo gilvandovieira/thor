@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url"
 import { Effect, Layer, ManagedRuntime, Schema } from "effect"
 import { Database, count, db, eq, param, pg, withMode } from "@gilvandovieira/thor"
 import { PostgresDialect } from "@gilvandovieira/thor/postgres"
+import { defineFunction } from "@gilvandovieira/thor/routine"
 
 const users = pg.table("bench_users", {
   id: pg.uuid("id").primaryKey().defaultRandom(),
@@ -31,6 +32,11 @@ const posts = pg.table("bench_posts", {
   userId: pg.uuid("user_id").notNull()
 })
 const emailParam = param("email", Schema.String)
+const lowerRoutine = defineFunction("lower", {
+  args: [{ dataType: "text", codec: Schema.String }],
+  returns: { dataType: "text", codec: Schema.String },
+  volatility: "immutable"
+})
 
 /** Constant, zero-I/O driver returning fixed rows synchronously. */
 const layerFor = (rows: ReadonlyArray<Record<string, unknown>>) =>
@@ -58,6 +64,7 @@ const bulkLayer = layerFor(bulkRows)
 const bulkRt = ManagedRuntime.make(bulkLayer)
 const bulkUnsafeRt = ManagedRuntime.make(withMode(bulkLayer, "unsafe"))
 const advancedRt = ManagedRuntime.make(layerFor([{ email: "a@b.c", total: 1 }]))
+const routineRt = ManagedRuntime.make(layerFor([{ lowered: "a@b.c" }]))
 
 const pointQuery = () => db.select({ id: users.id, name: users.name }).from(users).where(eq(users.email, emailParam))
 const warmPoint = pointQuery()
@@ -69,6 +76,10 @@ const advancedQuery = db
   .leftJoin(posts, eq(users.id, posts.userId))
   .groupBy(users.email)
   .prepare("advanced-aggregate")
+const routineQuery = db
+  .select({ lowered: lowerRoutine(users.email) })
+  .from(users)
+  .prepare("routine-lower")
 
 interface Sample {
   readonly label: string
@@ -86,6 +97,7 @@ const samples: Sample[] = [
   time("point.warm", 100_000, () => void pointRt.runSync(warmPoint.one({ email: "a@b.c" }))),
   time("point.prepared", 100_000, () => void pointRt.runSync(preparedPoint.one({ email: "a@b.c" }))),
   time("advanced.prepared", 100_000, () => void advancedRt.runSync(advancedQuery.all())),
+  time("routine.prepared", 100_000, () => void routineRt.runSync(routineQuery.all())),
   time("bulk.safe", 20_000, () => void bulkRt.runSync(bulkQuery.all())),
   time("bulk.unsafe", 20_000, () => void bulkUnsafeRt.runSync(bulkQuery.all()))
 ]
@@ -106,6 +118,7 @@ await pointRt.dispose()
 await bulkRt.dispose()
 await bulkUnsafeRt.dispose()
 await advancedRt.dispose()
+await routineRt.dispose()
 
 // --- staged CI gate (spec §15.16) -------------------------------------------
 if (process.env.BENCH_GATE || process.env.BENCH_UPDATE_BASELINE) {

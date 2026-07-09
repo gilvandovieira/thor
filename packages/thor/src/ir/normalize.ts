@@ -85,6 +85,12 @@ const normalizeExpression = (node: ExprNode): ExprNode => {
 const normalizeSource = (source: QuerySource): QuerySource =>
   "_tag" in source && source._tag === "SubquerySource"
     ? Object.freeze({ ...source, query: normalizeQuery(source.query) as SelectIR })
+    : "_tag" in source && source._tag === "TableFunctionSource"
+      ? Object.freeze({
+          ...source,
+          args: Object.freeze(source.args.map(normalizeExpression)),
+          columns: Object.freeze([...source.columns])
+        })
     : Object.freeze({ ...source })
 
 /**
@@ -180,6 +186,12 @@ export const normalizeQuery = (ir: QueryIR): QueryIR => {
         ...ir,
         ...(ir.where ? { where: normalizeExpression(ir.where) } : {}),
         ...(ir.returning ? { returning: normalizeSelection(ir.returning) } : {})
+      })
+      break
+    case "Call":
+      normalized = Object.freeze({
+        ...ir,
+        args: Object.freeze(ir.args.map(normalizeExpression))
       })
       break
   }

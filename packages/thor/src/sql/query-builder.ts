@@ -46,7 +46,7 @@ import { internIdentifier } from "../ir/identifiers.js"
 
 // --- selection typing --------------------------------------------------------
 
-type SelectFields = Record<string, AnyColumn | Expr<unknown>>
+type SelectFields = Record<string, AnyColumn | Expr<any>>
 
 type FieldValue<T> = T extends Column<infer C>
   ? C extends { readonly data: infer D }
@@ -70,13 +70,14 @@ type ParameterizedInput<T> = { [K in keyof T]: ParameterizedValue<T[K]> }
  * @param value - Selected column or expression.
  * @returns A field carrying the expression and row decoder.
  */
-const toSelectionField = (alias: string, value: AnyColumn | Expr<unknown>): SelectionField => {
+const toSelectionField = (alias: string, value: AnyColumn | Expr<any>): SelectionField => {
   const outputAlias = internIdentifier(alias)
   if (isColumn(value)) {
     const codec = value.def.notNull ? value.def.codec : Schema.NullOr(value.def.codec)
     return { alias: outputAlias, expr: columnRef(value), codec }
   }
-  return { alias: outputAlias, expr: (value as Expr<unknown>).node, codec: Schema.Unknown }
+  const expression = value as Expr<any>
+  return { alias: outputAlias, expr: expression.node, codec: expression.codec ?? Schema.Unknown }
 }
 
 /**
@@ -97,7 +98,7 @@ const selectionFrom = (fields: SelectFields): SelectionField[] =>
 const expressionSyntaxCapabilities = (node: ExprNode): bigint => {
   switch (node._tag) {
     case "WindowFunction":
-      return capabilityBit("select.windowFunctions")
+      return capabilityBit("select.windowFunctions") | expressionSyntaxCapabilities(node.function)
     case "Comparison":
       return expressionSyntaxCapabilities(node.left) | expressionSyntaxCapabilities(node.right)
     case "InList":
@@ -113,7 +114,10 @@ const expressionSyntaxCapabilities = (node: ExprNode): bigint => {
     case "InSubquery":
       return expressionSyntaxCapabilities(node.expr)
     case "FunctionCall":
-      return node.args.reduce((bits, arg) => bits | expressionSyntaxCapabilities(arg), noCapabilities)
+      return node.args.reduce(
+        (bits, arg) => bits | expressionSyntaxCapabilities(arg),
+        node.capabilities
+      )
     case "ColumnRef":
     case "Param":
     case "Literal":
@@ -165,11 +169,14 @@ export class QueryReference<A> {
       ? this.source.alias
       : this.source.alias ?? this.source.name
     const dataType = field?.expr._tag === "ColumnRef" ? field.expr.dataType : "text"
-    return { node: { _tag: "ColumnRef", table, column: name, dataType } }
+    return {
+      node: { _tag: "ColumnRef", table, column: name, dataType },
+      ...(field ? { codec: field.codec as Schema.Schema<A[K], any> } : {})
+    }
   }
 }
 
-type QuerySourceInput = AnyTable | QueryReference<unknown>
+type QuerySourceInput = AnyTable | QueryReference<any>
 
 /**
  * Resolves a table or named query reference into select source metadata.
@@ -181,19 +188,24 @@ const resolveSource = (input: QuerySourceInput): {
   readonly source: QuerySource
   readonly tableNames: ReadonlyArray<string>
   readonly ctes: ReadonlyArray<CommonTableExpression>
+  readonly capabilities: bigint
 } => {
   if (input instanceof QueryReference) {
     return {
       source: input.source,
       tableNames: "query" in input.source ? input.source.query.annotations.tableNames : [input.source.name],
-      ctes: input.cte ? [input.cte] : []
+      ctes: input.cte ? [input.cte] : [],
+      capabilities: "_tag" in input.source && input.source._tag === "TableFunctionSource"
+        ? input.source.capabilities
+        : noCapabilities
     }
   }
   const meta = tableMeta(input)
   return {
     source: { name: meta.name, ...(meta.alias ? { alias: meta.alias } : {}) },
     tableNames: [meta.name],
-    ctes: []
+    ctes: [],
+    capabilities: noCapabilities
   }
 }
 
@@ -444,7 +456,7 @@ class SelectQuery<A> {
    */
   private addJoin(type: JoinType, input: QuerySourceInput, on: ExprNode | undefined, lateral: boolean): SelectQuery<A> {
     const resolved = resolveSource(input)
-    let capabilities = this.ir.capabilities | (on ? expressionSyntaxCapabilities(on) : noCapabilities)
+    let capabilities = this.ir.capabilities | resolved.capabilities | (on ? expressionSyntaxCapabilities(on) : noCapabilities)
     if (type === "right") capabilities |= capabilityBit("select.rightJoin")
     if (type === "full") capabilities |= capabilityBit("select.fullJoin")
     if (lateral) capabilities |= capabilityBit("select.lateralJoin")
@@ -465,7 +477,7 @@ class SelectQuery<A> {
    * @param references - CTE references created by `db.cte` or `db.recursiveCte`.
    * @returns A new select query.
    */
-  with(...references: ReadonlyArray<QueryReference<unknown>>): SelectQuery<A> {
+  with(...references: ReadonlyArray<QueryReference<any>>): SelectQuery<A> {
     const ctes = references.flatMap((reference) => reference.cte ? [reference.cte] : [])
     let capabilities = this.ir.capabilities
     for (const cte of ctes) {
@@ -694,7 +706,7 @@ class SelectInit<A> {
       selection: this.fields,
       ...(resolved.ctes.length > 0 ? { ctes: resolved.ctes } : {}),
       orderBy: [],
-      capabilities: selectionSyntaxCapabilities(this.fields) | cteCapabilities,
+      capabilities: selectionSyntaxCapabilities(this.fields) | cteCapabilities | resolved.capabilities,
       cardinality: "many",
       annotations: { tableNames: [...resolved.tableNames] }
     }

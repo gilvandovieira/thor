@@ -46,7 +46,17 @@ const expressionShape = (node: ExprNode): unknown => {
     case "InSubquery":
       return [node._tag, expressionShape(node.expr), queryShape(node.query), node.negated]
     case "FunctionCall":
-      return [node._tag, node.name, node.args.map(expressionShape), node.aggregate, node.star]
+      return [
+        node._tag,
+        node.schema ?? null,
+        node.name,
+        node.args.map(expressionShape),
+        node.aggregate,
+        node.star,
+        node.declared,
+        node.volatility,
+        node.capabilities.toString()
+      ]
     case "WindowFunction":
       return [
         node._tag,
@@ -77,6 +87,17 @@ const sourceShape = (source: QuerySource): unknown => {
   }
   if ("_tag" in source && source._tag === "CteSource") {
     return [source._tag, source.name, source.alias ?? null]
+  }
+  if ("_tag" in source && source._tag === "TableFunctionSource") {
+    return [
+      source._tag,
+      source.schema ?? null,
+      source.name,
+      source.args.map(expressionShape),
+      source.alias,
+      source.columns,
+      source.capabilities.toString()
+    ]
   }
   return ["TableSource", source.name, source.alias ?? null]
 }
@@ -145,6 +166,13 @@ const queryShape = (ir: QueryIR): unknown => {
         [ir.from.name, ir.from.alias],
         ir.where ? expressionShape(ir.where) : null,
         selectionShape(ir.returning)
+      ]
+    case "Call":
+      return [
+        ...common,
+        ir.schema ?? null,
+        ir.procedure,
+        ir.args.map(expressionShape)
       ]
   }
 }

@@ -11,8 +11,14 @@ import { PostgresDialect } from "../postgres/dialect.js"
 import { Schema } from "effect"
 import { bench, formatResult } from "./runner.js"
 import { users } from "./fixtures.js"
+import { defineFunction } from "../routine/index.js"
 
 const emailParam = param("email", Schema.String)
+const lowerRoutine = defineFunction("lower", {
+  args: [{ dataType: "text", codec: Schema.String }],
+  returns: { dataType: "text", codec: Schema.String },
+  volatility: "immutable"
+})
 
 const results = [
   bench("build:select-where", () => {
@@ -29,6 +35,12 @@ const results = [
   }),
   bench("compile:aggregate", () => {
     db.select({ email: users.email, total: count() }).from(users).groupBy(users.email).toSql(PostgresDialect)
+  }),
+  bench("build:routine", () => {
+    db.select({ lowered: lowerRoutine(users.email) }).from(users)
+  }),
+  bench("compile:routine", () => {
+    db.select({ lowered: lowerRoutine(users.email) }).from(users).toSql(PostgresDialect)
   })
 ]
 

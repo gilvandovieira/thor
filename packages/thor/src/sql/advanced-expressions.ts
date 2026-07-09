@@ -6,9 +6,10 @@
  *
  * @module sql/advanced-expressions
  */
+import { Schema } from "effect"
 import type { AnyColumn } from "../schema/column.js"
 import type { FunctionCallNode, OrderByTerm, SelectIR } from "../ir/query-ir.js"
-import { type ColumnValue, type Expr, toExprNode } from "./expressions.js"
+import { type ColumnValue, type Expr, isColumn, toExprNode } from "./expressions.js"
 
 /** Structural select shape accepted by subquery helpers. */
 export interface SelectExpressionSource {
@@ -17,7 +18,7 @@ export interface SelectExpressionSource {
 }
 
 /** Values accepted as function and window operands. */
-export type ExpressionInput = AnyColumn | Expr<unknown>
+export type ExpressionInput = AnyColumn | Expr<any>
 
 /** Window partitioning and ordering specification. */
 export interface WindowSpec {
@@ -43,10 +44,12 @@ export interface WindowableExpr<A> extends Expr<A> {
  *
  * @typeParam A - Decoded expression type.
  * @param node - Function call representation.
+ * @param codec - Selected-value decoder.
  * @returns Typed function expression with window support.
  */
-const windowable = <A>(node: FunctionCallNode): WindowableExpr<A> => ({
+const windowable = <A>(node: FunctionCallNode, codec: Schema.Schema<A, any>): WindowableExpr<A> => ({
   node,
+  codec,
   over: (spec = {}) => ({
     node: {
       _tag: "WindowFunction",
@@ -54,68 +57,106 @@ const windowable = <A>(node: FunctionCallNode): WindowableExpr<A> => ({
       partitionBy: (spec.partitionBy ?? []).map(toExprNode),
       orderBy: spec.orderBy ?? [],
       ...(spec.frame ? { frame: spec.frame } : {})
-    }
+    },
+    codec
   })
 })
 
 /**
  * @param name - SQL function name.
  * @param args - Function operands.
+ * @param codec - Decoder used when the aggregate is selected.
  * @returns Aggregate expression with optional window application.
  */
-const aggregate = <A>(name: string, args: ReadonlyArray<ExpressionInput>): WindowableExpr<A> =>
+const aggregate = <A>(
+  name: string,
+  args: ReadonlyArray<ExpressionInput>,
+  codec: Schema.Schema<A, any>
+): WindowableExpr<A> =>
   windowable<A>({
     _tag: "FunctionCall",
     name,
     args: args.map(toExprNode),
     aggregate: true,
-    star: args.length === 0
-  })
+    star: args.length === 0,
+    declared: false,
+    volatility: "immutable",
+    capabilities: 0n
+  }, codec)
 
 /**
  * @param value - Optional counted expression; omit for `count(*)`.
  * @returns A numeric count expression.
  */
 export const count = (value?: ExpressionInput): WindowableExpr<number> =>
-  aggregate<number>("count", value === undefined ? [] : [value])
+  aggregate<number>("count", value === undefined ? [] : [value], Schema.Number)
 
 /**
  * @param value - Numeric expression to sum.
  * @returns A numeric sum expression.
  */
-export const sum = (value: ExpressionInput): WindowableExpr<number> => aggregate<number>("sum", [value])
+export const sum = (value: ExpressionInput): WindowableExpr<number> => aggregate<number>("sum", [value], Schema.Number)
 
 /**
  * @param value - Numeric expression to average.
  * @returns A numeric average expression.
  */
-export const avg = (value: ExpressionInput): WindowableExpr<number> => aggregate<number>("avg", [value])
+export const avg = (value: ExpressionInput): WindowableExpr<number> => aggregate<number>("avg", [value], Schema.Number)
 
 /**
  * @typeParam A - Expression result type.
  * @param value - Expression whose minimum is requested.
  * @returns A minimum-value expression.
  */
-export const min = <A>(value: AnyColumn | Expr<A>): WindowableExpr<A> => aggregate<A>("min", [value])
+export const min = <A>(value: AnyColumn | Expr<A>): WindowableExpr<A> =>
+  aggregate<A>("min", [value], (isColumn(value) ? value.def.codec : value.codec ?? Schema.Unknown) as Schema.Schema<A, any>)
 
 /**
  * @typeParam A - Expression result type.
  * @param value - Expression whose maximum is requested.
  * @returns A maximum-value expression.
  */
-export const max = <A>(value: AnyColumn | Expr<A>): WindowableExpr<A> => aggregate<A>("max", [value])
+export const max = <A>(value: AnyColumn | Expr<A>): WindowableExpr<A> =>
+  aggregate<A>("max", [value], (isColumn(value) ? value.def.codec : value.codec ?? Schema.Unknown) as Schema.Schema<A, any>)
 
 /** @returns A `row_number()` window function awaiting `.over()`. */
 export const rowNumber = (): WindowableExpr<number> =>
-  windowable<number>({ _tag: "FunctionCall", name: "row_number", args: [], aggregate: false, star: false })
+  windowable<number>({
+    _tag: "FunctionCall",
+    name: "row_number",
+    args: [],
+    aggregate: false,
+    star: false,
+    declared: false,
+    volatility: "immutable",
+    capabilities: 0n
+  }, Schema.Number)
 
 /** @returns A `rank()` window function awaiting `.over()`. */
 export const rank = (): WindowableExpr<number> =>
-  windowable<number>({ _tag: "FunctionCall", name: "rank", args: [], aggregate: false, star: false })
+  windowable<number>({
+    _tag: "FunctionCall",
+    name: "rank",
+    args: [],
+    aggregate: false,
+    star: false,
+    declared: false,
+    volatility: "immutable",
+    capabilities: 0n
+  }, Schema.Number)
 
 /** @returns A `dense_rank()` window function awaiting `.over()`. */
 export const denseRank = (): WindowableExpr<number> =>
-  windowable<number>({ _tag: "FunctionCall", name: "dense_rank", args: [], aggregate: false, star: false })
+  windowable<number>({
+    _tag: "FunctionCall",
+    name: "dense_rank",
+    args: [],
+    aggregate: false,
+    star: false,
+    declared: false,
+    volatility: "immutable",
+    capabilities: 0n
+  }, Schema.Number)
 
 /**
  * @typeParam A - Scalar subquery result type.

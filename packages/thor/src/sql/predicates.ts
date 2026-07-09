@@ -7,7 +7,7 @@ import type { AnyColumn } from "../schema/column.js"
 import type { ComparisonOp, ExprNode } from "../ir/query-ir.js"
 import { type ColumnValue, type Expr, type Param, isColumn, toExprNode, toValueNode } from "./expressions.js"
 
-type Comparable = AnyColumn | Expr<unknown>
+type Comparable = AnyColumn | Expr<any>
 type ComparableValue<T> = T extends AnyColumn ? ColumnValue<T> : T extends Expr<infer A> ? A : unknown
 type Value<T extends Comparable> = ComparableValue<T> | Param<ComparableValue<T>> | Expr<ComparableValue<T>> | AnyColumn
 

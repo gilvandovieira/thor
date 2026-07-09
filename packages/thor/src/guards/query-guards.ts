@@ -240,12 +240,23 @@ const validateSelect = (ir: SelectIR, outerScope: ReadonlySet<string>, out: Guar
   if ("_tag" in ir.from && ir.from._tag === "SubquerySource") {
     validateSelect(ir.from.query, new Set(), out)
   }
+  if ("_tag" in ir.from && ir.from._tag === "TableFunctionSource") {
+    checkScope(outerScope, ir.from.args.flatMap((arg) => columnRefsIn(arg)), out)
+    for (const arg of ir.from.args) visitSubqueries(arg, (query) => validateSelect(query, outerScope, out))
+  }
   const localScope = new Set<string>(outerScope)
   localScope.add(sourceScopeName(ir.from))
 
   for (const join of ir.joins ?? []) {
     if ("_tag" in join.source && join.source._tag === "SubquerySource") {
       validateSelect(join.source.query, join.lateral ? localScope : new Set(), out)
+    }
+    if ("_tag" in join.source && join.source._tag === "TableFunctionSource") {
+      const argumentScope = join.lateral ? localScope : new Set<string>()
+      checkScope(argumentScope, join.source.args.flatMap((arg) => columnRefsIn(arg)), out)
+      for (const arg of join.source.args) {
+        visitSubqueries(arg, (query) => validateSelect(query, argumentScope, out))
+      }
     }
     const joinScope = new Set(localScope)
     joinScope.add(sourceScopeName(join.source))
@@ -356,6 +367,12 @@ export const collectStructuralViolations = (ir: QueryIR): ReadonlyArray<GuardErr
     case "Delete": {
       const scope = new Set([ir.from.name])
       checkScope(scope, [...columnRefsIn(ir.where), ...refsInSelection(ir.returning)], out)
+      break
+    }
+    case "Call": {
+      if (ir.procedure.length === 0) {
+        out.push(new GuardError({ guard: "routine-shape", message: "Procedure name cannot be empty" }))
+      }
       break
     }
   }

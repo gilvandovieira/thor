@@ -13,6 +13,8 @@ export type Param<A> = ParamNode & { readonly _A?: A }
 /** A typed expression wrapper (currently a thin carrier around an IR node). */
 export interface Expr<A> {
   readonly node: ExprNode
+  /** Optional decoder used when the expression is selected. */
+  readonly codec?: Schema.Schema<A, any>
   readonly _A?: A
 }
 

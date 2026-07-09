@@ -130,6 +130,14 @@ export interface FunctionCallNode {
   readonly args: ReadonlyArray<ExprNode>
   readonly aggregate: boolean
   readonly star: boolean
+  /** Optional declared schema; absent for built-in functions. */
+  readonly schema?: string
+  /** Whether the name came from a declared routine descriptor. */
+  readonly declared: boolean
+  /** Volatility metadata retained for optimization safety. */
+  readonly volatility: "immutable" | "stable" | "volatile"
+  /** Capabilities required by this call. */
+  readonly capabilities: CapabilityBits
 }
 
 /** Window specification applied to a function expression. */
@@ -187,8 +195,19 @@ export interface CteSource {
   readonly alias?: string
 }
 
+/** Declared table-valued function used as a relation source. */
+export interface TableFunctionSource {
+  readonly _tag: "TableFunctionSource"
+  readonly schema?: string
+  readonly name: string
+  readonly args: ReadonlyArray<ExprNode>
+  readonly alias: string
+  readonly columns: ReadonlyArray<string>
+  readonly capabilities: CapabilityBits
+}
+
 /** Any relation allowed in a `FROM` or `JOIN` clause. */
-export type QuerySource = TableSource | SubquerySource | CteSource
+export type QuerySource = TableSource | SubquerySource | CteSource | TableFunctionSource
 
 /** Selected expression, output alias, and decoder. */
 export interface SelectionField {
@@ -301,8 +320,16 @@ export interface DeleteIR extends BaseIR {
   readonly returning?: ReadonlyArray<SelectionField>
 }
 
+/** Runtime representation of a stored-procedure call. */
+export interface CallIR extends BaseIR {
+  readonly _tag: "Call"
+  readonly schema?: string
+  readonly procedure: string
+  readonly args: ReadonlyArray<ExprNode>
+}
+
 /** Discriminated union accepted by guards, dialects, and execution. */
-export type QueryIR = SelectIR | InsertIR | UpdateIR | DeleteIR
+export type QueryIR = SelectIR | InsertIR | UpdateIR | DeleteIR | CallIR
 
 // --- ids --------------------------------------------------------------------
 
@@ -390,8 +417,14 @@ export const collectQueryParams = (ir: QueryIR, out: ParamNode[] = []): Readonly
       for (const cte of ir.ctes ?? []) collectQueryParams(cte.query, out)
       selection(ir.selection)
       if ("_tag" in ir.from && ir.from._tag === "SubquerySource") collectQueryParams(ir.from.query, out)
+      if ("_tag" in ir.from && ir.from._tag === "TableFunctionSource") {
+        for (const arg of ir.from.args) collectParams(arg, out)
+      }
       for (const join of ir.joins ?? []) {
         if ("_tag" in join.source && join.source._tag === "SubquerySource") collectQueryParams(join.source.query, out)
+        if ("_tag" in join.source && join.source._tag === "TableFunctionSource") {
+          for (const arg of join.source.args) collectParams(arg, out)
+        }
         collectParams(join.on, out)
       }
       collectParams(ir.where, out)
@@ -415,6 +448,9 @@ export const collectQueryParams = (ir: QueryIR, out: ParamNode[] = []): Readonly
     case "Delete":
       collectParams(ir.where, out)
       selection(ir.returning)
+      break
+    case "Call":
+      for (const arg of ir.args) collectParams(arg, out)
       break
   }
   return out
@@ -455,10 +491,11 @@ export const queryCapabilityBits = (ir: QueryIR): CapabilityBits => {
         bits |= queryCapabilityBits(node.query)
         break
       case "FunctionCall":
+        bits |= node.capabilities
         for (const arg of node.args) expression(arg)
         break
       case "WindowFunction":
-        for (const arg of node.function.args) expression(arg)
+        expression(node.function)
         for (const item of node.partitionBy) expression(item)
         for (const term of node.orderBy) expression(term.expr)
         break
@@ -479,8 +516,16 @@ export const queryCapabilityBits = (ir: QueryIR): CapabilityBits => {
       for (const cte of ir.ctes ?? []) bits |= queryCapabilityBits(cte.query)
       selection(ir.selection)
       if ("_tag" in ir.from && ir.from._tag === "SubquerySource") bits |= queryCapabilityBits(ir.from.query)
+      if ("_tag" in ir.from && ir.from._tag === "TableFunctionSource") {
+        bits |= ir.from.capabilities
+        for (const arg of ir.from.args) expression(arg)
+      }
       for (const join of ir.joins ?? []) {
         if ("_tag" in join.source && join.source._tag === "SubquerySource") bits |= queryCapabilityBits(join.source.query)
+        if ("_tag" in join.source && join.source._tag === "TableFunctionSource") {
+          bits |= join.source.capabilities
+          for (const arg of join.source.args) expression(arg)
+        }
         expression(join.on)
       }
       expression(ir.where)
@@ -504,6 +549,9 @@ export const queryCapabilityBits = (ir: QueryIR): CapabilityBits => {
     case "Delete":
       expression(ir.where)
       selection(ir.returning)
+      break
+    case "Call":
+      for (const arg of ir.args) expression(arg)
       break
   }
   return bits

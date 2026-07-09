@@ -9,7 +9,7 @@ import { compileQuery } from "../sql/compiler.js"
 import { MySQLMigrations } from "./migrations.js"
 import { dialectProfileHash } from "../capabilities/profile.js"
 
-const version = "2"
+const version = "3"
 
 /** Complete MySQL dialect consumed by builders, execution, and migrations. */
 export const MySQLDialect: Dialect = {

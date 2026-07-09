@@ -8,6 +8,7 @@
  */
 import type { CompiledQuery } from "../execution/driver.js"
 import type {
+  CallIR,
   DeleteIR,
   ExprNode,
   InsertIR,
@@ -40,6 +41,16 @@ const compileSource = (context: CompileContext, source: QuerySource): string => 
   if ("_tag" in source && source._tag === "CteSource") {
     const name = context.dialect.quoteIdent(source.name)
     return source.alias ? `${name} ${context.dialect.quoteIdent(source.alias)}` : name
+  }
+  if ("_tag" in source && source._tag === "TableFunctionSource") {
+    const name = source.schema
+      ? `${context.dialect.quoteIdent(source.schema)}.${context.dialect.quoteIdent(source.name)}`
+      : context.dialect.quoteIdent(source.name)
+    const args = source.args.map((arg) => compileExpr(context, arg)).join(", ")
+    const columns = source.columns.length > 0
+      ? `(${source.columns.map((column) => context.dialect.quoteIdent(column)).join(", ")})`
+      : ""
+    return `${name}(${args}) ${context.dialect.quoteIdent(source.alias)}${columns}`
   }
   const name = context.dialect.quoteIdent(source.name)
   return source.alias ? `${name} ${context.dialect.quoteIdent(source.alias)}` : name
@@ -110,9 +121,13 @@ const compileExpr = (context: CompileContext, node: ExprNode): string => {
     case "InSubquery":
       return `${compileExpr(context, node.expr)} ${node.negated ? "NOT IN" : "IN"} (${compileSelect(context, node.query)})`
     case "FunctionCall": {
-      const name = /^[a-z_][a-z0-9_]*$/i.test(node.name)
-        ? node.name.toUpperCase()
-        : context.dialect.quoteIdent(node.name)
+      const name = node.declared
+        ? node.schema
+          ? `${context.dialect.quoteIdent(node.schema)}.${context.dialect.quoteIdent(node.name)}`
+          : context.dialect.quoteIdent(node.name)
+        : /^[a-z_][a-z0-9_]*$/i.test(node.name)
+          ? node.name.toUpperCase()
+          : context.dialect.quoteIdent(node.name)
       const args = node.star ? "*" : node.args.map((arg) => compileExpr(context, arg)).join(", ")
       return `${name}(${args})`
     }
@@ -257,6 +272,18 @@ const compileDelete = (context: CompileContext, ir: DeleteIR): string => {
 }
 
 /**
+ * @param context - Active compiler state.
+ * @param ir - Procedure-call representation.
+ * @returns Complete `CALL` statement.
+ */
+const compileCall = (context: CompileContext, ir: CallIR): string => {
+  const name = ir.schema
+    ? `${context.dialect.quoteIdent(ir.schema)}.${context.dialect.quoteIdent(ir.procedure)}`
+    : context.dialect.quoteIdent(ir.procedure)
+  return `CALL ${name}(${ir.args.map((arg) => compileExpr(context, arg)).join(", ")})`
+}
+
+/**
  * Compiles runtime query IR for a database dialect.
  *
  * @param ir - Immutable query representation to lower.
@@ -279,6 +306,9 @@ export const compileQuery = (ir: QueryIR, dialect: Dialect): CompiledQuery => {
       break
     case "Delete":
       sql = compileDelete(context, normalized)
+      break
+    case "Call":
+      sql = compileCall(context, normalized)
       break
   }
   // Cache key scopes the compiled shape by dialect id + versioned capability
