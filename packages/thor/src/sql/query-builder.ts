@@ -11,12 +11,17 @@ import { Effect, Option, Schema } from "effect"
 import type { AnyColumn, Column } from "../schema/column.js"
 import { type AnyTable, type Insert as InsertInput, type Update as UpdateInput, tableMeta } from "../schema/table.js"
 import {
+  type CommonTableExpression,
   type ExprNode,
+  type InsertConflict,
+  type JoinType,
   type OrderByTerm,
+  type QuerySource,
   type QueryIR,
   type SelectionField,
   type SelectIR,
   collectQueryParams,
+  queryCapabilityBits,
   nextId
 } from "../ir/query-ir.js"
 import { capabilityBit, type Capability, bitsToCapabilities, noCapabilities } from "../capabilities/capability.js"
@@ -36,6 +41,7 @@ import {
 } from "../execution/run.js"
 import type { CommandResult, CompiledQuery } from "../execution/driver.js"
 import { type Expr, type Param, columnRef, isColumn, toValueNode } from "./expressions.js"
+import { type ExpressionInput } from "./advanced-expressions.js"
 import { internIdentifier } from "../ir/identifiers.js"
 
 // --- selection typing --------------------------------------------------------
@@ -83,6 +89,50 @@ const selectionFrom = (fields: SelectFields): SelectionField[] =>
   Object.entries(fields).map(([alias, value]) => toSelectionField(alias, value))
 
 /**
+ * Detects syntax capabilities introduced directly by an expression.
+ *
+ * @param node - Expression to inspect.
+ * @returns Capability bits required by the expression syntax.
+ */
+const expressionSyntaxCapabilities = (node: ExprNode): bigint => {
+  switch (node._tag) {
+    case "WindowFunction":
+      return capabilityBit("select.windowFunctions")
+    case "Comparison":
+      return expressionSyntaxCapabilities(node.left) | expressionSyntaxCapabilities(node.right)
+    case "InList":
+      return node.values.reduce(
+        (bits, value) => bits | expressionSyntaxCapabilities(value),
+        expressionSyntaxCapabilities(node.expr)
+      )
+    case "Logical":
+      return node.operands.reduce((bits, operand) => bits | expressionSyntaxCapabilities(operand), noCapabilities)
+    case "Not":
+    case "IsNull":
+      return expressionSyntaxCapabilities(node.expr)
+    case "InSubquery":
+      return expressionSyntaxCapabilities(node.expr)
+    case "FunctionCall":
+      return node.args.reduce((bits, arg) => bits | expressionSyntaxCapabilities(arg), noCapabilities)
+    case "ColumnRef":
+    case "Param":
+    case "Literal":
+    case "RawExpr":
+    case "ScalarSubquery":
+    case "Exists":
+    case "ExcludedRef":
+      return noCapabilities
+  }
+}
+
+/**
+ * @param fields - Selection fields to inspect.
+ * @returns Union of expression syntax capabilities.
+ */
+const selectionSyntaxCapabilities = (fields: ReadonlyArray<SelectionField>): bigint =>
+  fields.reduce((bits, field) => bits | expressionSyntaxCapabilities(field.expr), noCapabilities)
+
+/**
  * Builds a star selection with one decoded field per table column.
  *
  * @param table - Table whose columns should be selected.
@@ -90,6 +140,77 @@ const selectionFrom = (fields: SelectFields): SelectionField[] =>
  */
 const starSelection = (table: AnyTable): SelectionField[] =>
   Object.entries(tableMeta(table).columns).map(([alias, column]) => toSelectionField(alias, column))
+
+/** Query-local named relation backed by a select query. */
+export class QueryReference<A> {
+  /**
+   * @param source - Relation source embedded in `FROM` or `JOIN`.
+   * @param fields - Selected fields exposed by name.
+   * @param cte - Optional CTE definition attached when this reference enters a query.
+   */
+  constructor(
+    readonly source: QuerySource,
+    private readonly fields: ReadonlyArray<SelectionField>,
+    readonly cte?: CommonTableExpression
+  ) {}
+
+  /**
+   * @typeParam K - Selected output key.
+   * @param name - Selected output alias to reference.
+   * @returns A typed column-like expression bound to this relation.
+   */
+  field<K extends Extract<keyof A, string>>(name: K): Expr<A[K]> {
+    const field = this.fields.find((candidate) => candidate.alias === name)
+    const table = "_tag" in this.source && this.source._tag === "SubquerySource"
+      ? this.source.alias
+      : this.source.alias ?? this.source.name
+    const dataType = field?.expr._tag === "ColumnRef" ? field.expr.dataType : "text"
+    return { node: { _tag: "ColumnRef", table, column: name, dataType } }
+  }
+}
+
+type QuerySourceInput = AnyTable | QueryReference<unknown>
+
+/**
+ * Resolves a table or named query reference into select source metadata.
+ *
+ * @param input - Table, subquery, or CTE reference.
+ * @returns Source IR, physical table names, and attached CTE definitions.
+ */
+const resolveSource = (input: QuerySourceInput): {
+  readonly source: QuerySource
+  readonly tableNames: ReadonlyArray<string>
+  readonly ctes: ReadonlyArray<CommonTableExpression>
+} => {
+  if (input instanceof QueryReference) {
+    return {
+      source: input.source,
+      tableNames: "query" in input.source ? input.source.query.annotations.tableNames : [input.source.name],
+      ctes: input.cte ? [input.cte] : []
+    }
+  }
+  const meta = tableMeta(input)
+  return {
+    source: { name: meta.name, ...(meta.alias ? { alias: meta.alias } : {}) },
+    tableNames: [meta.name],
+    ctes: []
+  }
+}
+
+/**
+ * Deduplicates CTE definitions by name while preserving first encounter order.
+ *
+ * @param groups - CTE groups to merge.
+ * @returns Ordered unique CTE definitions.
+ */
+const mergeCtes = (...groups: ReadonlyArray<ReadonlyArray<CommonTableExpression>>): ReadonlyArray<CommonTableExpression> => {
+  const seen = new Set<string>()
+  return groups.flat().filter((cte) => {
+    if (seen.has(cte.name)) return false
+    seen.add(cte.name)
+    return true
+  })
+}
 
 // --- shared inspection -------------------------------------------------------
 
@@ -104,7 +225,7 @@ const inspectIr = (ir: QueryIR) => ({
   tables: ir.annotations.tableNames,
   params: collectQueryParams(ir).map((parameter) => parameter.name),
   cardinality: ir.cardinality,
-  capabilities: bitsToCapabilities(ir.capabilities),
+  capabilities: bitsToCapabilities(queryCapabilityBits(ir)),
   operationName: ir.annotations.operationName,
   tracing: ir.annotations.tracing
 })
@@ -237,7 +358,200 @@ class SelectQuery<A> {
    * @returns A new select query.
    */
   where(predicate: ExprNode): SelectQuery<A> {
-    return this.clone({ where: predicate })
+    return this.clone({
+      where: predicate,
+      capabilities: this.ir.capabilities | expressionSyntaxCapabilities(predicate)
+    })
+  }
+
+  /**
+   * Adds a relation using an inner join.
+   *
+   * @param source - Table, subquery, or CTE to join.
+   * @param on - Join predicate evaluated with both sides in scope.
+   * @returns A new select query.
+   */
+  join(source: QuerySourceInput, on: ExprNode): SelectQuery<A> {
+    return this.addJoin("inner", source, on, false)
+  }
+
+  /**
+   * @param source - Table, subquery, or CTE to join.
+   * @param on - Join predicate.
+   * @returns A new inner-joined select query.
+   */
+  innerJoin(source: QuerySourceInput, on: ExprNode): SelectQuery<A> {
+    return this.addJoin("inner", source, on, false)
+  }
+
+  /**
+   * @param source - Table, subquery, or CTE to join.
+   * @param on - Join predicate.
+   * @returns A new left-joined select query.
+   */
+  leftJoin(source: QuerySourceInput, on: ExprNode): SelectQuery<A> {
+    return this.addJoin("left", source, on, false)
+  }
+
+  /**
+   * @param source - Table, subquery, or CTE to join.
+   * @param on - Join predicate.
+   * @returns A new capability-gated right-joined select query.
+   */
+  rightJoin(source: QuerySourceInput, on: ExprNode): SelectQuery<A> {
+    return this.addJoin("right", source, on, false)
+  }
+
+  /**
+   * @param source - Table, subquery, or CTE to join.
+   * @param on - Join predicate.
+   * @returns A new capability-gated full-joined select query.
+   */
+  fullJoin(source: QuerySourceInput, on: ExprNode): SelectQuery<A> {
+    return this.addJoin("full", source, on, false)
+  }
+
+  /**
+   * @param source - Relation to cross join.
+   * @returns A new cross-joined select query.
+   */
+  crossJoin(source: QuerySourceInput): SelectQuery<A> {
+    return this.addJoin("cross", source, undefined, false)
+  }
+
+  /**
+   * Adds a correlated lateral derived-table join.
+   *
+   * @param source - Derived query or CTE reference.
+   * @param on - Optional join predicate; defaults to a cross lateral join.
+   * @param type - Inner or left lateral join kind.
+   * @returns A new capability-gated select query.
+   */
+  lateralJoin(
+    source: QuerySourceInput,
+    on?: ExprNode,
+    type: Extract<JoinType, "inner" | "left" | "cross"> = on ? "inner" : "cross"
+  ): SelectQuery<A> {
+    return this.addJoin(type, source, on, true)
+  }
+
+  /**
+   * @param type - Join kind.
+   * @param input - Joined relation.
+   * @param on - Optional join predicate.
+   * @param lateral - Whether the joined relation can reference prior scope.
+   * @returns A new select query.
+   */
+  private addJoin(type: JoinType, input: QuerySourceInput, on: ExprNode | undefined, lateral: boolean): SelectQuery<A> {
+    const resolved = resolveSource(input)
+    let capabilities = this.ir.capabilities | (on ? expressionSyntaxCapabilities(on) : noCapabilities)
+    if (type === "right") capabilities |= capabilityBit("select.rightJoin")
+    if (type === "full") capabilities |= capabilityBit("select.fullJoin")
+    if (lateral) capabilities |= capabilityBit("select.lateralJoin")
+    return this.clone({
+      joins: [...(this.ir.joins ?? []), { type, source: resolved.source, ...(on ? { on } : {}), lateral }],
+      ctes: mergeCtes(this.ir.ctes ?? [], resolved.ctes),
+      capabilities,
+      annotations: {
+        ...this.ir.annotations,
+        tableNames: [...new Set([...this.ir.annotations.tableNames, ...resolved.tableNames])]
+      }
+    })
+  }
+
+  /**
+   * Adds named CTE definitions even when they are not the root source.
+   *
+   * @param references - CTE references created by `db.cte` or `db.recursiveCte`.
+   * @returns A new select query.
+   */
+  with(...references: ReadonlyArray<QueryReference<unknown>>): SelectQuery<A> {
+    const ctes = references.flatMap((reference) => reference.cte ? [reference.cte] : [])
+    let capabilities = this.ir.capabilities
+    for (const cte of ctes) {
+      capabilities |= capabilityBit(cte.recursive ? "select.recursiveCte" : "select.cte")
+    }
+    return this.clone({ ctes: mergeCtes(this.ir.ctes ?? [], ctes), capabilities })
+  }
+
+  /** @returns A new `SELECT DISTINCT` query. */
+  distinct(): SelectQuery<A> {
+    return this.clone({ distinct: true })
+  }
+
+  /**
+   * @param expressions - Grouping expressions.
+   * @returns A grouped select query.
+   */
+  groupBy(...expressions: ReadonlyArray<ExpressionInput>): SelectQuery<A> {
+    const nodes = expressions.map((expression) => isColumn(expression) ? columnRef(expression) : expression.node)
+    return this.clone({
+      groupBy: [...(this.ir.groupBy ?? []), ...nodes],
+      capabilities: nodes.reduce(
+        (bits, node) => bits | expressionSyntaxCapabilities(node),
+        this.ir.capabilities
+      )
+    })
+  }
+
+  /**
+   * @param predicate - Post-aggregation predicate.
+   * @returns A select query with `HAVING`.
+   */
+  having(predicate: ExprNode): SelectQuery<A> {
+    return this.clone({
+      having: predicate,
+      capabilities: this.ir.capabilities | expressionSyntaxCapabilities(predicate)
+    })
+  }
+
+  /**
+   * @param query - Compatible select appended with `UNION`.
+   * @returns A set-operation query.
+   */
+  union(query: SelectQuery<A>): SelectQuery<A> {
+    return this.addSetOperation("union", query, false)
+  }
+
+  /**
+   * @param query - Compatible select appended with `UNION ALL`.
+   * @returns A set-operation query.
+   */
+  unionAll(query: SelectQuery<A>): SelectQuery<A> {
+    return this.addSetOperation("union", query, true)
+  }
+
+  /**
+   * @param query - Compatible select appended with `INTERSECT`.
+   * @returns A set-operation query.
+   */
+  intersect(query: SelectQuery<A>): SelectQuery<A> {
+    return this.addSetOperation("intersect", query, false)
+  }
+
+  /**
+   * @param query - Compatible select appended with `EXCEPT`.
+   * @returns A set-operation query.
+   */
+  except(query: SelectQuery<A>): SelectQuery<A> {
+    return this.addSetOperation("except", query, false)
+  }
+
+  /**
+   * @param type - Set-operation kind.
+   * @param query - Compatible right-hand select.
+   * @param all - Whether duplicate rows are retained.
+   * @returns A new set-operation query.
+   */
+  private addSetOperation(type: "union" | "intersect" | "except", query: SelectQuery<A>, all: boolean): SelectQuery<A> {
+    return this.clone({
+      setOperations: [...(this.ir.setOperations ?? []), { type, query: query.ir, all }],
+      capabilities: this.ir.capabilities | capabilityBit("select.setOperations"),
+      annotations: {
+        ...this.ir.annotations,
+        tableNames: [...new Set([...this.ir.annotations.tableNames, ...query.ir.annotations.tableNames])]
+      }
+    })
   }
 
   /**
@@ -245,7 +559,13 @@ class SelectQuery<A> {
    * @returns A new select query.
    */
   orderBy(...terms: ReadonlyArray<OrderByTerm>): SelectQuery<A> {
-    return this.clone({ orderBy: [...this.ir.orderBy, ...terms] })
+    return this.clone({
+      orderBy: [...this.ir.orderBy, ...terms],
+      capabilities: terms.reduce(
+        (bits, term) => bits | expressionSyntaxCapabilities(term.expr),
+        this.ir.capabilities
+      )
+    })
   }
 
   /**
@@ -285,7 +605,7 @@ class SelectQuery<A> {
    * @returns Capabilities required to execute this query.
    */
   requiredCapabilities(): ReadonlyArray<Capability> {
-    return bitsToCapabilities(this.ir.capabilities)
+    return bitsToCapabilities(queryCapabilityBits(this.ir))
   }
 
   /**
@@ -330,6 +650,25 @@ class SelectQuery<A> {
   prepare(name?: string): PreparedQuery<A> {
     return new PreparedQuery<A>(name ?? nextId("prepared"), this.ir, this.fields)
   }
+
+  /**
+   * @param name - Required derived-table alias.
+   * @returns A relation reference exposing selected fields through `.field()`.
+   */
+  as(name: string): QueryReference<A> {
+    return new QueryReference<A>({ _tag: "SubquerySource", query: this.ir, alias: internIdentifier(name) }, this.fields)
+  }
+
+  /**
+   * @param name - CTE name.
+   * @param recursive - Whether the enclosing clause uses `WITH RECURSIVE`.
+   * @returns A named CTE relation reference.
+   */
+  cte(name: string, recursive = false): QueryReference<A> {
+    const cteName = internIdentifier(name)
+    const definition: CommonTableExpression = { name: cteName, query: this.ir, recursive }
+    return new QueryReference<A>({ _tag: "CteSource", name: cteName }, this.fields, definition)
+  }
 }
 
 class SelectInit<A> {
@@ -339,20 +678,25 @@ class SelectInit<A> {
   constructor(private readonly fields: SelectionField[]) {}
 
   /**
-   * @param table - Table placed in the `FROM` clause.
+   * @param input - Table, derived query, or CTE placed in the `FROM` clause.
    * @returns A selectable query.
    */
-  from(table: AnyTable): SelectQuery<A> {
-    const meta = tableMeta(table)
+  from(input: QuerySourceInput): SelectQuery<A> {
+    const resolved = resolveSource(input)
+    const cteCapabilities = resolved.ctes.reduce(
+      (bits, cte) => bits | capabilityBit(cte.recursive ? "select.recursiveCte" : "select.cte"),
+      noCapabilities
+    )
     const ir: SelectIR = {
       _tag: "Select",
       id: nextId("Select"),
-      from: { name: meta.name },
+      from: resolved.source,
       selection: this.fields,
+      ...(resolved.ctes.length > 0 ? { ctes: resolved.ctes } : {}),
       orderBy: [],
-      capabilities: noCapabilities,
+      capabilities: selectionSyntaxCapabilities(this.fields) | cteCapabilities,
       cardinality: "many",
-      annotations: { tableNames: [meta.name] }
+      annotations: { tableNames: [...resolved.tableNames] }
     }
     return new SelectQuery<A>(ir, this.fields)
   }
@@ -399,6 +743,26 @@ const inputValueNode = (table: string, column: AnyColumn, value: unknown): ExprN
   return { _tag: "Param", name: `${table}.${column.def.name}`, codec: column.def.codec, value }
 }
 
+/**
+ * Converts application update input into physical assignments.
+ *
+ * @param table - Target table.
+ * @param input - Application-keyed update values.
+ * @returns Ordered physical assignments.
+ */
+const assignmentsFrom = (
+  table: AnyTable,
+  input: Record<string, unknown>
+): ReadonlyArray<{ readonly column: string; readonly value: ExprNode }> => {
+  const meta = tableMeta(table)
+  return Object.entries(input).flatMap(([key, value]) => {
+    const column = meta.columns[key]
+    return column
+      ? [{ column: column.def.name, value: inputValueNode(meta.name, column, value) }]
+      : []
+  })
+}
+
 /** Insert, update, or delete query with a decoded `RETURNING` selection. */
 class ReturningQuery<A> {
   /**
@@ -429,7 +793,7 @@ class ReturningQuery<A> {
    * @returns Capabilities required to execute this returning query.
    */
   requiredCapabilities(): ReadonlyArray<Capability> {
-    return bitsToCapabilities(this.ir.capabilities)
+    return bitsToCapabilities(queryCapabilityBits(this.ir))
   }
 
   /**
@@ -513,11 +877,13 @@ class InsertValues<T extends AnyTable> {
    * @param table - Target table.
    * @param columns - Physical columns included by the insert.
    * @param rows - Parameter expressions for every inserted row.
+   * @param conflict - Optional dialect-specific conflict policy.
    */
   constructor(
     private readonly table: T,
     private readonly columns: string[],
-    private readonly rows: ExprNode[][]
+    private readonly rows: ExprNode[][],
+    private readonly conflict?: InsertConflict
   ) {}
 
   /**
@@ -532,11 +898,80 @@ class InsertValues<T extends AnyTable> {
       into: { name: meta.name },
       columns: this.columns,
       rows: this.rows,
+      ...(this.conflict ? { conflict: this.conflict } : {}),
       ...(returning ? { returning } : {}),
-      capabilities: returning ? capabilityBit("insert.returning") : noCapabilities,
+      capabilities:
+        (returning ? capabilityBit("insert.returning") : noCapabilities) |
+        (this.conflict?.kind === "onConflict" ? capabilityBit("insert.onConflict") : noCapabilities) |
+        (this.conflict?.kind === "onDuplicateKey" ? capabilityBit("insert.onDuplicateKey") : noCapabilities),
       cardinality: this.rows.length === 1 ? "one" : "many",
       annotations: { tableNames: [meta.name], idempotency: "non-idempotent" }
     }
+  }
+
+  /** @returns Stable insert-shape metadata without executing. */
+  inspect() {
+    return inspectIr(this.ir())
+  }
+
+  /**
+   * @param dialect - Target SQL dialect; defaults to PostgreSQL.
+   * @returns Compiled insert SQL and parameter metadata.
+   */
+  toSql(dialect: Dialect = PostgresDialect): CompiledQuery {
+    return dialect.compileQuery(this.ir())
+  }
+
+  /** @returns Capabilities required by this insert. */
+  requiredCapabilities(): ReadonlyArray<Capability> {
+    return bitsToCapabilities(queryCapabilityBits(this.ir()))
+  }
+
+  /**
+   * Adds a PostgreSQL/SQLite-style `ON CONFLICT DO NOTHING` policy.
+   *
+   * @param target - Optional conflict-target columns.
+   * @returns A new insert builder guarded by `insert.onConflict`.
+   */
+  onConflictDoNothing(target: ReadonlyArray<AnyColumn> = []): InsertValues<T> {
+    return new InsertValues(this.table, this.columns, this.rows, {
+      kind: "onConflict",
+      target: target.map((column) => column.def.name),
+      action: "nothing",
+      set: []
+    })
+  }
+
+  /**
+   * Adds a PostgreSQL/SQLite-style `ON CONFLICT DO UPDATE` policy.
+   *
+   * @param target - Conflict-target columns.
+   * @param input - Assignments applied to the conflicting row.
+   * @returns A new insert builder guarded by `insert.onConflict`.
+   */
+  onConflictDoUpdate(
+    target: ReadonlyArray<AnyColumn>,
+    input: ParameterizedInput<UpdateInput<T>>
+  ): InsertValues<T> {
+    return new InsertValues(this.table, this.columns, this.rows, {
+      kind: "onConflict",
+      target: target.map((column) => column.def.name),
+      action: "update",
+      set: assignmentsFrom(this.table, input as Record<string, unknown>)
+    })
+  }
+
+  /**
+   * Adds a MySQL-style `ON DUPLICATE KEY UPDATE` policy.
+   *
+   * @param input - Assignments applied to the conflicting row.
+   * @returns A new insert builder guarded by `insert.onDuplicateKey`.
+   */
+  onDuplicateKeyUpdate(input: ParameterizedInput<UpdateInput<T>>): InsertValues<T> {
+    return new InsertValues(this.table, this.columns, this.rows, {
+      kind: "onDuplicateKey",
+      set: assignmentsFrom(this.table, input as Record<string, unknown>)
+    })
   }
 
   /**
@@ -573,14 +1008,7 @@ class UpdateBuilder<T extends AnyTable> {
    * @returns An update builder with assignments.
    */
   set(input: ParameterizedInput<UpdateInput<T>>): UpdateValues<T> {
-    const meta = tableMeta(this.table)
-    const assignments = Object.entries(input as Record<string, unknown>).flatMap(([key, value]) => {
-      const column = meta.columns[key]
-      return column
-        ? [{ column: column.def.name, value: inputValueNode(meta.name, column, value) }]
-        : []
-    })
-    return new UpdateValues<T>(this.table, assignments)
+    return new UpdateValues<T>(this.table, assignmentsFrom(this.table, input as Record<string, unknown>))
   }
 }
 
@@ -722,7 +1150,21 @@ export const db = {
    * @param table - Target table.
    * @returns A delete builder.
    */
-  delete: <T extends AnyTable>(table: T): DeleteBuilder<T> => new DeleteBuilder(table)
+  delete: <T extends AnyTable>(table: T): DeleteBuilder<T> => new DeleteBuilder(table),
+  /**
+   * @typeParam A - Selected CTE row type.
+   * @param name - CTE name.
+   * @param query - Query defining the CTE.
+   * @returns A named relation reference for `from`, `join`, or `with`.
+   */
+  cte: <A>(name: string, query: SelectQuery<A>): QueryReference<A> => query.cte(name, false),
+  /**
+   * @typeParam A - Selected recursive CTE row type.
+   * @param name - CTE name.
+   * @param query - Query defining the recursive CTE body.
+   * @returns A recursive named relation reference.
+   */
+  recursiveCte: <A>(name: string, query: SelectQuery<A>): QueryReference<A> => query.cte(name, true)
 }
 
 export type { SelectQuery, ReturningQuery }

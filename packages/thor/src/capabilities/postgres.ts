@@ -18,6 +18,9 @@ export const PostgresCapabilities = defineCapabilities("postgres", {
   "select.recursiveCte": "native",
   "select.windowFunctions": "native",
   "select.lateralJoin": "native",
+  "select.rightJoin": "native",
+  "select.fullJoin": "native",
+  "select.setOperations": "native",
   "select.forUpdate": "native",
 
   "transaction.savepoints": "native",

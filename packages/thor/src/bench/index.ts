@@ -6,6 +6,7 @@
 import { db } from "../sql/query-builder.js"
 import { eq } from "../sql/predicates.js"
 import { param } from "../sql/expressions.js"
+import { count } from "../sql/advanced-expressions.js"
 import { PostgresDialect } from "../postgres/dialect.js"
 import { Schema } from "effect"
 import { bench, formatResult } from "./runner.js"
@@ -22,6 +23,12 @@ const results = [
   }),
   bench("build:insert", () => {
     db.insert(users).values({ email: "a@b.c", name: "A" }).returning({ id: users.id })
+  }),
+  bench("build:aggregate", () => {
+    db.select({ email: users.email, total: count() }).from(users).groupBy(users.email)
+  }),
+  bench("compile:aggregate", () => {
+    db.select({ email: users.email, total: count() }).from(users).groupBy(users.email).toSql(PostgresDialect)
   })
 ]
 

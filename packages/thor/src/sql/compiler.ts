@@ -13,10 +13,10 @@ import type {
   InsertIR,
   OrderByTerm,
   ParamNode,
+  QuerySource,
   QueryIR,
   SelectionField,
   SelectIR,
-  TableSource,
   UpdateIR
 } from "../ir/query-ir.js"
 import type { Dialect } from "../dialect.js"
@@ -30,10 +30,17 @@ interface CompileContext {
 
 /**
  * @param context - Active compiler state.
- * @param source - Table source and optional alias.
+ * @param source - Table, subquery, or CTE source.
  * @returns A dialect-quoted table reference.
  */
-const compileSource = (context: CompileContext, source: TableSource): string => {
+const compileSource = (context: CompileContext, source: QuerySource): string => {
+  if ("_tag" in source && source._tag === "SubquerySource") {
+    return `(${compileSelect(context, source.query)}) ${context.dialect.quoteIdent(source.alias)}`
+  }
+  if ("_tag" in source && source._tag === "CteSource") {
+    const name = context.dialect.quoteIdent(source.name)
+    return source.alias ? `${name} ${context.dialect.quoteIdent(source.alias)}` : name
+  }
   const name = context.dialect.quoteIdent(source.name)
   return source.alias ? `${name} ${context.dialect.quoteIdent(source.alias)}` : name
 }
@@ -96,6 +103,32 @@ const compileExpr = (context: CompileContext, node: ExprNode): string => {
       return `${compileExpr(context, node.expr)} IS ${node.negated ? "NOT NULL" : "NULL"}`
     case "RawExpr":
       return compileRaw(context, node)
+    case "ScalarSubquery":
+      return `(${compileSelect(context, node.query)})`
+    case "Exists":
+      return `${node.negated ? "NOT " : ""}EXISTS (${compileSelect(context, node.query)})`
+    case "InSubquery":
+      return `${compileExpr(context, node.expr)} ${node.negated ? "NOT IN" : "IN"} (${compileSelect(context, node.query)})`
+    case "FunctionCall": {
+      const name = /^[a-z_][a-z0-9_]*$/i.test(node.name)
+        ? node.name.toUpperCase()
+        : context.dialect.quoteIdent(node.name)
+      const args = node.star ? "*" : node.args.map((arg) => compileExpr(context, arg)).join(", ")
+      return `${name}(${args})`
+    }
+    case "WindowFunction": {
+      const clauses: string[] = []
+      if (node.partitionBy.length > 0) {
+        clauses.push(`PARTITION BY ${node.partitionBy.map((item) => compileExpr(context, item)).join(", ")}`)
+      }
+      if (node.orderBy.length > 0) clauses.push(`ORDER BY ${compileOrderBy(context, node.orderBy)}`)
+      if (node.frame) clauses.push(node.frame)
+      return `${compileExpr(context, node.function)} OVER (${clauses.join(" ")})`
+    }
+    case "ExcludedRef":
+      return context.dialect.id === "mysql"
+        ? `VALUES(${context.dialect.quoteIdent(node.column)})`
+        : `EXCLUDED.${context.dialect.quoteIdent(node.column)}`
   }
 }
 
@@ -131,12 +164,41 @@ const returningClause = (context: CompileContext, fields: ReadonlyArray<Selectio
  * @returns Complete select SQL.
  */
 const compileSelect = (context: CompileContext, ir: SelectIR): string => {
-  let sql = `SELECT ${compileSelection(context, ir.selection)} FROM ${compileSource(context, ir.from)}`
+  let prefix = ""
+  if ((ir.ctes?.length ?? 0) > 0) {
+    const recursive = ir.ctes!.some((cte) => cte.recursive) ? " RECURSIVE" : ""
+    const definitions = ir.ctes!
+      .map((cte) => `${context.dialect.quoteIdent(cte.name)} AS (${compileSelect(context, cte.query)})`)
+      .join(", ")
+    prefix = `WITH${recursive} ${definitions} `
+  }
+
+  let sql = `SELECT${ir.distinct ? " DISTINCT" : ""} ${compileSelection(context, ir.selection)} FROM ${compileSource(context, ir.from)}`
+  for (const join of ir.joins ?? []) {
+    const keyword = join.type === "inner"
+      ? "INNER JOIN"
+      : join.type === "left"
+        ? "LEFT JOIN"
+        : join.type === "right"
+          ? "RIGHT JOIN"
+          : join.type === "full"
+            ? "FULL JOIN"
+            : "CROSS JOIN"
+    sql += ` ${keyword}${join.lateral ? " LATERAL" : ""} ${compileSource(context, join.source)}`
+    if (join.on) sql += ` ON ${compileExpr(context, join.on)}`
+  }
   if (ir.where) sql += ` WHERE ${compileExpr(context, ir.where)}`
+  if ((ir.groupBy?.length ?? 0) > 0) {
+    sql += ` GROUP BY ${ir.groupBy!.map((item) => compileExpr(context, item)).join(", ")}`
+  }
+  if (ir.having) sql += ` HAVING ${compileExpr(context, ir.having)}`
+  for (const operation of ir.setOperations ?? []) {
+    sql += ` ${operation.type.toUpperCase()}${operation.all ? " ALL" : ""} ${compileSelect(context, operation.query)}`
+  }
   if (ir.orderBy.length > 0) sql += ` ORDER BY ${compileOrderBy(context, ir.orderBy)}`
   if (ir.limit !== undefined) sql += ` LIMIT ${ir.limit}`
   if (ir.offset !== undefined) sql += ` OFFSET ${ir.offset}`
-  return sql
+  return prefix + sql
 }
 
 /**
@@ -149,7 +211,22 @@ const compileInsert = (context: CompileContext, ir: InsertIR): string => {
   const rows = ir.rows
     .map((row) => `(${row.map((value) => compileExpr(context, value)).join(", ")})`)
     .join(", ")
-  return `INSERT INTO ${compileSource(context, ir.into)} (${columns}) VALUES ${rows}${returningClause(context, ir.returning)}`
+  let sql = `INSERT INTO ${compileSource(context, ir.into)} (${columns}) VALUES ${rows}`
+  if (ir.conflict?.kind === "onConflict") {
+    const target = ir.conflict.target.length > 0
+      ? ` (${ir.conflict.target.map((column) => context.dialect.quoteIdent(column)).join(", ")})`
+      : ""
+    sql += ` ON CONFLICT${target} DO ${ir.conflict.action === "nothing"
+      ? "NOTHING"
+      : `UPDATE SET ${ir.conflict.set.map((assignment) =>
+          `${context.dialect.quoteIdent(assignment.column)} = ${compileExpr(context, assignment.value)}`
+        ).join(", ")}`}`
+  } else if (ir.conflict?.kind === "onDuplicateKey") {
+    sql += ` ON DUPLICATE KEY UPDATE ${ir.conflict.set.map((assignment) =>
+      `${context.dialect.quoteIdent(assignment.column)} = ${compileExpr(context, assignment.value)}`
+    ).join(", ")}`
+  }
+  return sql + returningClause(context, ir.returning)
 }
 
 /**

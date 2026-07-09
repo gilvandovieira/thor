@@ -102,6 +102,51 @@ export interface RawExprNode {
   readonly params: ReadonlyArray<ParamNode>
 }
 
+/** Scalar subquery used as an expression. */
+export interface ScalarSubqueryNode {
+  readonly _tag: "ScalarSubquery"
+  readonly query: SelectIR
+}
+
+/** `EXISTS` or `NOT EXISTS` predicate. */
+export interface ExistsNode {
+  readonly _tag: "Exists"
+  readonly query: SelectIR
+  readonly negated: boolean
+}
+
+/** `IN (subquery)` or `NOT IN (subquery)` predicate. */
+export interface InSubqueryNode {
+  readonly _tag: "InSubquery"
+  readonly expr: ExprNode
+  readonly query: SelectIR
+  readonly negated: boolean
+}
+
+/** SQL function call, including aggregate functions. */
+export interface FunctionCallNode {
+  readonly _tag: "FunctionCall"
+  readonly name: string
+  readonly args: ReadonlyArray<ExprNode>
+  readonly aggregate: boolean
+  readonly star: boolean
+}
+
+/** Window specification applied to a function expression. */
+export interface WindowFunctionNode {
+  readonly _tag: "WindowFunction"
+  readonly function: FunctionCallNode
+  readonly partitionBy: ReadonlyArray<ExprNode>
+  readonly orderBy: ReadonlyArray<OrderByTerm>
+  readonly frame?: string
+}
+
+/** Reference to the candidate row in an upsert update. */
+export interface ExcludedRefNode {
+  readonly _tag: "ExcludedRef"
+  readonly column: string
+}
+
 /** Discriminated union of every runtime expression node. */
 export type ExprNode =
   | ColumnRefNode
@@ -113,6 +158,12 @@ export type ExprNode =
   | NotNode
   | IsNullNode
   | RawExprNode
+  | ScalarSubqueryNode
+  | ExistsNode
+  | InSubqueryNode
+  | FunctionCallNode
+  | WindowFunctionNode
+  | ExcludedRefNode
 
 // --- clauses ----------------------------------------------------------------
 
@@ -121,6 +172,23 @@ export interface TableSource {
   readonly name: string
   readonly alias?: string
 }
+
+/** Derived table backed by a complete select query. */
+export interface SubquerySource {
+  readonly _tag: "SubquerySource"
+  readonly query: SelectIR
+  readonly alias: string
+}
+
+/** Reference to a named common-table expression. */
+export interface CteSource {
+  readonly _tag: "CteSource"
+  readonly name: string
+  readonly alias?: string
+}
+
+/** Any relation allowed in a `FROM` or `JOIN` clause. */
+export type QuerySource = TableSource | SubquerySource | CteSource
 
 /** Selected expression, output alias, and decoder. */
 export interface SelectionField {
@@ -142,6 +210,44 @@ export interface AssignmentTerm {
   readonly value: ExprNode
 }
 
+/** Join kind supported by select IR. */
+export type JoinType = "inner" | "left" | "right" | "full" | "cross"
+
+/** One joined relation and its optional join predicate. */
+export interface JoinTerm {
+  readonly type: JoinType
+  readonly source: QuerySource
+  readonly on?: ExprNode
+  readonly lateral: boolean
+}
+
+/** Named query evaluated before a select. */
+export interface CommonTableExpression {
+  readonly name: string
+  readonly query: SelectIR
+  readonly recursive: boolean
+}
+
+/** SQL set operation applied to another select. */
+export interface SetOperation {
+  readonly type: "union" | "intersect" | "except"
+  readonly query: SelectIR
+  readonly all: boolean
+}
+
+/** Insert conflict behavior rendered according to the target dialect. */
+export type InsertConflict =
+  | {
+      readonly kind: "onConflict"
+      readonly target: ReadonlyArray<string>
+      readonly action: "nothing" | "update"
+      readonly set: ReadonlyArray<AssignmentTerm>
+    }
+  | {
+      readonly kind: "onDuplicateKey"
+      readonly set: ReadonlyArray<AssignmentTerm>
+    }
+
 // --- statements -------------------------------------------------------------
 
 interface BaseIR {
@@ -154,9 +260,15 @@ interface BaseIR {
 /** Runtime representation of a select statement. */
 export interface SelectIR extends BaseIR {
   readonly _tag: "Select"
-  readonly from: TableSource
+  readonly from: QuerySource
   readonly selection: ReadonlyArray<SelectionField>
+  readonly ctes?: ReadonlyArray<CommonTableExpression>
+  readonly joins?: ReadonlyArray<JoinTerm>
+  readonly distinct?: boolean
   readonly where?: ExprNode
+  readonly groupBy?: ReadonlyArray<ExprNode>
+  readonly having?: ExprNode
+  readonly setOperations?: ReadonlyArray<SetOperation>
   readonly orderBy: ReadonlyArray<OrderByTerm>
   readonly limit?: number
   readonly offset?: number
@@ -168,6 +280,7 @@ export interface InsertIR extends BaseIR {
   readonly into: TableSource
   readonly columns: ReadonlyArray<string>
   readonly rows: ReadonlyArray<ReadonlyArray<ExprNode>>
+  readonly conflict?: InsertConflict
   readonly returning?: ReadonlyArray<SelectionField>
 }
 
@@ -236,8 +349,25 @@ export const collectParams = (expr: ExprNode | undefined, out: ParamNode[] = [])
     case "RawExpr":
       out.push(...expr.params)
       break
+    case "ScalarSubquery":
+    case "Exists":
+      collectQueryParams(expr.query, out)
+      break
+    case "InSubquery":
+      collectParams(expr.expr, out)
+      collectQueryParams(expr.query, out)
+      break
+    case "FunctionCall":
+      for (const arg of expr.args) collectParams(arg, out)
+      break
+    case "WindowFunction":
+      for (const arg of expr.function.args) collectParams(arg, out)
+      for (const partition of expr.partitionBy) collectParams(partition, out)
+      for (const term of expr.orderBy) collectParams(term.expr, out)
+      break
     case "ColumnRef":
     case "Literal":
+    case "ExcludedRef":
       break
   }
   return out
@@ -247,22 +377,34 @@ export const collectParams = (expr: ExprNode | undefined, out: ParamNode[] = [])
  * Collects parameters from every clause of a complete query.
  *
  * @param ir - Query representation to traverse.
+ * @param out - Mutable accumulator used by nested-query traversal.
  * @returns Parameters in compiler traversal order.
  */
-export const collectQueryParams = (ir: QueryIR): ReadonlyArray<ParamNode> => {
-  const out: ParamNode[] = []
+export const collectQueryParams = (ir: QueryIR, out: ParamNode[] = []): ReadonlyArray<ParamNode> => {
   const selection = (fields: ReadonlyArray<SelectionField> | undefined): void => {
     for (const field of fields ?? []) collectParams(field.expr, out)
   }
 
   switch (ir._tag) {
     case "Select":
+      for (const cte of ir.ctes ?? []) collectQueryParams(cte.query, out)
       selection(ir.selection)
+      if ("_tag" in ir.from && ir.from._tag === "SubquerySource") collectQueryParams(ir.from.query, out)
+      for (const join of ir.joins ?? []) {
+        if ("_tag" in join.source && join.source._tag === "SubquerySource") collectQueryParams(join.source.query, out)
+        collectParams(join.on, out)
+      }
       collectParams(ir.where, out)
+      for (const expr of ir.groupBy ?? []) collectParams(expr, out)
+      collectParams(ir.having, out)
+      for (const operation of ir.setOperations ?? []) collectQueryParams(operation.query, out)
       for (const term of ir.orderBy) collectParams(term.expr, out)
       break
     case "Insert":
       for (const row of ir.rows) for (const value of row) collectParams(value, out)
+      if (ir.conflict && (ir.conflict.kind === "onDuplicateKey" || ir.conflict.action === "update")) {
+        for (const assignment of ir.conflict.set) collectParams(assignment.value, out)
+      }
       selection(ir.returning)
       break
     case "Update":
@@ -276,4 +418,93 @@ export const collectQueryParams = (ir: QueryIR): ReadonlyArray<ParamNode> => {
       break
   }
   return out
+}
+
+/**
+ * Recursively collects capability bits from a query and every nested query.
+ *
+ * @param ir - Query representation to inspect.
+ * @returns Union of direct and nested capability requirements.
+ */
+export const queryCapabilityBits = (ir: QueryIR): CapabilityBits => {
+  let bits = ir.capabilities
+  const expression = (node: ExprNode | undefined): void => {
+    if (!node) return
+    switch (node._tag) {
+      case "Comparison":
+        expression(node.left)
+        expression(node.right)
+        break
+      case "InList":
+        expression(node.expr)
+        for (const value of node.values) expression(value)
+        break
+      case "Logical":
+        for (const operand of node.operands) expression(operand)
+        break
+      case "Not":
+      case "IsNull":
+        expression(node.expr)
+        break
+      case "ScalarSubquery":
+      case "Exists":
+        bits |= queryCapabilityBits(node.query)
+        break
+      case "InSubquery":
+        expression(node.expr)
+        bits |= queryCapabilityBits(node.query)
+        break
+      case "FunctionCall":
+        for (const arg of node.args) expression(arg)
+        break
+      case "WindowFunction":
+        for (const arg of node.function.args) expression(arg)
+        for (const item of node.partitionBy) expression(item)
+        for (const term of node.orderBy) expression(term.expr)
+        break
+      case "ColumnRef":
+      case "Param":
+      case "Literal":
+      case "RawExpr":
+      case "ExcludedRef":
+        break
+    }
+  }
+  const selection = (fields: ReadonlyArray<SelectionField> | undefined): void => {
+    for (const field of fields ?? []) expression(field.expr)
+  }
+
+  switch (ir._tag) {
+    case "Select":
+      for (const cte of ir.ctes ?? []) bits |= queryCapabilityBits(cte.query)
+      selection(ir.selection)
+      if ("_tag" in ir.from && ir.from._tag === "SubquerySource") bits |= queryCapabilityBits(ir.from.query)
+      for (const join of ir.joins ?? []) {
+        if ("_tag" in join.source && join.source._tag === "SubquerySource") bits |= queryCapabilityBits(join.source.query)
+        expression(join.on)
+      }
+      expression(ir.where)
+      for (const item of ir.groupBy ?? []) expression(item)
+      expression(ir.having)
+      for (const operation of ir.setOperations ?? []) bits |= queryCapabilityBits(operation.query)
+      for (const term of ir.orderBy) expression(term.expr)
+      break
+    case "Insert":
+      for (const row of ir.rows) for (const value of row) expression(value)
+      if (ir.conflict && (ir.conflict.kind === "onDuplicateKey" || ir.conflict.action === "update")) {
+        for (const assignment of ir.conflict.set) expression(assignment.value)
+      }
+      selection(ir.returning)
+      break
+    case "Update":
+      for (const assignment of ir.set) expression(assignment.value)
+      expression(ir.where)
+      selection(ir.returning)
+      break
+    case "Delete":
+      expression(ir.where)
+      selection(ir.returning)
+      break
+  }
+  return bits
 }

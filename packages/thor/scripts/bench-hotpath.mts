@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { Effect, Layer, ManagedRuntime, Schema } from "effect"
-import { Database, db, eq, param, pg, withMode } from "@gilvandovieira/thor"
+import { Database, count, db, eq, param, pg, withMode } from "@gilvandovieira/thor"
 import { PostgresDialect } from "@gilvandovieira/thor/postgres"
 
 const users = pg.table("bench_users", {
@@ -25,6 +25,10 @@ const users = pg.table("bench_users", {
   email: pg.text("email").notNull(),
   name: pg.text("name").nullable(),
   age: pg.integer("age").nullable()
+})
+const posts = pg.table("bench_posts", {
+  id: pg.uuid("id").primaryKey().defaultRandom(),
+  userId: pg.uuid("user_id").notNull()
 })
 const emailParam = param("email", Schema.String)
 
@@ -53,11 +57,18 @@ const pointRt = ManagedRuntime.make(layerFor(pointRows))
 const bulkLayer = layerFor(bulkRows)
 const bulkRt = ManagedRuntime.make(bulkLayer)
 const bulkUnsafeRt = ManagedRuntime.make(withMode(bulkLayer, "unsafe"))
+const advancedRt = ManagedRuntime.make(layerFor([{ email: "a@b.c", total: 1 }]))
 
 const pointQuery = () => db.select({ id: users.id, name: users.name }).from(users).where(eq(users.email, emailParam))
 const warmPoint = pointQuery()
 const preparedPoint = warmPoint.prepare("point")
 const bulkQuery = db.select({ id: users.id, email: users.email, name: users.name, age: users.age }).from(users)
+const advancedQuery = db
+  .select({ email: users.email, total: count() })
+  .from(users)
+  .leftJoin(posts, eq(users.id, posts.userId))
+  .groupBy(users.email)
+  .prepare("advanced-aggregate")
 
 interface Sample {
   readonly label: string
@@ -74,6 +85,7 @@ const samples: Sample[] = [
   time("point.cold", 100_000, () => void pointRt.runSync(pointQuery().one({ email: "a@b.c" }))),
   time("point.warm", 100_000, () => void pointRt.runSync(warmPoint.one({ email: "a@b.c" }))),
   time("point.prepared", 100_000, () => void pointRt.runSync(preparedPoint.one({ email: "a@b.c" }))),
+  time("advanced.prepared", 100_000, () => void advancedRt.runSync(advancedQuery.all())),
   time("bulk.safe", 20_000, () => void bulkRt.runSync(bulkQuery.all())),
   time("bulk.unsafe", 20_000, () => void bulkUnsafeRt.runSync(bulkQuery.all()))
 ]
@@ -93,6 +105,7 @@ console.log(`\nJSON:${JSON.stringify(by)}`)
 await pointRt.dispose()
 await bulkRt.dispose()
 await bulkUnsafeRt.dispose()
+await advancedRt.dispose()
 
 // --- staged CI gate (spec §15.16) -------------------------------------------
 if (process.env.BENCH_GATE || process.env.BENCH_UPDATE_BASELINE) {

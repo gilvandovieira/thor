@@ -7,7 +7,7 @@
  *
  * @module ir/structural-hash
  */
-import type { ExprNode, QueryIR, SelectionField } from "./query-ir.js"
+import type { ExprNode, QueryIR, QuerySource, SelectionField } from "./query-ir.js"
 import { hashString } from "../internal/hash.js"
 import { normalizeQuery } from "./normalize.js"
 
@@ -39,6 +39,24 @@ const expressionShape = (node: ExprNode): unknown => {
       return [node._tag, expressionShape(node.expr), node.negated]
     case "RawExpr":
       return [node._tag, node.sql, node.params.map(expressionShape)]
+    case "ScalarSubquery":
+      return [node._tag, queryShape(node.query)]
+    case "Exists":
+      return [node._tag, queryShape(node.query), node.negated]
+    case "InSubquery":
+      return [node._tag, expressionShape(node.expr), queryShape(node.query), node.negated]
+    case "FunctionCall":
+      return [node._tag, node.name, node.args.map(expressionShape), node.aggregate, node.star]
+    case "WindowFunction":
+      return [
+        node._tag,
+        expressionShape(node.function),
+        node.partitionBy.map(expressionShape),
+        node.orderBy.map((term) => [expressionShape(term.expr), term.direction]),
+        node.frame ?? null
+      ]
+    case "ExcludedRef":
+      return [node._tag, node.column]
   }
 }
 
@@ -48,6 +66,20 @@ const expressionShape = (node: ExprNode): unknown => {
  */
 const selectionShape = (fields: ReadonlyArray<SelectionField> | undefined): unknown =>
   fields?.map((field) => [field.alias, expressionShape(field.expr)])
+
+/**
+ * @param source - Relation source to serialize.
+ * @returns Structural relation material.
+ */
+const sourceShape = (source: QuerySource): unknown => {
+  if ("_tag" in source && source._tag === "SubquerySource") {
+    return [source._tag, queryShape(source.query), source.alias]
+  }
+  if ("_tag" in source && source._tag === "CteSource") {
+    return [source._tag, source.name, source.alias ?? null]
+  }
+  return ["TableSource", source.name, source.alias ?? null]
+}
 
 /**
  * Produces normalized, dialect-independent query-shape material.
@@ -61,9 +93,24 @@ const queryShape = (ir: QueryIR): unknown => {
     case "Select":
       return [
         ...common,
-        [ir.from.name, ir.from.alias],
+        sourceShape(ir.from),
         selectionShape(ir.selection),
+        (ir.ctes ?? []).map((cte) => [cte.name, queryShape(cte.query), cte.recursive]),
+        (ir.joins ?? []).map((join) => [
+          join.type,
+          sourceShape(join.source),
+          join.on ? expressionShape(join.on) : null,
+          join.lateral
+        ]),
+        ir.distinct ?? false,
         ir.where ? expressionShape(ir.where) : null,
+        (ir.groupBy ?? []).map(expressionShape),
+        ir.having ? expressionShape(ir.having) : null,
+        (ir.setOperations ?? []).map((operation) => [
+          operation.type,
+          queryShape(operation.query),
+          operation.all
+        ]),
         ir.orderBy.map((term) => [expressionShape(term.expr), term.direction]),
         ir.limit ?? null,
         ir.offset ?? null
@@ -74,6 +121,14 @@ const queryShape = (ir: QueryIR): unknown => {
         [ir.into.name, ir.into.alias],
         ir.columns,
         ir.rows.map((row) => row.map(expressionShape)),
+        ir.conflict
+          ? [
+              ir.conflict.kind,
+              ir.conflict.kind === "onConflict" ? ir.conflict.target : null,
+              ir.conflict.kind === "onConflict" ? ir.conflict.action : null,
+              ir.conflict.set.map((assignment) => [assignment.column, expressionShape(assignment.value)])
+            ]
+          : null,
         selectionShape(ir.returning)
       ]
     case "Update":

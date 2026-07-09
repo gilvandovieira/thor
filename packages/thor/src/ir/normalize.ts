@@ -8,7 +8,7 @@
  *
  * @module ir/normalize
  */
-import type { ExprNode, QueryIR, SelectionField } from "./query-ir.js"
+import type { ExprNode, QueryIR, QuerySource, SelectIR, SelectionField } from "./query-ir.js"
 
 const normalizedQueries = new WeakSet<QueryIR>()
 const normalizationCache = new WeakMap<QueryIR, QueryIR>()
@@ -25,6 +25,7 @@ const normalizeExpression = (node: ExprNode): ExprNode => {
     case "Param":
     case "Literal":
     case "RawExpr":
+    case "ExcludedRef":
       return node
     case "Comparison":
       return Object.freeze({
@@ -54,8 +55,37 @@ const normalizeExpression = (node: ExprNode): ExprNode => {
       return Object.freeze({ ...node, expr: normalizeExpression(node.expr) })
     case "IsNull":
       return Object.freeze({ ...node, expr: normalizeExpression(node.expr) })
+    case "ScalarSubquery":
+    case "Exists":
+      return Object.freeze({ ...node, query: normalizeQuery(node.query) as SelectIR })
+    case "InSubquery":
+      return Object.freeze({
+        ...node,
+        expr: normalizeExpression(node.expr),
+        query: normalizeQuery(node.query) as SelectIR
+      })
+    case "FunctionCall":
+      return Object.freeze({ ...node, args: Object.freeze(node.args.map(normalizeExpression)) })
+    case "WindowFunction":
+      return Object.freeze({
+        ...node,
+        function: normalizeExpression(node.function) as typeof node.function,
+        partitionBy: Object.freeze(node.partitionBy.map(normalizeExpression)),
+        orderBy: Object.freeze(
+          node.orderBy.map((term) => Object.freeze({ ...term, expr: normalizeExpression(term.expr) }))
+        )
+      })
   }
 }
+
+/**
+ * @param source - Relation source to normalize.
+ * @returns Frozen source with normalized nested query when present.
+ */
+const normalizeSource = (source: QuerySource): QuerySource =>
+  "_tag" in source && source._tag === "SubquerySource"
+    ? Object.freeze({ ...source, query: normalizeQuery(source.query) as SelectIR })
+    : Object.freeze({ ...source })
 
 /**
  * @param fields - Selected fields to normalize.
@@ -84,8 +114,30 @@ export const normalizeQuery = (ir: QueryIR): QueryIR => {
     case "Select":
       normalized = Object.freeze({
         ...ir,
+        from: normalizeSource(ir.from),
         selection: normalizeSelection(ir.selection),
+        ...(ir.ctes ? {
+          ctes: Object.freeze(ir.ctes.map((cte) => Object.freeze({
+            ...cte,
+            query: normalizeQuery(cte.query) as SelectIR
+          })))
+        } : {}),
+        ...(ir.joins ? {
+          joins: Object.freeze(ir.joins.map((join) => Object.freeze({
+            ...join,
+            source: normalizeSource(join.source),
+            ...(join.on ? { on: normalizeExpression(join.on) } : {})
+          })))
+        } : {}),
         ...(ir.where ? { where: normalizeExpression(ir.where) } : {}),
+        ...(ir.groupBy ? { groupBy: Object.freeze(ir.groupBy.map(normalizeExpression)) } : {}),
+        ...(ir.having ? { having: normalizeExpression(ir.having) } : {}),
+        ...(ir.setOperations ? {
+          setOperations: Object.freeze(ir.setOperations.map((operation) => Object.freeze({
+            ...operation,
+            query: normalizeQuery(operation.query) as SelectIR
+          })))
+        } : {}),
         orderBy: Object.freeze(
           ir.orderBy.map((term) => Object.freeze({ ...term, expr: normalizeExpression(term.expr) }))
         )
@@ -98,6 +150,16 @@ export const normalizeQuery = (ir: QueryIR): QueryIR => {
         rows: Object.freeze(
           ir.rows.map((row) => Object.freeze(row.map(normalizeExpression)))
         ),
+        ...(ir.conflict ? {
+          conflict: Object.freeze({
+            ...ir.conflict,
+            ...(ir.conflict.kind === "onConflict" ? { target: Object.freeze([...ir.conflict.target]) } : {}),
+            set: Object.freeze(ir.conflict.set.map((assignment) => Object.freeze({
+              ...assignment,
+              value: normalizeExpression(assignment.value)
+            })))
+          })
+        } : {}),
         ...(ir.returning ? { returning: normalizeSelection(ir.returning) } : {})
       })
       break

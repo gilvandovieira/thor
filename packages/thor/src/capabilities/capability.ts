@@ -20,6 +20,9 @@ export const ALL_CAPABILITIES = [
   "select.recursiveCte",
   "select.windowFunctions",
   "select.lateralJoin",
+  "select.rightJoin",
+  "select.fullJoin",
+  "select.setOperations",
   "select.forUpdate",
 
   "transaction.savepoints",

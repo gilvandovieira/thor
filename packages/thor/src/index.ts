@@ -43,7 +43,7 @@ export {
   makeMySQLDriver,
   type MySQLClient
 } from "./mysql/index.js"
-export { db, PreparedQuery } from "./sql/query-builder.js"
+export { db, PreparedQuery, QueryReference } from "./sql/query-builder.js"
 export type { Dialect, DialectStatement, MigrationDialect } from "./dialect.js"
 
 // Expressions & predicates
@@ -65,10 +65,31 @@ export {
   isNotNull
 } from "./sql/predicates.js"
 export { param, asc, desc, type Expr, type Param } from "./sql/expressions.js"
+export {
+  avg,
+  count,
+  denseRank,
+  excluded,
+  exists,
+  inSubquery,
+  max,
+  min,
+  notExists,
+  notInSubquery,
+  rank,
+  rowNumber,
+  scalar,
+  sum,
+  type ExpressionInput,
+  type SelectExpressionSource,
+  type WindowSpec,
+  type WindowableExpr
+} from "./sql/advanced-expressions.js"
 export { rawExpr as sql } from "./sql/raw.js"
 
 // Schema types
 export {
+  alias,
   type Table,
   type AnyTable,
   type Select,
@@ -98,7 +119,7 @@ export * from "./errors/index.js"
 // IR
 export { queryStructuralHash } from "./ir/structural-hash.js"
 export { normalizeQuery } from "./ir/normalize.js"
-export { collectQueryParams } from "./ir/query-ir.js"
+export { collectQueryParams, queryCapabilityBits } from "./ir/query-ir.js"
 export type {
   QueryIR,
   SelectIR,
@@ -108,6 +129,14 @@ export type {
   ExprNode,
   ParamNode,
   SelectionField,
+  QuerySource,
+  SubquerySource,
+  CteSource,
+  JoinTerm,
+  JoinType,
+  CommonTableExpression,
+  SetOperation,
+  InsertConflict,
   QueryAnnotations,
   Cardinality
 } from "./ir/index.js"

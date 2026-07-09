@@ -5,7 +5,7 @@
  * @module execution/run
  */
 import { Effect, Either, Option, ParseResult, Schema } from "effect"
-import { collectQueryParams, type ParamNode, type QueryIR, type SelectionField } from "../ir/query-ir.js"
+import { collectQueryParams, queryCapabilityBits, type ParamNode, type QueryIR, type SelectionField } from "../ir/query-ir.js"
 import {
   collectCapabilityViolations,
   collectStructuralViolations,
@@ -375,7 +375,7 @@ export class PreparedExecutionPlan {
     this.fields = Object.freeze([...fields])
     this.decoder = rowDecoderFor(this.fields)
     this.structuralHash = queryStructuralHash(this.ir)
-    this.capabilityBits = this.ir.capabilities
+    this.capabilityBits = queryCapabilityBits(this.ir)
     this.params = Object.freeze(params.map((parameter) => parameter.name))
     this.structuralFailure = collectStructuralViolations(this.ir)[0] ?? null
   }

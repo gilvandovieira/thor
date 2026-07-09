@@ -9,7 +9,7 @@ import { compileQuery } from "../sql/compiler.js"
 import { SQLiteMigrations } from "./migrations.js"
 import { dialectProfileHash } from "../capabilities/profile.js"
 
-const version = "1"
+const version = "2"
 
 /** Complete SQLite dialect consumed by builders, execution, and migrations. */
 export const SQLiteDialect: Dialect = {

@@ -5,9 +5,11 @@
  */
 import type { AnyColumn } from "../schema/column.js"
 import type { ComparisonOp, ExprNode } from "../ir/query-ir.js"
-import { type ColumnValue, type Expr, type Param, toExprNode, toValueNode } from "./expressions.js"
+import { type ColumnValue, type Expr, type Param, isColumn, toExprNode, toValueNode } from "./expressions.js"
 
-type Value<T extends AnyColumn> = ColumnValue<T> | Param<ColumnValue<T>> | Expr<ColumnValue<T>> | AnyColumn
+type Comparable = AnyColumn | Expr<unknown>
+type ComparableValue<T> = T extends AnyColumn ? ColumnValue<T> : T extends Expr<infer A> ? A : unknown
+type Value<T extends Comparable> = ComparableValue<T> | Param<ComparableValue<T>> | Expr<ComparableValue<T>> | AnyColumn
 
 /**
  * @param op - Comparison operator.
@@ -30,8 +32,8 @@ const comparison = (op: ComparisonOp, left: ExprNode, right: ExprNode): ExprNode
  */
 const compare =
   (op: ComparisonOp) =>
-  <T extends AnyColumn>(left: T, right: Value<T>): ExprNode =>
-    comparison(op, toExprNode(left), toValueNode(right, left))
+  <T extends Comparable>(left: T, right: Value<T>): ExprNode =>
+    comparison(op, toExprNode(left), toValueNode(right, isColumn(left) ? left : undefined))
 
 /**
  * @param left - Column on the left.
@@ -89,10 +91,10 @@ export const ilike = compare("ilike")
  * @param values - Typed values, parameters, expressions, or columns.
  * @returns An `InList` expression node.
  */
-export const inArray = <T extends AnyColumn>(left: T, values: ReadonlyArray<Value<T>>): ExprNode => ({
+export const inArray = <T extends Comparable>(left: T, values: ReadonlyArray<Value<T>>): ExprNode => ({
   _tag: "InList",
   expr: toExprNode(left),
-  values: values.map((v) => toValueNode(v, left)),
+  values: values.map((v) => toValueNode(v, isColumn(left) ? left : undefined)),
   negated: false
 })
 
@@ -103,10 +105,10 @@ export const inArray = <T extends AnyColumn>(left: T, values: ReadonlyArray<Valu
  * @param values - Typed values, parameters, expressions, or columns.
  * @returns A negated `InList` expression node.
  */
-export const notInArray = <T extends AnyColumn>(left: T, values: ReadonlyArray<Value<T>>): ExprNode => ({
+export const notInArray = <T extends Comparable>(left: T, values: ReadonlyArray<Value<T>>): ExprNode => ({
   _tag: "InList",
   expr: toExprNode(left),
-  values: values.map((v) => toValueNode(v, left)),
+  values: values.map((v) => toValueNode(v, isColumn(left) ? left : undefined)),
   negated: true
 })
 
@@ -114,13 +116,13 @@ export const notInArray = <T extends AnyColumn>(left: T, values: ReadonlyArray<V
  * @param column - Column to test.
  * @returns An `IS NULL` expression.
  */
-export const isNull = (column: AnyColumn): ExprNode => ({ _tag: "IsNull", expr: toExprNode(column), negated: false })
+export const isNull = (column: Comparable): ExprNode => ({ _tag: "IsNull", expr: toExprNode(column), negated: false })
 
 /**
  * @param column - Column to test.
  * @returns An `IS NOT NULL` expression.
  */
-export const isNotNull = (column: AnyColumn): ExprNode => ({ _tag: "IsNull", expr: toExprNode(column), negated: true })
+export const isNotNull = (column: Comparable): ExprNode => ({ _tag: "IsNull", expr: toExprNode(column), negated: true })
 
 /**
  * @param operands - Predicates to conjoin.

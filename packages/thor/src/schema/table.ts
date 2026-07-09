@@ -24,6 +24,8 @@ export interface TableIndex {
 /** Runtime metadata stored on every table through `TableMeta`. */
 export interface TableMetadata {
   readonly name: string
+  /** Visible SQL alias used by query scope and column references. */
+  readonly alias?: string
   readonly columns: Readonly<Record<string, AnyColumn>>
   readonly primaryKey: ReadonlyArray<string>
   readonly indexes: ReadonlyArray<TableIndex>
@@ -44,6 +46,7 @@ export type Columns = Record<string, AnyColumn>
 export type Table<Name extends string, Cols extends Columns> = Cols & {
   readonly [TableMeta]: {
     readonly name: Name
+    readonly alias?: string
     readonly columns: Cols
     readonly primaryKey: ReadonlyArray<string>
     readonly indexes: ReadonlyArray<TableIndex>
@@ -164,6 +167,36 @@ export const defineTable = <Name extends string, Cols extends Columns>(
  * @returns Hidden runtime table metadata.
  */
 export const tableMeta = (table: AnyTable): TableMetadata => table[TableMeta]
+
+/**
+ * Creates an immutable table reference with a query-local SQL alias.
+ *
+ * @typeParam T - Source table type.
+ * @param table - Table to alias.
+ * @param name - Alias visible to column references and scope guards.
+ * @returns A table-shaped reference retaining the source column types.
+ */
+export const alias = <T extends AnyTable>(table: T, name: string): T => {
+  const source = tableMeta(table)
+  const aliasName = internIdentifier(name)
+  const columns: Record<string, AnyColumn> = {}
+  for (const [key, column] of Object.entries(source.columns)) {
+    columns[key] = new (column.constructor as typeof Column)({
+      ...column.def,
+      table: aliasName
+    })
+  }
+  const meta: TableMetadata = {
+    name: source.name,
+    alias: aliasName,
+    columns,
+    primaryKey: source.primaryKey,
+    indexes: source.indexes
+  }
+  const value = { ...columns } as Record<PropertyKey, unknown>
+  Object.defineProperty(value, TableMeta, { value: meta, enumerable: false })
+  return value as T
+}
 
 /**
  * @param value - Unknown runtime value.
