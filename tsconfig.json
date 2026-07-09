@@ -1,0 +1,7 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/thor" },
+    { "path": "./packages/cli" }
+  ]
+}

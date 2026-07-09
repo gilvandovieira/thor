@@ -1,0 +1,23 @@
+{
+  "name": "@gilvandovieira/cli",
+  "version": "0.0.0",
+  "description": "Thor migration CLI.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "thor": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@gilvandovieira/thor": "workspace:*",
+    "effect": "^3.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "tsx": "^4.22.5"
+  }
+}

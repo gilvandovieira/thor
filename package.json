@@ -1,0 +1,43 @@
+{
+  "name": "thor-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Effect-native ORM/database toolkit",
+  "type": "module",
+  "packageManager": "pnpm@11.3.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r run build",
+    "docs:check": "node scripts/check-docs.mjs",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "vitest run",
+    "test:property": "pnpm --filter @gilvandovieira/thor run build && vitest run packages/thor/test/property-ir.test.ts",
+    "test:watch": "vitest",
+    "test:contract:sqlite:node": "pnpm --filter @gilvandovieira/thor run build && vitest run packages/thor/test/sqlite.contract.test.ts",
+    "test:contract:sqlite:bun": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec bun test test-bun/sqlite.contract.test.ts",
+    "test:contract:sqlite": "pnpm test:contract:sqlite:node && pnpm test:contract:sqlite:bun",
+    "bench": "pnpm --filter @gilvandovieira/thor run bench",
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down -v",
+    "test:e2e": "pnpm --filter @gilvandovieira/thor run build && vitest run --no-file-parallelism e2e",
+    "bench:drivers": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-drivers.mts",
+    "bench:overhead": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-overhead.mts",
+    "bench:sqlite": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-sqlite.mts",
+    "bench:overhead:bun": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec bun scripts/bench-overhead.mts",
+    "bench:sqlite:bun": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec bun scripts/bench-sqlite.mts",
+    "bench:hotpath": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-hotpath.mts",
+    "bench:hotpath:bun": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec bun scripts/bench-hotpath.mts",
+    "bench:gate": "pnpm --filter @gilvandovieira/thor run build && BENCH_GATE=1 pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-hotpath.mts",
+    "bench:baseline": "pnpm --filter @gilvandovieira/thor run build && BENCH_UPDATE_BASELINE=1 pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-hotpath.mts",
+    "e2e": "pnpm db:up && DATABASE_URL=postgres://thor:thor@localhost:5433/thor MYSQL_URL=mysql://thor:thor@localhost:3307/thor pnpm test:e2e; ec=$?; pnpm db:down; exit $ec",
+    "bench:e2e": "pnpm db:up && DATABASE_URL=postgres://thor:thor@localhost:5433/thor pnpm bench:drivers; ec=$?; pnpm db:down; exit $ec"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "fast-check": "4.8.0",
+    "typescript": "6.0.3",
+    "vitest": "^4.1.9"
+  }
+}

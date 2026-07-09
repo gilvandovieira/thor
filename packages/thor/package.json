@@ -1,0 +1,69 @@
+{
+  "name": "@gilvandovieira/thor",
+  "version": "0.0.0",
+  "description": "Effect-native ORM/database toolkit: fluent schema/query authoring, typed + runtime IR, capability matrix, guards, safe migrations, safe routines.",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./schema": {
+      "types": "./dist/schema/index.d.ts",
+      "default": "./dist/schema/index.js"
+    },
+    "./sql": {
+      "types": "./dist/sql/index.d.ts",
+      "default": "./dist/sql/index.js"
+    },
+    "./postgres": {
+      "types": "./dist/postgres/index.d.ts",
+      "default": "./dist/postgres/index.js"
+    },
+    "./sqlite": {
+      "types": "./dist/sqlite/index.d.ts",
+      "default": "./dist/sqlite/index.js"
+    },
+    "./mysql": {
+      "types": "./dist/mysql/index.d.ts",
+      "default": "./dist/mysql/index.js"
+    },
+    "./migrate": {
+      "types": "./dist/migrate/index.d.ts",
+      "default": "./dist/migrate/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
+    },
+    "./routine": {
+      "types": "./dist/routine/index.d.ts",
+      "default": "./dist/routine/index.js"
+    },
+    "./capabilities": {
+      "types": "./dist/capabilities/index.d.ts",
+      "default": "./dist/capabilities/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --noEmit",
+    "bench": "tsx src/bench/index.ts"
+  },
+  "peerDependencies": {
+    "effect": "^3.21.0"
+  },
+  "dependencies": {
+    "effect": "^3.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "@types/pg": "8.20.0",
+    "mysql2": "^3.22.5",
+    "pg": "8.22.0",
+    "postgres": "3.4.9",
+    "tsx": "^4.22.5"
+  }
+}
