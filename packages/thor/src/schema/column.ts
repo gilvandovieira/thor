@@ -36,6 +36,25 @@ export type DefaultValue =
   | { readonly kind: "random" }
   | { readonly kind: "now" }
 
+/** Referential action applied by a foreign key on delete/update. */
+export type ForeignKeyAction = "cascade" | "restrict" | "set null" | "no action"
+
+/**
+ * A column-level foreign-key reference (spec §13.2). The target column is a
+ * deferred thunk so self-references and forward references between tables resolve
+ * lazily (only when the owning table's metadata is read).
+ */
+export interface ColumnReference {
+  /**
+   * Deferred referenced column, e.g. `() => posts.id`.
+   *
+   * @returns The referenced (bound) column.
+   */
+  readonly column: () => AnyColumn
+  readonly onDelete?: ForeignKeyAction
+  readonly onUpdate?: ForeignKeyAction
+}
+
 /** Runtime column descriptor. Non-generic; carries everything the IR/compiler need. */
 export interface ColumnDef {
   readonly name: string
@@ -49,6 +68,8 @@ export interface ColumnDef {
   readonly primaryKey: boolean
   readonly unique: boolean
   readonly generated: boolean
+  /** Deferred foreign-key reference declared with `.references()`. */
+  readonly references?: ColumnReference
 }
 
 /** Phantom, type-level view of a column used for row-shape inference. */
@@ -123,6 +144,32 @@ export class Column<C = ColumnConfig> {
    */
   unique(): Column<C> {
     return new Column<C>({ ...this.def, unique: true })
+  }
+
+  /**
+   * Declares a foreign key from this column to another table's column (spec §13.2).
+   * The target is a deferred thunk so self- and forward-references resolve lazily.
+   *
+   * ```ts
+   * authorId: pg.uuid("author_id").notNull().references(() => authors.id, { onDelete: "cascade" })
+   * ```
+   *
+   * @param column - Deferred referenced column, e.g. `() => authors.id`.
+   * @param options - Optional `onDelete`/`onUpdate` referential actions.
+   * @returns A new column carrying the foreign-key reference.
+   */
+  references(
+    column: () => AnyColumn,
+    options: { readonly onDelete?: ForeignKeyAction; readonly onUpdate?: ForeignKeyAction } = {}
+  ): Column<C> {
+    return new Column<C>({
+      ...this.def,
+      references: {
+        column,
+        ...(options.onDelete ? { onDelete: options.onDelete } : {}),
+        ...(options.onUpdate ? { onUpdate: options.onUpdate } : {})
+      }
+    })
   }
 
   /**

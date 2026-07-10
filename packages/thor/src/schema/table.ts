@@ -197,6 +197,35 @@ export const defineTable = <Name extends string, Cols extends Columns>(
     if (column.def.primaryKey) primaryKey.push(column.def.name)
   }
 
+  const tableForeignKeys: ReadonlyArray<TableForeignKey> = (options.foreignKeys ?? []).map((foreignKey) => ({
+    ...(foreignKey.name ? { name: internIdentifier(foreignKey.name) } : {}),
+    columns: foreignKey.columns.map((key) => columns[key]!.def.name),
+    references: foreignKey.references,
+    ...(foreignKey.onDelete ? { onDelete: foreignKey.onDelete } : {}),
+    ...(foreignKey.onUpdate ? { onUpdate: foreignKey.onUpdate } : {})
+  }))
+
+  // Column-level `.references()` thunks resolve lazily (memoized) so self- and
+  // forward-references between tables are valid regardless of definition order.
+  let resolvedForeignKeys: ReadonlyArray<TableForeignKey> | undefined
+  const collectForeignKeys = (): ReadonlyArray<TableForeignKey> => {
+    if (resolvedForeignKeys) return resolvedForeignKeys
+    const columnForeignKeys: TableForeignKey[] = []
+    for (const [key, column] of Object.entries(columns)) {
+      const reference = column.def.references
+      if (!reference) continue
+      const target = reference.column()
+      columnForeignKeys.push({
+        columns: [columns[key]!.def.name],
+        references: { table: target.def.table, columns: [target.def.name] },
+        ...(reference.onDelete ? { onDelete: reference.onDelete } : {}),
+        ...(reference.onUpdate ? { onUpdate: reference.onUpdate } : {})
+      })
+    }
+    resolvedForeignKeys = [...tableForeignKeys, ...columnForeignKeys]
+    return resolvedForeignKeys
+  }
+
   const meta: TableMetadata = {
     name: tableName,
     columns: boundColumns,
@@ -211,13 +240,9 @@ export const defineTable = <Name extends string, Cols extends Columns>(
       columns: constraint.columns.map((key) => columns[key]!.def.name)
     })),
     checks: options.checks ?? [],
-    foreignKeys: (options.foreignKeys ?? []).map((foreignKey) => ({
-      ...(foreignKey.name ? { name: internIdentifier(foreignKey.name) } : {}),
-      columns: foreignKey.columns.map((key) => columns[key]!.def.name),
-      references: foreignKey.references,
-      ...(foreignKey.onDelete ? { onDelete: foreignKey.onDelete } : {}),
-      ...(foreignKey.onUpdate ? { onUpdate: foreignKey.onUpdate } : {})
-    }))
+    get foreignKeys() {
+      return collectForeignKeys()
+    }
   }
 
   const table = { ...boundColumns } as Record<PropertyKey, unknown>
