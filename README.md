@@ -251,6 +251,10 @@ const program = Effect.gen(function* () {
 })
 ```
 
+For reviewable planning (`diff`/`plan`/`dryRun`), environment policies,
+expand/contract staging, and typed backfills, see
+[the migrations guide](docs/migrations.md).
+
 Migration templates and query `sql` expressions reject ordinary dynamic
 interpolation. Bind query values with `param(...)`; if application-controlled
 dynamic SQL text is genuinely required, mark that trust boundary visibly with
@@ -331,6 +335,7 @@ pnpm db:up        # or start postgres@5433 + mysql@3307 yourself
 - [`docs/advanced-queries.md`](docs/advanced-queries.md) — joins, subqueries, aggregation, CTEs, upserts
 - [`docs/compiled-queries.md`](docs/compiled-queries.md) - stable compiled handles, metadata, and hot-path invariants
 - [`docs/query-cache.md`](docs/query-cache.md) — named cache layers, bounded LRU caches, precompilation modes, and safety modes
+- [`docs/migrations.md`](docs/migrations.md) — reviewable planning, policies, expand/contract staging, and typed backfills
 - [`docs/routines.md`](docs/routines.md) — declared functions, table-valued sources, procedures, and capability behavior
 - [`docs/driver-benchmarks.md`](docs/driver-benchmarks.md) — plain-language benchmark guide, prepared vs unprepared drivers, and hot-path cost
 - [`docs/query-builder-benchmarks.md`](docs/query-builder-benchmarks.md) — Thor versus Drizzle and Prisma query construction, method, results, and caveats

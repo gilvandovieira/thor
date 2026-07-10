@@ -154,26 +154,34 @@ describe("migration planning and guards", () => {
     expect(diffSchema([users, posts], ["users", "posts"])).toEqual([])
   })
 
-  it.each(["disabled", "validate-only", "safe-only"] satisfies ReadonlyArray<AutoMigrationPolicy>)(
-    "blocks destructive and unchecked operations under %s",
+  it("blocks destructive and unchecked operations under safe-only", () => {
+    const operations: ReadonlyArray<MigrationOperation> = [
+      { _tag: "DropTable", table: "users", destructive: true, reversible: false, capabilities: [] },
+      { _tag: "RawSql", sql: "vacuum users", unchecked: true, ...safeOperation }
+    ]
+
+    expect(guardOperations(operations, "safe-only")).toEqual([
+      expect.objectContaining({
+        _tag: "GuardError",
+        guard: "destructive-migration",
+        message: expect.stringContaining(`blocked under policy "safe-only"`)
+      }),
+      expect.objectContaining({
+        _tag: "GuardError",
+        guard: "unchecked-raw-sql",
+        message: expect.stringContaining(`blocked under policy "safe-only"`)
+      })
+    ])
+  })
+
+  it.each(["disabled", "validate-only"] satisfies ReadonlyArray<AutoMigrationPolicy>)(
+    "blocks even additive operations under %s",
     (policy) => {
       const operations: ReadonlyArray<MigrationOperation> = [
-        { _tag: "DropTable", table: "users", destructive: true, reversible: false, capabilities: [] },
-        { _tag: "RawSql", sql: "vacuum users", unchecked: true, ...safeOperation }
+        { _tag: "CreateTable", table: "t", columns: [], primaryKey: [], destructive: false, reversible: true, capabilities: [] }
       ]
-
-      expect(guardOperations(operations, policy)).toEqual([
-        expect.objectContaining({
-          _tag: "GuardError",
-          guard: "destructive-migration",
-          message: expect.stringContaining(`blocked under policy "${policy}"`)
-        }),
-        expect.objectContaining({
-          _tag: "GuardError",
-          guard: "unchecked-raw-sql",
-          message: "Raw SQL migration operation is unchecked"
-        })
-      ])
+      const guard = policy === "disabled" ? "migrations-disabled" : "validate-only"
+      expect(guardOperations(operations, policy)).toEqual([expect.objectContaining({ _tag: "GuardError", guard })])
     }
   )
 

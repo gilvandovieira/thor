@@ -115,6 +115,32 @@ export const rawSql = (
 }
 
 /**
+ * Wrap a typed data effect (e.g. `db.update(...).set(...).run()`) as a migration
+ * backfill step (spec §15.1). The effect runs inside the migration transaction
+ * with the `Database` service available; its result is discarded and any tagged
+ * failure is normalized to a `MigrationError`. Pair it with an explicit
+ * `revision` on the migration so the checksum tracks implementation changes.
+ *
+ * ```ts
+ * defineMigration({
+ *   id: "003_backfill_display_name",
+ *   name: "backfill display_name",
+ *   revision: "1",
+ *   up: backfill(db.update(users).set({ displayName: users.name }).run())
+ * })
+ * ```
+ *
+ * @typeParam E - Tagged error of the wrapped effect.
+ * @param effect - Data effect requiring the `Database` service.
+ * @returns A migration step that runs the effect and yields `void`.
+ */
+export const backfill = <E extends { readonly message?: string }>(
+  effect: Effect.Effect<unknown, E, Database>
+): Effect.Effect<void, MigrationError, Database> =>
+  Effect.mapError(Effect.asVoid(effect), (cause) =>
+    new MigrationError({ message: `backfill failed: ${cause.message ?? String(cause)}`, cause }))
+
+/**
  * @param material - Text to hash.
  * @returns Deterministic eight-character FNV-1a hexadecimal hash.
  */

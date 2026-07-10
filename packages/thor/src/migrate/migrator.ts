@@ -39,8 +39,31 @@ export interface MigratorConfig {
   readonly schema?: ReadonlyArray<AnyTable>
   /** Policy gating destructive generated operations (default `"safe-only"`). */
   readonly policy?: AutoMigrationPolicy
+  /**
+   * Whether this run is explicitly reviewed (spec §15.4). Required for
+   * destructive operations under the `allow-reviewed-destructive` policy.
+   */
+  readonly reviewed?: boolean
   /** Journal table name (default `_thor_migrations`). */
   readonly journalTable?: string
+}
+
+/** One pending migration previewed by {@link MigratorService.dryRun}. */
+export interface DryRunStep {
+  /** Migration identifier. */
+  readonly id: string
+  /** Migration name. */
+  readonly name: string
+  /** `"sql"` when the up step is a SQL statement, `"effect"` for a backfill/data step. */
+  readonly kind: "sql" | "effect"
+  /** Compiled SQL for a `"sql"` step; empty for an `"effect"` step (opaque until run). */
+  readonly statements: ReadonlyArray<string>
+}
+
+/** A reviewable preview of the operations `up()` would apply (spec §15.3). */
+export interface DryRunReport {
+  /** Pending migrations, in application order, that `up()` would apply. */
+  readonly pending: ReadonlyArray<DryRunStep>
 }
 
 /** Programmatic migration API (spec §13.7). */
@@ -62,6 +85,22 @@ export interface MigratorService {
    */
   readonly down: () => Effect.Effect<void, MigrationError | IrreversibleMigrationError>
   /**
+   * @param previousTables - Table names in the prior schema snapshot.
+   * @returns The raw, ungated operations reconciling the schema with the snapshot.
+   */
+  readonly diff: (
+    previousTables?: ReadonlyArray<string>
+  ) => Effect.Effect<ReadonlyArray<MigrationOperation>, MigrationError>
+  /**
+   * @param name - Human-readable plan name.
+   * @param previousTables - Table names in the prior schema snapshot.
+   * @returns An Effect yielding a policy-guarded migration plan (alias `generate`).
+   */
+  readonly plan: (
+    name: string,
+    previousTables?: ReadonlyArray<string>
+  ) => Effect.Effect<MigrationPlan, MigrationError>
+  /**
    * @param name - Human-readable plan name.
    * @param previousTables - Table names in the prior schema snapshot.
    * @returns An Effect yielding a guarded create-only migration plan.
@@ -70,6 +109,12 @@ export interface MigratorService {
     name: string,
     previousTables?: ReadonlyArray<string>
   ) => Effect.Effect<MigrationPlan, MigrationError>
+  /**
+   * Preview the migrations `up()` would apply, without applying them (spec §15.3).
+   *
+   * @returns A reviewable report of pending migrations and their compiled SQL.
+   */
+  readonly dryRun: () => Effect.Effect<DryRunReport, MigrationError>
   /**
    * @param plan - Compiled migration plan to apply.
    * @returns Its persisted journal entry.
@@ -328,20 +373,51 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
       return dialect.transactionalDdl ? withTx(downBody(false)) : downBody(false)
     }
 
-    const generate: MigratorService["generate"] = (name, previousTables) =>
+    const policy = config.policy ?? "safe-only"
+    const guardOptions = { reviewed: config.reviewed ?? false }
+
+    const diffOps = (previousTables?: ReadonlyArray<string>) =>
+      Effect.try({
+        try: () => diffSchema(config.schema ?? [], previousTables ?? []),
+        catch: (cause) => new MigrationError({ message: `schema cannot be represented as migration DDL: ${String(cause)}`, cause })
+      })
+
+    const diff: MigratorService["diff"] = (previousTables) => diffOps(previousTables)
+
+    const plan: MigratorService["plan"] = (name, previousTables) =>
       Effect.gen(function* () {
-        const operations = yield* Effect.try({
-          try: () => diffSchema(config.schema ?? [], previousTables ?? []),
-          catch: (cause) => new MigrationError({ message: `schema cannot be represented as migration DDL: ${String(cause)}`, cause })
-        })
-        const violations = guardOperations(operations, config.policy ?? "safe-only")
+        const operations = yield* diffOps(previousTables)
+        const violations = guardOperations(operations, policy, guardOptions)
         if (violations.length > 0) {
           return yield* Effect.fail(new MigrationError({ message: violations[0]!.message }))
         }
         return { id: `${timestamp()}_${name}`, name, operations } satisfies MigrationPlan
       })
 
+    const generate: MigratorService["generate"] = plan
+
+    const dryRun: MigratorService["dryRun"] = () =>
+      Effect.gen(function* () {
+        yield* ensureJournal
+        const applied = yield* readApplied
+        const defs = migrations()
+        yield* validateDefinitions(defs)
+        const appliedIds = new Set(applied.map((entry) => entry.id))
+        const pending = defs
+          .filter((migration) => !appliedIds.has(migration.id))
+          .map((migration): DryRunStep =>
+            isSqlStatement(migration.up)
+              ? { id: migration.id, name: migration.name, kind: "sql", statements: [migration.up.sql] }
+              : { id: migration.id, name: migration.name, kind: "effect", statements: [] }
+          )
+        return { pending } satisfies DryRunReport
+      })
+
     const apply: MigratorService["apply"] = (plan) => {
+      const violations = guardOperations(plan.operations, policy, guardOptions)
+      if (violations.length > 0) {
+        return Effect.fail(new MigrationError({ message: violations[0]!.message, migrationId: plan.id }))
+      }
       const applyLocked = (transactionalStep: boolean) => Effect.gen(function* () {
         yield* ensureJournal
         const applied = yield* readApplied
@@ -393,7 +469,7 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
         })
       })
 
-    return { status, check, up, down, generate, apply, drift }
+    return { status, check, up, down, diff, plan, generate, dryRun, apply, drift }
   })
 
 /**

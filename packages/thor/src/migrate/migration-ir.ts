@@ -152,3 +152,40 @@ export interface MigrationPlan {
   readonly name: string
   readonly operations: ReadonlyArray<MigrationOperation>
 }
+
+/**
+ * The expand/contract phase of an operation (spec §15.5). An **expand** step
+ * adds new structures or relaxes constraints without breaking code still using
+ * the old shape; a **contract** step drops, renames, retypes, or requires
+ * something and can break old code, so it is gated more strictly.
+ *
+ * @param op - Migration operation.
+ * @returns `"expand"` for additive/non-breaking steps, `"contract"` otherwise.
+ */
+export const migrationPhase = (op: MigrationOperation): "expand" | "contract" => {
+  switch (op._tag) {
+    case "CreateTable":
+    case "DropNotNull":
+      return "expand"
+    case "AddColumn": {
+      // Adding a required column breaks old inserts; a unique one can collide on
+      // existing rows. A nullable column, or one with a default, is safe to add.
+      const { nullable, default: dflt, unique } = op.column
+      return !unique && (nullable || dflt !== undefined) ? "expand" : "contract"
+    }
+    case "RenameTable":
+    case "RenameColumn":
+    case "AlterColumnType":
+    case "SetNotNull":
+    case "DropColumn":
+    case "DropTable":
+    case "RawSql":
+      return "contract"
+  }
+}
+
+/**
+ * @param op - Migration operation.
+ * @returns Whether the operation is an expand-phase (additive, non-breaking) step.
+ */
+export const isExpandOperation = (op: MigrationOperation): boolean => migrationPhase(op) === "expand"
