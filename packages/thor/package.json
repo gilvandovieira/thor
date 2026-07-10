@@ -69,6 +69,10 @@
     "./observability": {
       "types": "./dist/observability/index.d.ts",
       "default": "./dist/observability/index.js"
+    },
+    "./introspect": {
+      "types": "./dist/introspect/index.d.ts",
+      "default": "./dist/introspect/index.js"
     }
   },
   "scripts": {
