@@ -1,0 +1,24 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "ignoreExportsUsedInFile": true,
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.mjs"],
+      "project": ["scripts/**/*.mjs"]
+    },
+    "packages/thor": {
+      "bun": false,
+      "entry": [
+        "src/{schema,sql,postgres,sqlite,mysql,migrate,testing,routine,capabilities}/index.ts",
+        "scripts/*.mts",
+        "test/**/*.test.ts",
+        "test/parameters.types.ts"
+      ],
+      "project": ["src/**/*.ts", "scripts/**/*.mts", "test/**/*.ts", "test-bun/**/*.ts"]
+    },
+    "packages/cli": {
+      "entry": ["test/**/*.test.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts"]
+    }
+  }
+}

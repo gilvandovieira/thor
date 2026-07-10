@@ -2,12 +2,10 @@
  * Query construction & capability guards (spec §8.1).
  *
  * Guards are pure: `collectViolations` returns the tagged errors it finds so
- * they are trivially unit-testable (spec §14.6). `guardQuery` is the Effect
- * wrapper that fails with the first violation before compilation/execution.
+ * they are trivially unit-testable (spec §14.6).
  *
  * @module guards/query-guards
  */
-import { Effect } from "effect"
 import type { CapabilityMatrix } from "../capabilities/matrix.js"
 import { bitsToCapabilities } from "../capabilities/capability.js"
 import { isSatisfied } from "../capabilities/matrix.js"
@@ -423,20 +421,3 @@ export const collectViolations = (
   ...collectCapabilityViolations(ir, matrix, allowEmulation),
   ...collectStructuralViolations(ir)
 ]
-
-/**
- * Converts pure guard results into an Effect failure channel.
- *
- * @param ir - Query representation to validate.
- * @param matrix - Active dialect capability matrix.
- * @param allowEmulation - Whether emulated capabilities satisfy requirements.
- * @returns `Effect.void` when valid, otherwise an Effect failing with the first violation.
- */
-export const guardQuery = (
-  ir: QueryIR,
-  matrix: CapabilityMatrix,
-  allowEmulation = false
-): Effect.Effect<void, Violation> => {
-  const violations = collectViolations(ir, matrix, allowEmulation)
-  return violations.length > 0 ? Effect.fail(violations[0]!) : Effect.void
-}

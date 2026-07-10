@@ -288,10 +288,6 @@ const rowDecoderCache = new WeakMap<ReadonlyArray<SelectionField>, RowDecoder>()
  * @param fields - Selected fields and their codecs.
  * @returns Nothing; the compiled decoder is retained in the selection cache.
  */
-export const prepareDecoder = (fields: ReadonlyArray<SelectionField>): void => {
-  rowDecoderFor(fields)
-}
-
 /**
  * Compiles and caches a struct decoder for a stable selection array.
  *
