@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest"
+import { DatabaseSync } from "node:sqlite"
 import { pg } from "@gilvandovieira/thor"
+import { MySQLDialect } from "@gilvandovieira/thor/mysql"
+import { SQLiteDialect } from "@gilvandovieira/thor/sqlite"
 import {
   checksum,
   compileOperation,
@@ -25,6 +28,23 @@ const posts = pg.table("posts", {
   title: pg.text("title").notNull()
 })
 
+const metrics = pg.table("metrics", {
+  id: pg.integer("id").primaryKey(),
+  source: pg.text("source").notNull(),
+  value: pg.integer("value").notNull(),
+  doubled: pg.integer("doubled").generatedAlwaysAs("value * 2")
+}, {
+  indexes: [{ name: "metrics_source_idx", columns: ["source"] }],
+  uniqueConstraints: [{ name: "metrics_source_value_key", columns: ["source", "value"] }],
+  checks: [{ name: "metrics_value_positive", expression: "value >= 0" }],
+  foreignKeys: [{
+    name: "metrics_source_fk",
+    columns: ["source"],
+    references: { table: "sources", columns: ["id"] },
+    onDelete: "cascade"
+  }]
+})
+
 const safeOperation = {
   destructive: false,
   reversible: true,
@@ -37,12 +57,16 @@ describe("migration DDL (spec §13)", () => {
       _tag: "CreateTable",
       table: "users",
       columns: [
-        { name: "id", type: "uuid", nullable: false, default: "gen_random_uuid()" },
-        { name: "email", type: "text", nullable: false },
-        { name: "display_name", type: "text", nullable: false, default: "'O''Brien'" },
-        { name: "created_at", type: "timestamptz", nullable: false, default: "now()" }
+        { name: "id", type: "uuid", nullable: false, default: { kind: "random" } },
+        { name: "email", type: "text", nullable: false, unique: true },
+        { name: "display_name", type: "text", nullable: false, default: { kind: "value", value: "O'Brien" } },
+        { name: "created_at", type: "timestamptz", nullable: false, default: { kind: "now" } }
       ],
       primaryKey: ["id"],
+      uniqueConstraints: [],
+      checks: [],
+      foreignKeys: [],
+      indexes: [],
       ...safeOperation
     })
   })
@@ -50,11 +74,39 @@ describe("migration DDL (spec §13)", () => {
   it("compiles CreateTable to exact Postgres DDL", () => {
     expect(compileOperation(tableToCreateOp(users))).toBe(`create table "users" (
   "id" uuid not null default gen_random_uuid(),
-  "email" text not null,
+  "email" text not null unique,
   "display_name" text not null default 'O''Brien',
   "created_at" timestamptz not null default now(),
   primary key ("id")
 );`)
+  })
+
+  it("preserves generated columns, constraints, indexes, and typed defaults through dialect DDL", () => {
+    const operation = tableToCreateOp(metrics)
+    const generated = operation.columns.find((column) => column.name === "doubled")
+    expect(generated).toMatchObject({ generated: { expression: "value * 2", stored: true } })
+    expect(generated).not.toHaveProperty("default")
+    expect(operation.indexes).toEqual([{ name: "metrics_source_idx", columns: ["source"], unique: false }])
+
+    for (const dialect of [undefined, SQLiteDialect, MySQLDialect]) {
+      const ddl = dialect ? compileOperation(operation, dialect) : compileOperation(operation)
+      expect(ddl).toContain("generated always as (value * 2) stored")
+      expect(ddl).toContain("metrics_source_value_key")
+      expect(ddl).toContain("metrics_value_positive")
+      expect(ddl).toContain("metrics_source_fk")
+      expect(ddl).toContain("metrics_source_idx")
+    }
+  })
+
+  it("round-trips generated and indexed schema metadata through live SQLite introspection", () => {
+    const sqlite = new DatabaseSync(":memory:")
+    sqlite.exec("create table sources (id text primary key);")
+    sqlite.exec(compileOperation(tableToCreateOp(metrics), SQLiteDialect))
+    const columns = sqlite.prepare("pragma table_xinfo('metrics')").all() as ReadonlyArray<Record<string, unknown>>
+    const indexes = sqlite.prepare("pragma index_list('metrics')").all() as ReadonlyArray<Record<string, unknown>>
+    expect(columns.find((column) => column.name === "doubled")?.hidden).toBe(3)
+    expect(indexes.map((index) => index.name)).toContain("metrics_source_idx")
+    sqlite.close()
   })
 
   it.each(
@@ -66,7 +118,7 @@ describe("migration DDL (spec §13)", () => {
         {
           _tag: "AddColumn",
           table: "users",
-          column: { name: "active", type: "boolean", nullable: false, default: "true" },
+          column: { name: "active", type: "boolean", nullable: false, default: { kind: "value", value: true } },
           ...safeOperation
         },
         'alter table "users" add column "active" boolean not null default true;'

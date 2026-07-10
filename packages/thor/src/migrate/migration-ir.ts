@@ -6,12 +6,58 @@
  */
 import type { PgDataType } from "../schema/column.js"
 
+/** Typed literal accepted as a generated DDL default. */
+export type DefaultLiteral = string | number | bigint | boolean | null | Date
+
+/** Defaults retain intent until the active dialect renders them. */
+export type ColumnDefault =
+  | { readonly kind: "value"; readonly value: DefaultLiteral }
+  | { readonly kind: "sql"; readonly sql: string }
+  | { readonly kind: "now" }
+  | { readonly kind: "random" }
+
+/** Generated-column expression, distinct from a default. */
+export interface GeneratedColumnSpec {
+  readonly expression: string
+  readonly stored: boolean
+}
+
 /** Dialect-neutral column description used by migration operations. */
 export interface ColumnSpec {
   readonly name: string
   readonly type: PgDataType
   readonly nullable: boolean
-  readonly default?: string
+  readonly default?: ColumnDefault
+  readonly unique?: boolean
+  readonly generated?: GeneratedColumnSpec
+}
+
+/** Table-level unique constraint. */
+export interface UniqueConstraintSpec {
+  readonly name?: string
+  readonly columns: ReadonlyArray<string>
+}
+
+/** Table-level check constraint with explicitly trusted SQL. */
+export interface CheckConstraintSpec {
+  readonly name?: string
+  readonly expression: string
+}
+
+/** Table-level foreign-key constraint. */
+export interface ForeignKeySpec {
+  readonly name?: string
+  readonly columns: ReadonlyArray<string>
+  readonly references: { readonly table: string; readonly columns: ReadonlyArray<string> }
+  readonly onDelete?: "cascade" | "restrict" | "set null" | "no action"
+  readonly onUpdate?: "cascade" | "restrict" | "set null" | "no action"
+}
+
+/** Index emitted after its owning table. */
+export interface IndexSpec {
+  readonly name: string
+  readonly columns: ReadonlyArray<string>
+  readonly unique: boolean
 }
 
 interface OpBase {
@@ -26,6 +72,10 @@ export interface CreateTableOp extends OpBase {
   readonly table: string
   readonly columns: ReadonlyArray<ColumnSpec>
   readonly primaryKey: ReadonlyArray<string>
+  readonly uniqueConstraints?: ReadonlyArray<UniqueConstraintSpec>
+  readonly checks?: ReadonlyArray<CheckConstraintSpec>
+  readonly foreignKeys?: ReadonlyArray<ForeignKeySpec>
+  readonly indexes?: ReadonlyArray<IndexSpec>
 }
 /** Drops a table and all data it contains. */
 export interface DropTableOp extends OpBase {

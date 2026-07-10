@@ -4,7 +4,7 @@
  * @module sqlite/migrations
  */
 import type { MigrationDialect } from "../dialect.js"
-import type { ColumnSpec, MigrationOperation } from "../migrate/migration-ir.js"
+import type { ColumnDefault, ColumnSpec, DefaultLiteral, MigrationOperation } from "../migrate/migration-ir.js"
 
 /**
  * @param name - Identifier to escape.
@@ -48,10 +48,23 @@ const UUID_DEFAULT = `(lower(
  * @param value - Logical default SQL.
  * @returns SQLite-compatible default expression.
  */
-const sqliteDefault = (value: string): string => {
-  if (value === "now()") return "CURRENT_TIMESTAMP"
-  if (value === "gen_random_uuid()") return UUID_DEFAULT
-  return value
+const literal = (value: DefaultLiteral): string => {
+  if (value === null) return "null"
+  if (value instanceof Date) return `'${value.toISOString().replace(/'/g, "''")}'`
+  if (typeof value === "string") return `'${value.replace(/'/g, "''")}'`
+  if (typeof value === "boolean") return value ? "1" : "0"
+  if (typeof value === "number" && !Number.isFinite(value)) throw new TypeError("Non-finite DDL default")
+  return String(value)
+}
+
+/** @param value - Dialect-neutral default. @returns SQLite default SQL. */
+const sqliteDefault = (value: ColumnDefault): string => {
+  switch (value.kind) {
+    case "value": return literal(value.value)
+    case "sql": return value.sql
+    case "now": return "CURRENT_TIMESTAMP"
+    case "random": return UUID_DEFAULT
+  }
 }
 
 /**
@@ -62,6 +75,30 @@ const sqliteDefault = (value: string): string => {
  */
 const unsupportedAlter = (operation: MigrationOperation): never => {
   throw new Error(`SQLite migration operation "${operation._tag}" requires a table rebuild`)
+}
+
+/**
+ * SQLite forbids several column shapes in `ALTER TABLE ... ADD COLUMN` that are
+ * legal in `CREATE TABLE` (no UNIQUE, no STORED generated column, only constant
+ * defaults, and `NOT NULL` only with a non-null constant default). Reject them
+ * up front so the migrator surfaces a tagged failure instead of emitting SQL the
+ * driver rejects at execution time.
+ *
+ * @param column - Column being added to an existing table.
+ * @returns Nothing; returns normally when SQLite can add the column in place.
+ * @throws {Error} When the column requires a table rebuild.
+ */
+const assertAddColumnSupported = (column: ColumnSpec): void => {
+  const rebuild = (reason: string): never => {
+    throw new Error(`SQLite cannot add column "${column.name}" ${reason}; a table rebuild is required`)
+  }
+  if (column.unique) rebuild("with a UNIQUE constraint")
+  if (column.generated?.stored) rebuild("as a STORED generated column")
+  if (column.default && column.default.kind !== "value") rebuild("with a non-constant default expression")
+  if (column.default?.kind === "value" && column.default.value === null && !column.nullable) {
+    rebuild("as NOT NULL with a NULL default")
+  }
+  if (!column.nullable && !column.generated && !column.default) rebuild("as NOT NULL without a default value")
 }
 
 /**
@@ -77,7 +114,9 @@ export const compileSQLiteOperation = (operation: MigrationOperation): string =>
         const parts = [
           quote(column.name),
           sqliteType(column.type),
+          column.generated ? `generated always as (${column.generated.expression}) ${column.generated.stored ? "stored" : "virtual"}` : "",
           column.nullable ? "" : "not null",
+          column.unique ? "unique" : "",
           column.default ? `default ${sqliteDefault(column.default)}` : ""
         ]
         return "  " + parts.filter(Boolean).join(" ")
@@ -85,7 +124,20 @@ export const compileSQLiteOperation = (operation: MigrationOperation): string =>
       if (operation.primaryKey.length > 0) {
         columns.push(`  primary key (${operation.primaryKey.map(quote).join(", ")})`)
       }
-      return `create table ${quote(operation.table)} (\n${columns.join(",\n")}\n);`
+      for (const constraint of operation.uniqueConstraints ?? []) {
+        columns.push(`  ${constraint.name ? `constraint ${quote(constraint.name)} ` : ""}unique (${constraint.columns.map(quote).join(", ")})`)
+      }
+      for (const check of operation.checks ?? []) {
+        columns.push(`  ${check.name ? `constraint ${quote(check.name)} ` : ""}check (${check.expression})`)
+      }
+      for (const foreignKey of operation.foreignKeys ?? []) {
+        columns.push(`  ${foreignKey.name ? `constraint ${quote(foreignKey.name)} ` : ""}foreign key (${foreignKey.columns.map(quote).join(", ")}) references ${quote(foreignKey.references.table)} (${foreignKey.references.columns.map(quote).join(", ")})${foreignKey.onDelete ? ` on delete ${foreignKey.onDelete}` : ""}${foreignKey.onUpdate ? ` on update ${foreignKey.onUpdate}` : ""}`)
+      }
+      const create = `create table ${quote(operation.table)} (\n${columns.join(",\n")}\n);`
+      const indexes = (operation.indexes ?? []).map((index) =>
+        `create ${index.unique ? "unique " : ""}index ${quote(index.name)} on ${quote(operation.table)} (${index.columns.map(quote).join(", ")});`
+      )
+      return [create, ...indexes].join("\n")
     }
     case "DropTable":
       return `drop table ${quote(operation.table)};`
@@ -93,7 +145,8 @@ export const compileSQLiteOperation = (operation: MigrationOperation): string =>
       return `alter table ${quote(operation.from)} rename to ${quote(operation.to)};`
     case "AddColumn": {
       const column = operation.column
-      return `alter table ${quote(operation.table)} add column ${quote(column.name)} ${sqliteType(column.type)}${column.nullable ? "" : " not null"}${column.default ? ` default ${sqliteDefault(column.default)}` : ""};`
+      assertAddColumnSupported(column)
+      return `alter table ${quote(operation.table)} add column ${quote(column.name)} ${sqliteType(column.type)}${column.generated ? ` generated always as (${column.generated.expression}) ${column.generated.stored ? "stored" : "virtual"}` : ""}${column.nullable ? "" : " not null"}${column.unique ? " unique" : ""}${column.default ? ` default ${sqliteDefault(column.default)}` : ""};`
     }
     case "DropColumn":
       return `alter table ${quote(operation.table)} drop column ${quote(operation.column)};`

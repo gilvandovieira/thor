@@ -8,7 +8,7 @@ import type { AnyColumn } from "../schema/column.js"
 import { type AnyTable, tableMeta } from "../schema/table.js"
 import type { Dialect } from "../dialect.js"
 import { PostgresDialect } from "../postgres/dialect.js"
-import type { ColumnSpec, CreateTableOp, MigrationOperation, MigrationPlan } from "./migration-ir.js"
+import type { ColumnDefault, ColumnSpec, CreateTableOp, DefaultLiteral, MigrationOperation, MigrationPlan } from "./migration-ir.js"
 
 /**
  * Converts runtime column-default metadata to dialect-neutral SQL.
@@ -16,18 +16,24 @@ import type { ColumnSpec, CreateTableOp, MigrationOperation, MigrationPlan } fro
  * @param column - Column whose default should be rendered.
  * @returns Default SQL, or `undefined` when the column has no default.
  */
-const renderDefault = (column: AnyColumn): string | undefined => {
+const renderDefault = (column: AnyColumn): ColumnDefault | undefined => {
   const d = column.def.defaultValue
   if (!d) return undefined
   switch (d.kind) {
     case "now":
-      return "now()"
+      return { kind: "now" }
     case "random":
-      return "gen_random_uuid()"
+      return { kind: "random" }
     case "sql":
-      return d.sql
+      return column.def.generated ? undefined : { kind: "sql", sql: d.sql }
     case "value":
-      return typeof d.value === "string" ? `'${d.value.replace(/'/g, "''")}'` : String(d.value)
+      if (
+        d.value !== null && typeof d.value !== "string" && typeof d.value !== "number" &&
+        typeof d.value !== "bigint" && typeof d.value !== "boolean" && !(d.value instanceof Date)
+      ) {
+        throw new TypeError(`Column "${column.def.table}.${column.def.name}" has a non-round-trippable default value`)
+      }
+      return { kind: "value", value: d.value as DefaultLiteral }
   }
 }
 
@@ -36,7 +42,15 @@ const renderDefault = (column: AnyColumn): string | undefined => {
  * @returns Dialect-neutral migration column specification.
  */
 export const columnSpecOf = (column: AnyColumn): ColumnSpec => {
-  const base = { name: column.def.name, type: column.def.dataType, nullable: !column.def.notNull }
+  const base: ColumnSpec = {
+    name: column.def.name,
+    type: column.def.dataType,
+    nullable: !column.def.notNull,
+    ...(column.def.unique ? { unique: true } : {}),
+    ...(column.def.generated && column.def.defaultValue?.kind === "sql"
+      ? { generated: { expression: column.def.defaultValue.sql, stored: true } }
+      : {})
+  }
   const dflt = renderDefault(column)
   return dflt === undefined ? base : { ...base, default: dflt }
 }
@@ -52,6 +66,10 @@ export const tableToCreateOp = (table: AnyTable): CreateTableOp => {
     table: meta.name,
     columns: Object.values(meta.columns).map(columnSpecOf),
     primaryKey: meta.primaryKey,
+    uniqueConstraints: meta.uniqueConstraints.map((constraint) => ({ ...constraint })),
+    checks: meta.checks.map((check) => ({ ...check })),
+    foreignKeys: meta.foreignKeys.map((foreignKey) => ({ ...foreignKey, references: { ...foreignKey.references } })),
+    indexes: meta.indexes.map((index) => ({ ...index })),
     destructive: false,
     reversible: true,
     capabilities: []

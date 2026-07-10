@@ -4,7 +4,7 @@
  * @module mysql/migrations
  */
 import type { MigrationDialect } from "../dialect.js"
-import type { ColumnSpec, MigrationOperation } from "../migrate/migration-ir.js"
+import type { ColumnDefault, ColumnSpec, DefaultLiteral, MigrationOperation } from "../migrate/migration-ir.js"
 
 /**
  * @param name - Identifier to escape.
@@ -49,10 +49,23 @@ const mysqlType = (type: ColumnSpec["type"]): string => {
  * @param value - Logical default SQL.
  * @returns MySQL-compatible default expression.
  */
-const mysqlDefault = (value: string): string => {
-  if (value === "now()") return "CURRENT_TIMESTAMP(3)"
-  if (value === "gen_random_uuid()") return "(uuid())"
-  return value
+const literal = (value: DefaultLiteral): string => {
+  if (value === null) return "null"
+  if (value instanceof Date) return `'${value.toISOString().replace(/'/g, "''")}'`
+  if (typeof value === "string") return `'${value.replace(/'/g, "''")}'`
+  if (typeof value === "boolean") return value ? "true" : "false"
+  if (typeof value === "number" && !Number.isFinite(value)) throw new TypeError("Non-finite DDL default")
+  return String(value)
+}
+
+/** @param value - Dialect-neutral default. @returns MySQL default SQL. */
+const mysqlDefault = (value: ColumnDefault): string => {
+  switch (value.kind) {
+    case "value": return literal(value.value)
+    case "sql": return value.sql
+    case "now": return "CURRENT_TIMESTAMP(3)"
+    case "random": return "(uuid())"
+  }
 }
 
 /**
@@ -78,13 +91,27 @@ export const compileMySQLOperation = (operation: MigrationOperation): string => 
         const parts = [
           quote(column.name),
           mysqlType(column.type),
+          column.generated ? `generated always as (${column.generated.expression}) ${column.generated.stored ? "stored" : "virtual"}` : "",
           column.nullable ? "" : "not null",
+          column.unique ? "unique" : "",
           column.default ? `default ${mysqlDefault(column.default)}` : ""
         ]
         return "  " + parts.filter(Boolean).join(" ")
       })
       if (operation.primaryKey.length > 0) {
         columns.push(`  primary key (${operation.primaryKey.map(quote).join(", ")})`)
+      }
+      for (const constraint of operation.uniqueConstraints ?? []) {
+        columns.push(`  ${constraint.name ? `constraint ${quote(constraint.name)} ` : ""}unique (${constraint.columns.map(quote).join(", ")})`)
+      }
+      for (const check of operation.checks ?? []) {
+        columns.push(`  ${check.name ? `constraint ${quote(check.name)} ` : ""}check (${check.expression})`)
+      }
+      for (const foreignKey of operation.foreignKeys ?? []) {
+        columns.push(`  ${foreignKey.name ? `constraint ${quote(foreignKey.name)} ` : ""}foreign key (${foreignKey.columns.map(quote).join(", ")}) references ${quote(foreignKey.references.table)} (${foreignKey.references.columns.map(quote).join(", ")})${foreignKey.onDelete ? ` on delete ${foreignKey.onDelete}` : ""}${foreignKey.onUpdate ? ` on update ${foreignKey.onUpdate}` : ""}`)
+      }
+      for (const index of operation.indexes ?? []) {
+        columns.push(`  ${index.unique ? "unique " : ""}index ${quote(index.name)} (${index.columns.map(quote).join(", ")})`)
       }
       return `create table ${quote(operation.table)} (\n${columns.join(",\n")}\n);`
     }
@@ -94,7 +121,7 @@ export const compileMySQLOperation = (operation: MigrationOperation): string => 
       return `rename table ${quote(operation.from)} to ${quote(operation.to)};`
     case "AddColumn": {
       const column = operation.column
-      return `alter table ${quote(operation.table)} add column ${quote(column.name)} ${mysqlType(column.type)}${column.nullable ? "" : " not null"}${column.default ? ` default ${mysqlDefault(column.default)}` : ""};`
+      return `alter table ${quote(operation.table)} add column ${quote(column.name)} ${mysqlType(column.type)}${column.generated ? ` generated always as (${column.generated.expression}) ${column.generated.stored ? "stored" : "virtual"}` : ""}${column.nullable ? "" : " not null"}${column.unique ? " unique" : ""}${column.default ? ` default ${mysqlDefault(column.default)}` : ""};`
     }
     case "DropColumn":
       return `alter table ${quote(operation.table)} drop column ${quote(operation.column)};`
