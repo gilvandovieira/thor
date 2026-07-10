@@ -16,8 +16,13 @@ export {
   PostgresDriverRuntime,
   PostgresJsDriverRuntime,
   PostgresLayer,
+  PostgresPoolLayer,
+  PostgresScopedLayer,
   makePostgresDriver,
-  type PgClient
+  type PgClient,
+  type PgClientResource,
+  type PgPool,
+  type PgPoolClient
 } from "./postgres/index.js"
 export {
   BunSQLiteDriverRuntime,
@@ -30,8 +35,10 @@ export {
   SQLiteDialect,
   SQLiteDriverRuntime,
   SQLiteLayer,
+  SQLiteScopedLayer,
   makeSQLiteDriver,
   type SQLiteClient,
+  type SQLiteClientResource,
   type SQLiteLayerOptions,
   type SQLiteStatement
 } from "./sqlite/index.js"
@@ -40,8 +47,13 @@ export {
   MySQLDialect,
   MySQLDriverRuntime,
   MySQLLayer,
+  MySQLPoolLayer,
+  MySQLScopedLayer,
   makeMySQLDriver,
-  type MySQLClient
+  type MySQLClient,
+  type MySQLClientResource,
+  type MySQLPool,
+  type MySQLPoolConnection
 } from "./mysql/index.js"
 export { db, PreparedQuery, QueryReference } from "./sql/query-builder.js"
 export type { Dialect, DialectStatement, MigrationDialect } from "./dialect.js"
@@ -102,6 +114,12 @@ export {
 // Execution
 export { Database, type DatabaseService } from "./execution/database.js"
 export { type Driver, type CompiledQuery, type CommandResult, type RawRow } from "./execution/driver.js"
+export {
+  transaction,
+  type TransactionIsolationLevel,
+  type TransactionOptions,
+  type TransactionRetryPolicy
+} from "./execution/transaction.js"
 export {
   type ExecutionMode,
   type DecodeMode,

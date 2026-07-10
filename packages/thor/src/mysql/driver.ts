@@ -39,6 +39,26 @@ export interface MySQLClient {
   readonly execute: (sql: string, params?: ReadonlyArray<unknown>) => Promise<MySQLQueryResult>
 }
 
+/** Acquisition/release hooks for an owned MySQL connection. */
+export interface MySQLClientResource {
+  /** @returns A newly connected, exclusively owned client. */
+  readonly acquire: () => Promise<MySQLClient>
+  /** @param client - Acquired client. @returns Completion of client cleanup. */
+  readonly release: (client: MySQLClient) => Promise<void> | void
+}
+
+/** Dedicated connection returned by a mysql2-compatible pool. */
+export interface MySQLPoolConnection extends MySQLClient {
+  /** @returns Completion of returning the connection to its pool. */
+  readonly release: () => Promise<void> | void
+}
+
+/** Pool surface used to acquire one affinity-safe connection. */
+export interface MySQLPool {
+  /** @returns One dedicated pool connection. */
+  readonly getConnection: () => Promise<MySQLPoolConnection>
+}
+
 /**
  * @param errno - Numeric MySQL error code.
  * @param code - Symbolic MySQL error code.
@@ -160,3 +180,42 @@ export const MySQLLayer = (
     allowEmulation: options.allowEmulation ?? false,
     preparedStatements: options.preparedStatements ?? true
   } satisfies DatabaseService)
+
+/**
+ * Creates an owned MySQL layer whose connection is always released.
+ * @param resource - Client acquisition and release hooks.
+ * @param options - Emulation and prepared-statement settings.
+ * @returns A scoped Database layer.
+ */
+export const MySQLScopedLayer = (
+  resource: MySQLClientResource,
+  options: { readonly allowEmulation?: boolean; readonly preparedStatements?: boolean } = {}
+): Layer.Layer<Database, DriverError | ConstraintError> => Layer.scoped(
+  Database,
+  Effect.acquireRelease(
+    Effect.tryPromise({ try: resource.acquire, catch: mapMySQLDriverError }),
+    (client) => Effect.tryPromise({
+      try: async () => resource.release(client),
+      catch: mapMySQLDriverError
+    }).pipe(Effect.orDie)
+  ).pipe(Effect.map((client): DatabaseService => ({
+    dialect: MySQLDialect,
+    driver: makeMySQLDriver(client),
+    allowEmulation: options.allowEmulation ?? false,
+    preparedStatements: options.preparedStatements ?? true
+  })))
+)
+
+/**
+ * Acquires one dedicated mysql2 pool connection for the layer lifetime.
+ * @param pool - mysql2-compatible pool.
+ * @param options - Emulation and prepared-statement settings.
+ * @returns A scoped Database layer.
+ */
+export const MySQLPoolLayer = (
+  pool: MySQLPool,
+  options: { readonly allowEmulation?: boolean; readonly preparedStatements?: boolean } = {}
+) => MySQLScopedLayer({
+  acquire: () => pool.getConnection(),
+  release: (client) => (client as MySQLPoolConnection).release()
+}, options)

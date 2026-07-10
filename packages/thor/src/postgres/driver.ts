@@ -35,6 +35,26 @@ export interface PgClient {
   }
 }
 
+/** Acquisition/release hooks for an owned PostgreSQL client. */
+export interface PgClientResource {
+  /** @returns A newly connected, exclusively owned client. */
+  readonly acquire: () => Promise<PgClient>
+  /** @param client - Acquired client. @returns Completion of client cleanup. */
+  readonly release: (client: PgClient) => Promise<void> | void
+}
+
+/** Dedicated client returned by a node-postgres-compatible pool. */
+export interface PgPoolClient extends PgClient {
+  /** @returns Completion of returning the client to its pool. */
+  readonly release: () => Promise<void> | void
+}
+
+/** Pool surface used to acquire an affinity-safe dedicated connection. */
+export interface PgPool {
+  /** @returns One dedicated pool connection. */
+  readonly connect: () => Promise<PgPoolClient>
+}
+
 /**
  * Choose how to invoke node-postgres:
  *   - no params → simple protocol (allows multi-statement DDL);
@@ -105,3 +125,39 @@ export const PostgresLayer = (
     allowEmulation: options.allowEmulation ?? false,
     preparedStatements: options.preparedStatements ?? true
   } satisfies DatabaseService)
+
+/**
+ * Creates an owned, scoped PostgreSQL layer. Acquisition is typed; release is
+ * guaranteed on success, failure, and interruption. Finalizer failures remain
+ * visible in the Effect cause as defects rather than being discarded.
+ *
+ * @param resource - Client acquisition and release hooks.
+ * @param options - Emulation and prepared-statement settings.
+ * @returns A scoped Database layer.
+ */
+export const PostgresScopedLayer = (
+  resource: PgClientResource,
+  options: { readonly allowEmulation?: boolean; readonly preparedStatements?: boolean } = {}
+): Layer.Layer<Database, ReturnType<typeof mapDriverError>> => Layer.scoped(
+  Database,
+  Effect.acquireRelease(
+    Effect.tryPromise({ try: resource.acquire, catch: mapDriverError }),
+    (client) => Effect.tryPromise({ try: async () => resource.release(client), catch: mapDriverError }).pipe(Effect.orDie)
+  ).pipe(Effect.map((client): DatabaseService => ({
+    dialect: PostgresDialect,
+    driver: makePostgresDriver(client),
+    allowEmulation: options.allowEmulation ?? false,
+    preparedStatements: options.preparedStatements ?? true
+  })))
+)
+
+/**
+ * Acquires one dedicated pool connection for the lifetime of the layer.
+ * @param pool - node-postgres-compatible pool.
+ * @param options - Emulation and prepared-statement settings.
+ * @returns A scoped Database layer.
+ */
+export const PostgresPoolLayer = (
+  pool: PgPool,
+  options: { readonly allowEmulation?: boolean; readonly preparedStatements?: boolean } = {}
+) => PostgresScopedLayer({ acquire: () => pool.connect(), release: (client) => (client as PgPoolClient).release() }, options)

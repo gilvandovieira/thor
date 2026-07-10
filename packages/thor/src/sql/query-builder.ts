@@ -51,6 +51,7 @@ import {
 } from "./expressions.js"
 import { type ExpressionInput } from "./advanced-expressions.js"
 import { internIdentifier } from "../ir/identifiers.js"
+import { transaction } from "../execution/transaction.js"
 
 // --- selection typing --------------------------------------------------------
 
@@ -1233,6 +1234,8 @@ class DeleteBuilder<T extends AnyTable, P extends NamedParams = {}> {
 
 /** Pure query-builder entry point. No method touches a database until a terminal Effect is run. */
 export const db = {
+  /** Runs an Effect in a transaction; nested calls use savepoints. */
+  transaction,
   /**
    * @param fields - Output aliases mapped to columns or expressions.
    * @returns A select awaiting `from()`.

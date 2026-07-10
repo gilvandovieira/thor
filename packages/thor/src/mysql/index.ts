@@ -51,7 +51,12 @@ export {
   mapMySQLDriverError,
   MySQLDriverRuntime,
   MySQLLayer,
+  MySQLPoolLayer,
+  MySQLScopedLayer,
   type MySQLClient,
+  type MySQLClientResource,
+  type MySQLPool,
+  type MySQLPoolConnection,
   type MySQLQueryResult,
   type MySQLResult,
   type MySQLResultHeader

@@ -38,7 +38,17 @@ export const pg = {
 
 export { PostgresDialect, type Dialect } from "./dialect.js"
 export { compile } from "./compiler.js"
-export { makePostgresDriver, PostgresDriverRuntime, PostgresLayer, type PgClient } from "./driver.js"
+export {
+  makePostgresDriver,
+  PostgresDriverRuntime,
+  PostgresLayer,
+  PostgresPoolLayer,
+  PostgresScopedLayer,
+  type PgClient,
+  type PgClientResource,
+  type PgPool,
+  type PgPoolClient
+} from "./driver.js"
 export {
   makePostgresJsDriver,
   PostgresJsDriverRuntime,

@@ -67,6 +67,14 @@ export interface SQLiteClient {
   readonly exec: (sql: string) => unknown
 }
 
+/** Synchronous acquisition/release hooks for an owned SQLite database. */
+export interface SQLiteClientResource {
+  /** @returns A newly opened SQLite client. */
+  readonly acquire: () => SQLiteClient
+  /** @param client - Acquired client to close. @returns Nothing. */
+  readonly release: (client: SQLiteClient) => void
+}
+
 /**
  * @param code - Symbolic SQLite error code.
  * @param errcode - Numeric extended SQLite error code.
@@ -270,3 +278,25 @@ export const BunSQLiteLayer = (
   options: SQLiteLayerOptions = {}
 ): Layer.Layer<Database> =>
   sqliteLayer(makeBunSQLiteDriver(client, options.runtime ?? detectRuntimeCapabilities()), options)
+
+/**
+ * Creates an owned SQLite layer and closes it when the Effect scope ends.
+ * @param resource - Synchronous database open/close hooks.
+ * @param options - Execution and runtime settings.
+ * @returns A scoped Database layer.
+ */
+export const SQLiteScopedLayer = (
+  resource: SQLiteClientResource,
+  options: SQLiteLayerOptions = {}
+): Layer.Layer<Database, DriverError | ConstraintError> => Layer.scoped(
+  Database,
+  Effect.acquireRelease(
+    Effect.try({ try: resource.acquire, catch: mapSQLiteError }),
+    (client) => Effect.try({ try: () => resource.release(client), catch: mapSQLiteError }).pipe(Effect.orDie)
+  ).pipe(Effect.map((client): DatabaseService => ({
+    dialect: SQLiteDialect,
+    driver: makeSQLiteDriver(client),
+    allowEmulation: options.allowEmulation ?? false,
+    preparedStatements: options.preparedStatements ?? true
+  })))
+)
