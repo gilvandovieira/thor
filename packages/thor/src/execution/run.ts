@@ -20,6 +20,17 @@ import { DecodeError, GuardError, NotFoundError, ParameterError, type QueryError
 import type { CommandResult, CompiledStatement, RawRow } from "./driver.js"
 import { type DatabaseService } from "./database.js"
 import { DEFAULT_EXECUTION_MODE, resolveDecodeMode } from "./plan.js"
+import { defaultQueryCaches, type QueryCaches } from "./cache.js"
+
+/**
+ * The named query cache registry backing a service's non-prepared execution
+ * path: the one installed by `withQueryCache`, or the process-wide default
+ * (spec §9.1). Prepared handles (Epic D) keep their own per-handle caches.
+ *
+ * @param db - Active database service.
+ * @returns The service's query caches, or the shared default.
+ */
+const cachesFor = (db: DatabaseService): QueryCaches => db.queryCache ?? defaultQueryCaches
 
 /** Named values supplied to `param()` placeholders at execution time. */
 export type QueryArgs = Record<string, unknown>
@@ -127,26 +138,34 @@ const parameterPlanFor = (ir: QueryIR): ParameterPlan => {
 }
 
 /**
- * The runtime IR is immutable and compilation/guarding are pure functions of
- * `(IR, dialect)`, so we memoize both per query shape. A query executed N times
- * (with different bound values each time) pays the compile + guard cost once —
- * every later execution is just bind + drive + decode.
+ * Normalize an IR shape through the {@link QueryCaches.shape} layer (spec §9.1).
+ * Compilation and guarding then operate on the normalized shape, matching the
+ * prepared/compiled handle path so every execution route shares one canonical
+ * shape identity.
+ *
+ * @param caches - Active cache registry.
+ * @param ir - Immutable builder query representation.
+ * @returns The cached normalized IR.
  */
-const compileCache = new WeakMap<QueryIR, WeakMap<Dialect, CompiledStatement>>()
+const shapeVia = (caches: QueryCaches, ir: QueryIR): QueryIR =>
+  caches.shape.getOrCompute(ir, () => normalizeQuery(ir)) as QueryIR
 
 /**
- * Compiles a query once for each IR and dialect object pair.
+ * Compile a normalized shape once per dialect through the
+ * {@link QueryCaches.compile} layer.
  *
- * @param ir - Immutable query representation.
+ * The runtime IR is immutable and compilation is a pure function of
+ * `(IR, dialect)`, so a query executed N times (with different bound values each
+ * time) pays the compile cost once — later executions are just bind + drive +
+ * decode.
+ *
+ * @param caches - Active cache registry.
+ * @param ir - Normalized query representation.
  * @param dialect - Target SQL dialect.
- * @returns The cached or newly compiled query.
+ * @returns The cached or newly compiled statement.
  */
-const compileCached = (ir: QueryIR, dialect: Dialect): CompiledStatement => {
-  let byDialect = compileCache.get(ir)
-  if (byDialect === undefined) {
-    byDialect = new WeakMap()
-    compileCache.set(ir, byDialect)
-  }
+const compileVia = (caches: QueryCaches, ir: QueryIR, dialect: Dialect): CompiledStatement => {
+  const byDialect = caches.compile.getOrCompute(ir, () => new Map<Dialect, CompiledStatement>())
   let compiled = byDialect.get(dialect)
   if (compiled === undefined) {
     compiled = dialect.compileQuery(ir)
@@ -155,41 +174,44 @@ const compileCached = (ir: QueryIR, dialect: Dialect): CompiledStatement => {
   return compiled
 }
 
-type GuardPolicyCache = Map<boolean, QueryError | null>
-const guardCache = new WeakMap<QueryIR, WeakMap<CapabilityMatrix, GuardPolicyCache>>()
+type GuardByPolicy = Map<boolean, QueryError | null>
+type GuardByMatrix = Map<CapabilityMatrix, GuardByPolicy>
 
 /**
- * Reads a previously computed guard outcome without creating cache entries.
+ * Reads a previously computed guard outcome through the capability layer without
+ * recording a computation.
  *
- * @param ir - Query representation.
+ * @param caches - Active cache registry.
+ * @param ir - Normalized query representation.
  * @param matrix - Dialect capability matrix.
  * @param allowEmulation - Emulation policy.
  * @returns Cached failure, `null` for cached success, or `undefined` when absent.
  */
 const cachedGuardResult = (
+  caches: QueryCaches,
   ir: QueryIR,
   matrix: CapabilityMatrix,
   allowEmulation: boolean
-): QueryError | null | undefined => guardCache.get(ir)?.get(matrix)?.get(allowEmulation)
+): QueryError | null | undefined =>
+  (caches.capability.peek(ir) as GuardByMatrix | undefined)?.get(matrix)?.get(allowEmulation)
 
 /**
- * Guards IR and memoizes the outcome per shape and capability policy.
+ * Guards IR and memoizes the outcome per shape and capability policy through the
+ * {@link QueryCaches.capability} layer.
  *
- * @param ir - Query representation to guard.
+ * @param caches - Active cache registry.
+ * @param ir - Normalized query representation to guard.
  * @param matrix - Active dialect capability matrix.
  * @param allowEmulation - Whether emulated capabilities satisfy requirements.
  * @returns An Effect that fails with the first violation or succeeds with void.
  */
 const guardCached = (
+  caches: QueryCaches,
   ir: QueryIR,
   matrix: CapabilityMatrix,
   allowEmulation: boolean
 ): Effect.Effect<void, QueryError> => {
-  let byMatrix = guardCache.get(ir)
-  if (!byMatrix) {
-    byMatrix = new WeakMap()
-    guardCache.set(ir, byMatrix)
-  }
+  const byMatrix = caches.capability.getOrCompute(ir, () => new Map()) as GuardByMatrix
   let byPolicy = byMatrix.get(matrix)
   if (!byPolicy) {
     byPolicy = new Map()
@@ -205,29 +227,32 @@ const guardCached = (
 }
 
 /**
- * Mode-aware guard (spec §15.13, §15.17). `safe` always guards (memoized).
- * `trusted`/`unsafe` skip the guard only when a prior success is already
+ * Mode-aware guard (spec §10, §15.13, §15.17). `safe` always guards (memoized).
+ * `trusted`/`unsafe-hot` skip the guard only when a prior success is already
  * recorded for this exact shape + capability profile + emulation policy — so
  * capability checks are never bypassed without a recorded prior pass (§15.17);
  * otherwise the guard runs once (and records the result).
  *
- * @param ir - Query representation to guard.
+ * @param caches - Active cache registry.
+ * @param ir - Normalized query representation to guard.
  * @param db - Active database service (carries dialect + execution mode).
  * @returns An Effect that fails with the first violation or succeeds with void.
  */
-const guardForMode = (ir: QueryIR, db: DatabaseService): Effect.Effect<void, QueryError> => {
+const guardForMode = (caches: QueryCaches, ir: QueryIR, db: DatabaseService): Effect.Effect<void, QueryError> => {
   const matrix = db.dialect.capabilities
-  if ((db.mode ?? DEFAULT_EXECUTION_MODE) === "safe") return guardCached(ir, matrix, db.allowEmulation)
-  if (cachedGuardResult(ir, matrix, db.allowEmulation) === null) {
+  if ((db.mode ?? DEFAULT_EXECUTION_MODE) === "safe") return guardCached(caches, ir, matrix, db.allowEmulation)
+  if (cachedGuardResult(caches, ir, matrix, db.allowEmulation) === null) {
     return Effect.void
   }
-  return guardCached(ir, matrix, db.allowEmulation)
+  return guardCached(caches, ir, matrix, db.allowEmulation)
 }
 
 /**
- * Decode rows honoring the active decode mode: `trusted` (from `unsafe` execution
- * mode) returns raw driver rows untouched; otherwise strict schema decoding runs.
+ * Decode rows honoring the active decode mode: `trusted` (from the `unsafe-hot`
+ * execution mode) returns raw driver rows untouched; otherwise strict schema
+ * decoding runs.
  *
+ * @param caches - Active cache registry backing the decoder layer.
  * @param fields - Selection fields and codecs.
  * @param rows - Raw driver rows.
  * @param db - Active database service.
@@ -235,6 +260,7 @@ const guardForMode = (ir: QueryIR, db: DatabaseService): Effect.Effect<void, Que
  * @returns An Effect yielding rows, decoded or trusted per mode.
  */
 const decodeForMode = (
+  caches: QueryCaches,
   fields: ReadonlyArray<SelectionField>,
   rows: ReadonlyArray<RawRow>,
   db: DatabaseService,
@@ -242,7 +268,7 @@ const decodeForMode = (
 ): Effect.Effect<ReadonlyArray<Record<string, unknown>>, DecodeError> =>
   resolveDecodeMode(db.mode ?? DEFAULT_EXECUTION_MODE, db.decodeMode) === "trusted"
     ? Effect.succeed(rows as ReadonlyArray<Record<string, unknown>>)
-    : decodeRows(fields, rows, decoder ?? rowDecoderFor(fields))
+    : decodeRows(fields, rows, decoder ?? decoderVia(caches, fields))
 
 /**
  * Resolves positional bind values for a compiled query.
@@ -273,37 +299,42 @@ const preparedNameFor = (db: DatabaseService, compiled: CompiledStatement): stri
 type RowDecoder = (raw: RawRow) => Either.Either<Record<string, unknown>, ParseResult.ParseError>
 
 /**
- * Cache of compiled row decoders keyed by the (stable, per-query) selection
- * array. Compiling the decoder is the expensive part of Effect Schema; doing it
- * once per query shape — instead of once per field per row — is the difference
- * between microseconds and milliseconds on bulk reads.
- */
-const rowDecoderCache = new WeakMap<ReadonlyArray<SelectionField>, RowDecoder>()
-
-/**
- * Precompile (and cache) the row decoder for a selection ahead of execution.
- * Prepared query handles call this at construction so the decoder plan is paid
- * once, at prepare time, not on the first read (spec §15.15).
- *
- * @param fields - Selected fields and their codecs.
- * @returns Nothing; the compiled decoder is retained in the selection cache.
- */
-/**
- * Compiles and caches a struct decoder for a stable selection array.
+ * Compiles a struct decoder for a selection. Compiling the decoder is the
+ * expensive part of Effect Schema; doing it once per query shape — instead of
+ * once per field per row — is the difference between microseconds and
+ * milliseconds on bulk reads. Callers cache the result in the decoder layer.
  *
  * @param fields - Selected fields and their codecs.
  * @returns A synchronous decoder for raw rows.
  */
-const rowDecoderFor = (fields: ReadonlyArray<SelectionField>): RowDecoder => {
-  let decode = rowDecoderCache.get(fields)
-  if (decode === undefined) {
-    const struct: Record<string, Schema.Schema<unknown, unknown>> = {}
-    for (const field of fields) struct[field.alias] = field.codec as Schema.Schema<unknown, unknown>
-    decode = Schema.decodeUnknownEither(Schema.Struct(struct)) as RowDecoder
-    rowDecoderCache.set(fields, decode)
-  }
-  return decode
+const buildRowDecoder = (fields: ReadonlyArray<SelectionField>): RowDecoder => {
+  const struct: Record<string, Schema.Schema<unknown, unknown>> = {}
+  for (const field of fields) struct[field.alias] = field.codec as Schema.Schema<unknown, unknown>
+  return Schema.decodeUnknownEither(Schema.Struct(struct)) as RowDecoder
 }
+
+/**
+ * Resolve (and cache) the row decoder for a selection through the
+ * {@link QueryCaches.decoder} layer.
+ *
+ * @param caches - Active cache registry.
+ * @param fields - Selected fields and their codecs.
+ * @returns A synchronous decoder for raw rows.
+ */
+const decoderVia = (caches: QueryCaches, fields: ReadonlyArray<SelectionField>): RowDecoder =>
+  caches.decoder.getOrCompute(fields, () => buildRowDecoder(fields)) as RowDecoder
+
+/**
+ * Precompile (and cache) the row decoder for a selection ahead of execution,
+ * through the process-wide default decoder layer. Prepared query handles call
+ * this at construction so the decoder plan is paid once, at prepare time, not on
+ * the first read (spec §15.15).
+ *
+ * @param fields - Selected fields and their codecs.
+ * @returns A synchronous decoder for raw rows.
+ */
+const rowDecoderFor = (fields: ReadonlyArray<SelectionField>): RowDecoder =>
+  decoderVia(defaultQueryCaches, fields)
 
 /**
  * Pinpoint the offending field on the (rare) decode-failure path so the error
@@ -707,11 +738,15 @@ export const executeRows = <A>(
   args: QueryArgs
 ): Effect.Effect<ReadonlyArray<A>, QueryError> =>
   Effect.gen(function* () {
-    yield* guardForMode(ir, db)
-    const compiled = compileCached(ir, db.dialect)
-    const values = yield* bindValues(ir, compiled.paramOrder, args)
-    const rows = yield* db.driver.query(compiled.sql, values, preparedNameFor(db, compiled))
-    return (yield* decodeForMode(fields, rows, db)) as ReadonlyArray<A>
+    const caches = cachesFor(db)
+    const shape = shapeVia(caches, ir)
+    yield* guardForMode(caches, shape, db)
+    const compiled = compileVia(caches, shape, db.dialect)
+    const values = yield* bindValues(shape, compiled.paramOrder, args)
+    const prepared = preparedNameFor(db, compiled)
+    if (prepared) caches.notePrepared(prepared)
+    const rows = yield* db.driver.query(compiled.sql, values, prepared)
+    return (yield* decodeForMode(caches, fields, rows, db)) as ReadonlyArray<A>
   })
 
 /**
@@ -728,10 +763,14 @@ export const executeCommand = (
   args: QueryArgs
 ): Effect.Effect<CommandResult, QueryError> =>
   Effect.gen(function* () {
-    yield* guardForMode(ir, db)
-    const compiled = compileCached(ir, db.dialect)
-    const values = yield* bindValues(ir, compiled.paramOrder, args)
-    return yield* db.driver.execute(compiled.sql, values, preparedNameFor(db, compiled))
+    const caches = cachesFor(db)
+    const shape = shapeVia(caches, ir)
+    yield* guardForMode(caches, shape, db)
+    const compiled = compileVia(caches, shape, db.dialect)
+    const values = yield* bindValues(shape, compiled.paramOrder, args)
+    const prepared = preparedNameFor(db, compiled)
+    if (prepared) caches.notePrepared(prepared)
+    return yield* db.driver.execute(compiled.sql, values, prepared)
   })
 
 // --- cardinality refinements (spec §6.5) ------------------------------------

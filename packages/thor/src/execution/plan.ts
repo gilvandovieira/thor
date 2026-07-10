@@ -17,14 +17,30 @@
 import { Effect, Layer } from "effect"
 import type { CompiledStatement } from "./driver.js"
 import { Database, type DatabaseService } from "./database.js"
+import { makeQueryCaches, type QueryCacheOptions } from "./cache.js"
 
 /**
- * Runtime safety/performance mode (spec §15.13). All three modes are wired:
+ * Runtime safety/performance mode (spec §10, §15.13). All three modes are wired:
  * `safe` (default) always guards and decodes; `trusted` skips re-guarding
- * shapes with a recorded prior pass; `unsafe` additionally skips decode. The
+ * shapes with a recorded prior pass; `unsafe-hot` additionally skips decode. The
  * non-default modes are opt-in only via {@link withMode}.
+ *
+ * `"unsafe"` is a **deprecated v0 alias** for `"unsafe-hot"` (spec §10.3); it is
+ * normalized away by {@link normalizeMode}. New code should use `"unsafe-hot"`.
  */
-export type ExecutionMode = "safe" | "trusted" | "unsafe"
+export type ExecutionMode = "safe" | "trusted" | "unsafe-hot" | "unsafe"
+
+/** Execution modes without the deprecated `"unsafe"` alias (spec §10). */
+export type CanonicalExecutionMode = "safe" | "trusted" | "unsafe-hot"
+
+/**
+ * Normalize the deprecated `"unsafe"` alias to `"unsafe-hot"` (spec §10.3).
+ *
+ * @param mode - Requested execution mode.
+ * @returns The canonical execution mode.
+ */
+export const normalizeMode = (mode: ExecutionMode): CanonicalExecutionMode =>
+  mode === "unsafe" ? "unsafe-hot" : mode
 
 /** How strictly decoded rows are validated. */
 export type DecodeMode = "strict" | "trusted"
@@ -50,28 +66,29 @@ export const planKey = (
 ): string => `${compiled.cacheKey}:${mode}:${decodeMode}`
 
 /**
- * The decode mode implied by an execution mode: `unsafe` trusts driver rows
- * (skips schema decoding); every other mode decodes strictly. An explicit
- * `decodeMode` always wins.
+ * The decode mode implied by an execution mode: `unsafe-hot` (and its deprecated
+ * `unsafe` alias) trusts driver rows (skips schema decoding); every other mode
+ * decodes strictly. An explicit `decodeMode` always wins.
  *
  * @param mode - Selected execution mode.
  * @param decodeMode - Optional explicit decode override.
  * @returns The effective decode mode.
  */
 export const resolveDecodeMode = (mode: ExecutionMode, decodeMode?: DecodeMode): DecodeMode =>
-  decodeMode ?? (mode === "unsafe" ? "trusted" : "strict")
+  decodeMode ?? (normalizeMode(mode) === "unsafe-hot" ? "trusted" : "strict")
 
 /**
- * Wrap a `Database` layer to run in a different execution mode (spec §15.13).
+ * Wrap a `Database` layer to run in a different execution mode (spec §10, §15.13).
  *
- * This is the opt-in for `trusted`/`unsafe` — it never changes the query API
+ * This is the opt-in for `trusted`/`unsafe-hot` — it never changes the query API
  * shape, only how much runtime work Thor does around the same compiled SQL.
- * `unsafe` is a deliberate, explicit choice (skips row decoding), so it must be
- * requested through this wrapper; it is never a default.
+ * `unsafe-hot` is a deliberate, explicit choice (skips row decoding), so it must
+ * be requested through this wrapper; it is never a default. The deprecated
+ * `unsafe` alias is normalized to `unsafe-hot`.
  *
  * ```ts
  * const HotPath = withMode(PostgresLayer(client), "trusted")
- * const Untyped = withMode(PostgresLayer(client), "unsafe") // skips decode — opt-in
+ * const Untyped = withMode(PostgresLayer(client), "unsafe-hot") // skips decode — opt-in
  * ```
  *
  * @param layer - Base layer providing `Database`.
@@ -86,5 +103,35 @@ export const withMode = (
 ): Layer.Layer<Database> =>
   Layer.effect(
     Database,
-    Effect.map(Database, (db): DatabaseService => ({ ...db, mode, decodeMode: resolveDecodeMode(mode, decodeMode) }))
+    Effect.map(Database, (db): DatabaseService => ({
+      ...db,
+      mode: normalizeMode(mode),
+      decodeMode: resolveDecodeMode(mode, decodeMode)
+    }))
+  ).pipe(Layer.provide(layer))
+
+/**
+ * Wrap a `Database` layer to install a named, bounded query cache (spec §9.3).
+ *
+ * By default a service uses the process-wide, unbounded {@link defaultQueryCaches}.
+ * This wrapper installs a dedicated {@link QueryCaches} registry — bounded LRU
+ * when `maxSize` is set — so the non-prepared execution path memoizes shape,
+ * compile, decoder and capability work within a retained budget and exposes
+ * hit/miss/eviction counters via `db.queryCache.stats()`.
+ *
+ * ```ts
+ * const Bounded = withQueryCache(PostgresLayer(client), { maxSize: 10_000, strategy: "lru" })
+ * ```
+ *
+ * @param layer - Base layer providing `Database`.
+ * @param options - Cache options; omit `maxSize` for an unbounded dedicated registry.
+ * @returns A layer providing `Database` with the cache installed.
+ */
+export const withQueryCache = (
+  layer: Layer.Layer<Database>,
+  options: QueryCacheOptions = {}
+): Layer.Layer<Database> =>
+  Layer.effect(
+    Database,
+    Effect.map(Database, (db): DatabaseService => ({ ...db, queryCache: makeQueryCaches(options) }))
   ).pipe(Layer.provide(layer))

@@ -1,0 +1,408 @@
+/**
+ * Named, bounded query cache layers (spec §9).
+ *
+ * v0 memoized on the hot path with ad-hoc module-level `WeakMap`s. v1 formalizes
+ * those into the **five named cache layers** the spec calls out, each keyed by
+ * query *shape* and never by parameter values (spec §9.2):
+ *
+ * ```txt
+ * Shape       Query IR                     → normalized IR
+ * Compile     Normalized IR + dialect       → compiled SQL
+ * Prepared    Compiled SQL + connection     → prepared-statement identity
+ * Decoder     Selection shape               → row decoder
+ * Capability  Capability bits + matrix ver. → capability (guard) result
+ * ```
+ *
+ * Every layer is a {@link CacheLayer}. The default backing is a
+ * {@link WeakCacheLayer} — unbounded and GC-friendly, matching the v0 behavior
+ * exactly (no retention, no eviction). Opting into {@link makeQueryCaches} with a
+ * `maxSize` swaps in a {@link BoundedLruCache} that retains at most `maxSize`
+ * shapes and evicts least-recently-used entries. Both flavors record hit/miss (and
+ * eviction) counters so cache effectiveness is observable (spec §9, §19; feeds S).
+ *
+ * The cache is a pure optimization: keys are query shapes (object identities and
+ * value-independent strings), so a miss only ever recomputes work that was already
+ * safe to recompute. Nothing here participates in guards or capability *safety* —
+ * a bounded cache that evicts an entry simply recomputes the guard result.
+ *
+ * @module execution/cache
+ */
+import type { Dialect } from "../dialect.js"
+import type { CapabilityMatrix } from "../capabilities/matrix.js"
+import type { QueryError } from "../errors/index.js"
+import type { CompiledStatement } from "./driver.js"
+
+/** Eviction strategy for a bounded cache layer. Only `"lru"` is defined in v1. */
+export type CacheStrategy = "lru"
+
+/** Options for {@link makeQueryCaches} / `withQueryCache` (spec §9.3). */
+export interface QueryCacheOptions {
+  /**
+   * Maximum number of distinct query shapes retained per layer. When set, layers
+   * become bounded LRU caches; when omitted, layers are unbounded and
+   * GC-friendly (the default, matching v0).
+   */
+  readonly maxSize?: number
+  /** Eviction strategy for bounded layers. Defaults to `"lru"`. */
+  readonly strategy?: CacheStrategy
+}
+
+/** Point-in-time counters for a single cache layer. */
+export interface CacheLayerStats {
+  /** Layer name (`shape`, `compile`, `prepared`, `decoder`, `capability`). */
+  readonly name: string
+  /** Lookups that returned a cached value. */
+  readonly hits: number
+  /** Lookups that had to compute a value. */
+  readonly misses: number
+  /** Entries dropped by the eviction policy (always `0` for unbounded layers). */
+  readonly evictions: number
+  /** Current number of retained entries (`undefined` for weak, uncountable layers). */
+  readonly size: number | undefined
+  /** Configured bound, or `undefined` when unbounded. */
+  readonly maxSize: number | undefined
+}
+
+/**
+ * A single cache layer keyed by an object *shape*. Both implementations record
+ * hit/miss counters; bounded layers additionally record evictions.
+ *
+ * @typeParam K - Shape key (an object identity — IR node, dialect, selection).
+ * @typeParam V - Cached value.
+ */
+export interface CacheLayer<K extends object, V> {
+  /** Human-readable layer name, used in {@link CacheLayerStats}. */
+  readonly name: string
+  /**
+   * Return the value cached for `key`, computing and storing it on a miss.
+   *
+   * @param key - Shape key.
+   * @param compute - Thunk run only on a miss.
+   * @returns The cached or freshly computed value.
+   */
+  getOrCompute(key: K, compute: () => V): V
+  /**
+   * Read a cached value without recording a miss or computing one.
+   *
+   * @param key - Shape key.
+   * @returns The cached value, or `undefined` when absent.
+   */
+  peek(key: K): V | undefined
+  /** @returns A snapshot of this layer's counters. */
+  stats(): CacheLayerStats
+  /**
+   * Clear all entries and reset counters.
+   *
+   * @returns Nothing.
+   */
+  reset(): void
+}
+
+/**
+ * Unbounded, GC-friendly cache layer backed by a `WeakMap`. Entries are retained
+ * only as long as their shape key is reachable elsewhere, so this never leaks and
+ * needs no eviction. `size` is unobservable for a `WeakMap` and reported as
+ * `undefined`.
+ *
+ * @typeParam K - Shape key.
+ * @typeParam V - Cached value.
+ */
+export class WeakCacheLayer<K extends object, V> implements CacheLayer<K, V> {
+  private store = new WeakMap<K, V>()
+  private hits = 0
+  private misses = 0
+
+  /**
+   * @param name - Layer name for diagnostics.
+   */
+  constructor(readonly name: string) {}
+
+  /**
+   * Return the value cached for `key`, computing and storing it on a miss.
+   *
+   * @param key - Shape key.
+   * @param compute - Thunk run only on a miss.
+   * @returns The cached or freshly computed value.
+   */
+  getOrCompute(key: K, compute: () => V): V {
+    const existing = this.store.get(key)
+    if (existing !== undefined) {
+      this.hits++
+      return existing
+    }
+    this.misses++
+    const value = compute()
+    this.store.set(key, value)
+    return value
+  }
+
+  /**
+   * Read a cached value without recording a miss or computing one.
+   *
+   * @param key - Shape key.
+   * @returns The cached value, or `undefined` when absent.
+   */
+  peek(key: K): V | undefined {
+    return this.store.get(key)
+  }
+
+  /** @returns A snapshot of this layer's counters (size is unobservable for a WeakMap). */
+  stats(): CacheLayerStats {
+    return { name: this.name, hits: this.hits, misses: this.misses, evictions: 0, size: undefined, maxSize: undefined }
+  }
+
+  /**
+   * Drop all entries and reset counters.
+   *
+   * @returns Nothing.
+   */
+  reset(): void {
+    // A WeakMap cannot be iterated/cleared; drop the reference instead.
+    this.store = new WeakMap<K, V>()
+    this.hits = 0
+    this.misses = 0
+  }
+}
+
+/**
+ * Bounded cache layer with least-recently-used eviction, backed by an insertion-
+ * ordered `Map`. Reads and writes move the entry to the most-recently-used end;
+ * once `maxSize` is exceeded the least-recently-used entry is evicted. Unlike
+ * {@link WeakCacheLayer} this retains keys strongly, which is the point — it caps
+ * memory at `maxSize` shapes.
+ *
+ * @typeParam K - Shape key.
+ * @typeParam V - Cached value.
+ */
+export class BoundedLruCache<K extends object, V> implements CacheLayer<K, V> {
+  private readonly store = new Map<K, V>()
+  private hits = 0
+  private misses = 0
+  private evictions = 0
+
+  /**
+   * @param name - Layer name for diagnostics.
+   * @param maxSize - Maximum retained entries; must be a positive integer.
+   * @throws {RangeError} When `maxSize` is not a positive integer.
+   */
+  constructor(readonly name: string, private readonly maxSize: number) {
+    if (!Number.isInteger(maxSize) || maxSize <= 0) {
+      throw new RangeError(`Query cache maxSize must be a positive integer, received ${maxSize}`)
+    }
+  }
+
+  /**
+   * Return the value cached for `key`, computing and storing it on a miss, and
+   * refresh the key to most-recently-used.
+   *
+   * @param key - Shape key.
+   * @param compute - Thunk run only on a miss.
+   * @returns The cached or freshly computed value.
+   */
+  getOrCompute(key: K, compute: () => V): V {
+    const existing = this.store.get(key)
+    if (existing !== undefined) {
+      this.hits++
+      // Refresh recency: delete + re-insert moves the key to the MRU end.
+      this.store.delete(key)
+      this.store.set(key, existing)
+      return existing
+    }
+    this.misses++
+    const value = compute()
+    this.store.set(key, value)
+    this.evict()
+    return value
+  }
+
+  /**
+   * Read a cached value without recording a miss, computing, or changing recency.
+   *
+   * @param key - Shape key.
+   * @returns The cached value, or `undefined` when absent.
+   */
+  peek(key: K): V | undefined {
+    return this.store.get(key)
+  }
+
+  /** @returns A snapshot of this layer's counters. */
+  stats(): CacheLayerStats {
+    return { name: this.name, hits: this.hits, misses: this.misses, evictions: this.evictions, size: this.store.size, maxSize: this.maxSize }
+  }
+
+  /**
+   * Drop all entries and reset counters.
+   *
+   * @returns Nothing.
+   */
+  reset(): void {
+    this.store.clear()
+    this.hits = 0
+    this.misses = 0
+    this.evictions = 0
+  }
+
+  /**
+   * Drop least-recently-used entries until the bound is honored.
+   *
+   * @returns Nothing.
+   */
+  private evict(): void {
+    while (this.store.size > this.maxSize) {
+      const oldest = this.store.keys().next().value as K | undefined
+      if (oldest === undefined) break
+      this.store.delete(oldest)
+      this.evictions++
+    }
+  }
+}
+
+/**
+ * Build one cache layer honoring the requested options: a {@link BoundedLruCache}
+ * when `maxSize` is set, otherwise an unbounded {@link WeakCacheLayer}.
+ *
+ * @typeParam K - Shape key.
+ * @typeParam V - Cached value.
+ * @param name - Layer name.
+ * @param options - Cache options (see {@link QueryCacheOptions}).
+ * @returns A cache layer.
+ */
+const makeLayer = <K extends object, V>(name: string, options: QueryCacheOptions): CacheLayer<K, V> =>
+  options.maxSize === undefined ? new WeakCacheLayer<K, V>(name) : new BoundedLruCache<K, V>(name, options.maxSize)
+
+/** Per-dialect compilation cache for one query shape. */
+type CompileByDialect = Map<Dialect, CompiledStatement>
+/** Per-policy capability (guard) result cache for one shape + matrix. */
+type GuardByPolicy = Map<boolean, QueryError | null>
+/** Per-matrix guard caches for one query shape. */
+type GuardByMatrix = Map<CapabilityMatrix, GuardByPolicy>
+
+/** A stable selection array used as the decoder cache key. */
+export type SelectionKey = ReadonlyArray<unknown>
+/** A stable row decoder produced for a selection shape. */
+export type DecoderValue = unknown
+
+/**
+ * The five named query cache layers (spec §9.1), bundled per configuration.
+ *
+ * The **shape**, **compile**, **decoder** and **capability** layers back the
+ * non-prepared execution path in `run.ts`. The **prepared** layer observes which
+ * compiled shapes are eligible for server-side prepared-statement reuse (the
+ * statement itself lives in the driver/connection, keyed by `cacheKey`). Prepared
+ * query handles (Epic D) keep their own per-handle caches and do not consult this
+ * registry.
+ *
+ * Construct with {@link makeQueryCaches}; the process-wide default is
+ * {@link defaultQueryCaches}.
+ */
+export class QueryCaches {
+  /** Shape layer: raw IR identity → normalized IR. */
+  readonly shape: CacheLayer<object, unknown>
+  /** Compile layer: normalized IR identity → per-dialect compiled SQL. */
+  readonly compile: CacheLayer<object, CompileByDialect>
+  /** Decoder layer: selection shape → compiled row decoder. */
+  readonly decoder: CacheLayer<SelectionKey & object, DecoderValue>
+  /** Capability layer: IR identity → per-matrix, per-policy guard result. */
+  readonly capability: CacheLayer<object, GuardByMatrix>
+  /**
+   * Prepared layer: value-independent compiled-shape keys already registered for
+   * server-side prepared-statement reuse. Insertion-ordered so it can honor the
+   * same LRU bound as the object-keyed layers (the statement itself lives in the
+   * driver/connection; this only observes reuse).
+   */
+  private preparedNames = new Set<string>()
+  private preparedHits = 0
+  private preparedMisses = 0
+  private preparedEvictions = 0
+
+  /**
+   * @param options - Cache options; omit `maxSize` for unbounded (default) layers.
+   */
+  constructor(private readonly options: QueryCacheOptions = {}) {
+    this.shape = makeLayer("shape", options)
+    this.compile = makeLayer("compile", options)
+    this.decoder = makeLayer("decoder", options)
+    this.capability = makeLayer("capability", options)
+  }
+
+  /**
+   * Record that a compiled shape is eligible for prepared-statement reuse and
+   * report whether its identity was already seen (a prepared "hit"). Honors the
+   * registry's `maxSize` bound, evicting the least-recently-registered key.
+   *
+   * @param key - Value-independent compiled cache key.
+   * @returns `true` when this identity was already registered.
+   */
+  notePrepared(key: string): boolean {
+    if (this.preparedNames.has(key)) {
+      this.preparedHits++
+      // Refresh recency so a reused shape is not the next eviction victim.
+      this.preparedNames.delete(key)
+      this.preparedNames.add(key)
+      return true
+    }
+    this.preparedMisses++
+    this.preparedNames.add(key)
+    const { maxSize } = this.options
+    if (maxSize !== undefined) {
+      while (this.preparedNames.size > maxSize) {
+        const oldest = this.preparedNames.values().next().value as string | undefined
+        if (oldest === undefined) break
+        this.preparedNames.delete(oldest)
+        this.preparedEvictions++
+      }
+    }
+    return false
+  }
+
+  /** @returns A snapshot of every layer's counters (spec §9, §19). */
+  stats(): ReadonlyArray<CacheLayerStats> {
+    return [
+      this.shape.stats(),
+      this.compile.stats(),
+      {
+        name: "prepared",
+        hits: this.preparedHits,
+        misses: this.preparedMisses,
+        evictions: this.preparedEvictions,
+        size: this.preparedNames.size,
+        maxSize: this.options.maxSize
+      },
+      this.decoder.stats(),
+      this.capability.stats()
+    ]
+  }
+
+  /**
+   * Clear every layer and reset all counters.
+   *
+   * @returns Nothing.
+   */
+  reset(): void {
+    this.shape.reset()
+    this.compile.reset()
+    this.decoder.reset()
+    this.capability.reset()
+    this.preparedNames = new Set<string>()
+    this.preparedHits = 0
+    this.preparedMisses = 0
+    this.preparedEvictions = 0
+  }
+}
+
+/**
+ * Build a {@link QueryCaches} registry from cache options (spec §9.3). Omitting
+ * `maxSize` yields unbounded, GC-friendly layers identical to v0; supplying it
+ * yields bounded LRU layers.
+ *
+ * @param options - Cache options.
+ * @returns A configured cache registry.
+ */
+export const makeQueryCaches = (options: QueryCacheOptions = {}): QueryCaches => new QueryCaches(options)
+
+/**
+ * Process-wide default cache registry used when a `Database` layer does not
+ * install its own via `withQueryCache`. Unbounded and GC-friendly, so default
+ * execution keeps v0 memory/perf behavior.
+ */
+export const defaultQueryCaches: QueryCaches = new QueryCaches()

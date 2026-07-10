@@ -43,6 +43,7 @@ import {
 } from "../execution/run.js"
 import type { CommandResult, CompiledStatement } from "../execution/driver.js"
 import { compilableEffect, type TerminalResult } from "../execution/compiled-query.js"
+import { withMode, withQueryCache } from "../execution/plan.js"
 import {
   type Expr,
   type MergeParameterMaps,
@@ -1334,6 +1335,16 @@ class DeleteBuilder<T extends AnyTable, P extends NamedParams = {}> {
 export const db = {
   /** Runs an Effect in a transaction; nested calls use savepoints. */
   transaction,
+  /**
+   * Wrap a `Database` layer to run in a safety/performance mode (spec §10).
+   * `db`-level sugar over the layer wrapper of the same name.
+   */
+  withMode,
+  /**
+   * Wrap a `Database` layer to install a named, bounded query cache (spec §9.3).
+   * `db`-level sugar over the layer wrapper of the same name.
+   */
+  withQueryCache,
   /**
    * @param fields - Output aliases mapped to columns or expressions.
    * @returns A select awaiting `from()`.

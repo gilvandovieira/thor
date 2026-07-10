@@ -13,8 +13,10 @@ import type { Dialect } from "../dialect.js"
 import { CompileError } from "../errors/index.js"
 import type { QueryIR, SelectionField } from "../ir/query-ir.js"
 import { PostgresDialect } from "../postgres/dialect.js"
+import { defaultQueryCaches } from "./cache.js"
 import { Database, type DatabaseService } from "./database.js"
 import type { CompiledStatement } from "./driver.js"
+import type { CanonicalExecutionMode } from "./plan.js"
 import { PreparedExecutionPlan, type QueryArgs } from "./run.js"
 
 type NamedParams = Record<string, unknown>
@@ -24,6 +26,34 @@ type ExecutionArguments<P extends NamedParams> = keyof P extends never
 
 /** Cardinality contract selected by a terminal query method. */
 export type CompiledCardinality = "all" | "one" | "maybeOne" | "run"
+
+/**
+ * Per-compile precompilation options (spec §9.3, §9.4).
+ *
+ * A compiled handle owns its validated shape, SQL, parameter plan and decoder, so
+ * it is already the fully-cached hot path. These options tune the two remaining
+ * knobs at execution time without changing the query API shape.
+ */
+export interface CompileOptions {
+  /**
+   * Record cache-layer prepared-reuse counters for this handle's executions
+   * (spec §9). Defaults to `true`; set `false` to keep executions out of the
+   * observed cache statistics.
+   */
+  readonly cache?: boolean
+  /**
+   * Force server-side prepared-statement reuse on (`true`) or off (`false`),
+   * overriding the service policy (spec §9.4 `compilePrepared`). Defaults to
+   * inheriting the active `Database` policy.
+   */
+  readonly prepare?: boolean
+  /**
+   * Override the execution mode for this handle (spec §10). `unsafe-hot` skips
+   * row decoding and must be opted into explicitly (spec §10.3); capability
+   * guards are always retained. Defaults to inheriting the active mode.
+   */
+  readonly mode?: CanonicalExecutionMode
+}
 
 /**
  * A stable, executable query shape (v1 spec §8.3).
@@ -70,13 +100,38 @@ export type CompilableEffect<
   Cardinality extends CompiledCardinality
 > = Effect.Effect<Output, Error, Database> & {
   /**
-   * Validates and compiles this query shape for one dialect.
+   * Validates and compiles this query shape for one dialect (spec §9.4).
    *
    * @typeParam D - Selected dialect type.
    * @param dialect - Target dialect; defaults to PostgreSQL.
+   * @param options - Per-compile precompilation options.
    * @returns A reusable executable handle.
    */
   compile<D extends Dialect = typeof PostgresDialect>(
+    dialect?: D,
+    options?: CompileOptions
+  ): CompiledQuery<Params, Output, Error, Database, D, Cardinality>
+  /**
+   * Compiles and forces server-side prepared-statement reuse where the driver
+   * supports it (spec §9.4 `compilePrepared`).
+   *
+   * @typeParam D - Selected dialect type.
+   * @param dialect - Target dialect; defaults to PostgreSQL.
+   * @returns A reusable executable handle that prepares.
+   */
+  compilePrepared<D extends Dialect = typeof PostgresDialect>(
+    dialect?: D
+  ): CompiledQuery<Params, Output, Error, Database, D, Cardinality>
+  /**
+   * Compiles for the `unsafe-hot` path: prepared and decode-skipping, an explicit
+   * opt-in for already validated queries (spec §9.4 `compileUnsafeHot`, §10.3).
+   * Capability guards are still enforced.
+   *
+   * @typeParam D - Selected dialect type.
+   * @param dialect - Target dialect; defaults to PostgreSQL.
+   * @returns A reusable executable handle running in `unsafe-hot` mode.
+   */
+  compileUnsafeHot<D extends Dialect = typeof PostgresDialect>(
     dialect?: D
   ): CompiledQuery<Params, Output, Error, Database, D, Cardinality>
 }
@@ -89,13 +144,38 @@ export interface CompilableTerminal<
   Cardinality extends CompiledCardinality
 > {
   /**
-   * Validates and compiles this query shape for one dialect.
+   * Validates and compiles this query shape for one dialect (spec §9.4).
    *
    * @typeParam D - Selected dialect type.
    * @param dialect - Target dialect; defaults to PostgreSQL.
+   * @param options - Per-compile precompilation options.
    * @returns A reusable executable handle.
    */
   compile<D extends Dialect = typeof PostgresDialect>(
+    dialect?: D,
+    options?: CompileOptions
+  ): CompiledQuery<Params, Output, Error, Database, D, Cardinality>
+  /**
+   * Compiles and forces server-side prepared-statement reuse where the driver
+   * supports it (spec §9.4 `compilePrepared`).
+   *
+   * @typeParam D - Selected dialect type.
+   * @param dialect - Target dialect; defaults to PostgreSQL.
+   * @returns A reusable executable handle that prepares.
+   */
+  compilePrepared<D extends Dialect = typeof PostgresDialect>(
+    dialect?: D
+  ): CompiledQuery<Params, Output, Error, Database, D, Cardinality>
+  /**
+   * Compiles for the `unsafe-hot` path: prepared and decode-skipping, an explicit
+   * opt-in for already validated queries (spec §9.4 `compileUnsafeHot`, §10.3).
+   * Capability guards are still enforced.
+   *
+   * @typeParam D - Selected dialect type.
+   * @param dialect - Target dialect; defaults to PostgreSQL.
+   * @returns A reusable executable handle running in `unsafe-hot` mode.
+   */
+  compileUnsafeHot<D extends Dialect = typeof PostgresDialect>(
     dialect?: D
   ): CompiledQuery<Params, Output, Error, Database, D, Cardinality>
 }
@@ -135,18 +215,41 @@ class CompiledQueryImpl<
    * @param dialect - Dialect used to compile the statement.
    * @param cardinality - Terminal cardinality contract.
    * @param executor - Terminal-specific hot-path execution function.
+   * @param options - Per-compile precompilation options (mode/prepare/cache).
    */
   constructor(
     private readonly plan: PreparedExecutionPlan,
     private readonly statement: CompiledStatement,
     readonly dialect: D,
     readonly cardinality: Cardinality,
-    private readonly executor: CompiledExecutor<Output, Error>
+    private readonly executor: CompiledExecutor<Output, Error>,
+    private readonly options: CompileOptions = {}
   ) {
     this.cacheKey = statement.cacheKey
     this.capabilities = new Set(bitsToCapabilities(plan.capabilityBits))
     this.dialectId = dialect.id
     this.profileHash = dialect.profileHash
+  }
+
+  /**
+   * Apply this handle's `mode`/`prepare` options to the active service so the
+   * shared executors observe the requested policy without new signatures.
+   *
+   * @param db - Active database service.
+   * @returns The service, or a policy-overridden copy.
+   */
+  private applyPolicy(db: DatabaseService): DatabaseService {
+    const { mode, prepare } = this.options
+    if (mode === undefined && prepare === undefined) return db
+    const next: DatabaseService = { ...db }
+    if (mode !== undefined) {
+      // Drop any inherited explicit decode override so decode derives from mode.
+      const mutable = next as { mode: typeof mode; decodeMode?: unknown }
+      mutable.mode = mode
+      delete mutable.decodeMode
+    }
+    if (prepare !== undefined) (next as { preparedStatements: boolean }).preparedStatements = prepare
+    return next
   }
 
   /**
@@ -161,9 +264,13 @@ class CompiledQueryImpl<
         })) as unknown as Effect.Effect<Output, Error>
       }
 
-      const failure = this.plan.guard(db.dialect, db.allowEmulation)
+      const service = this.applyPolicy(db)
+      const failure = this.plan.guard(service.dialect, service.allowEmulation)
       if (failure) return Effect.fail(failure) as unknown as Effect.Effect<Output, Error>
-      return this.executor(this.plan, this.statement, db, args[0] ?? {})
+      if (this.options.cache !== false && service.preparedStatements && this.statement.paramOrder.length > 0) {
+        ;(service.queryCache ?? defaultQueryCaches).notePrepared(this.statement.cacheKey)
+      }
+      return this.executor(this.plan, this.statement, service, args[0] ?? {})
     })
   }
 }
@@ -195,8 +302,8 @@ export const compilableEffect = <
   fields: ReadonlyArray<SelectionField>,
   cardinality: Cardinality,
   executor: CompiledExecutor<Output, Error>
-): CompilableEffect<Params, Output, Error, Cardinality> => Object.assign(effect, {
-  compile: <D extends Dialect = typeof PostgresDialect>(dialect: D = PostgresDialect as D) => {
+): CompilableEffect<Params, Output, Error, Cardinality> => {
+  const build = <D extends Dialect>(dialect: D, options: CompileOptions) => {
     const plan = new PreparedExecutionPlan(ir, fields)
     const failure = plan.guard(dialect, false)
     if (failure) throw failure
@@ -206,7 +313,16 @@ export const compilableEffect = <
       statement,
       dialect,
       cardinality,
-      executor
+      executor,
+      options
     )
   }
-})
+  return Object.assign(effect, {
+    compile: <D extends Dialect = typeof PostgresDialect>(dialect: D = PostgresDialect as D, options: CompileOptions = {}) =>
+      build(dialect, options),
+    compilePrepared: <D extends Dialect = typeof PostgresDialect>(dialect: D = PostgresDialect as D) =>
+      build(dialect, { prepare: true }),
+    compileUnsafeHot: <D extends Dialect = typeof PostgresDialect>(dialect: D = PostgresDialect as D) =>
+      build(dialect, { prepare: true, mode: "unsafe-hot" })
+  })
+}
