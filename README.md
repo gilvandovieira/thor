@@ -101,7 +101,10 @@ const program = FirstPostByAuthor.execute({ authorId: "ada-id" })
 ```
 
 See [compiled queries](docs/compiled-queries.md) for dialect targeting, safety
-invariants, and the full stable surface.
+invariants, and the full stable surface. For the named cache layers behind this
+hot path, bounded LRU caches (`withQueryCache`), precompilation modes
+(`compilePrepared`/`compileUnsafeHot`), and the safety modes
+(`safe`/`trusted`/`unsafe-hot`), see [the query cache guide](docs/query-cache.md).
 
 ### 4. Run it
 
@@ -323,6 +326,7 @@ pnpm db:up        # or start postgres@5433 + mysql@3307 yourself
 
 - [`docs/advanced-queries.md`](docs/advanced-queries.md) — joins, subqueries, aggregation, CTEs, upserts
 - [`docs/compiled-queries.md`](docs/compiled-queries.md) - stable compiled handles, metadata, and hot-path invariants
+- [`docs/query-cache.md`](docs/query-cache.md) — named cache layers, bounded LRU caches, precompilation modes, and safety modes
 - [`docs/routines.md`](docs/routines.md) — declared functions, table-valued sources, procedures, and capability behavior
 - [`docs/driver-benchmarks.md`](docs/driver-benchmarks.md) — plain-language benchmark guide, prepared vs unprepared drivers, and hot-path cost
 - [`docs/query-builder-benchmarks.md`](docs/query-builder-benchmarks.md) — Thor versus Drizzle and Prisma query construction, method, results, and caveats

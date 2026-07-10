@@ -11,6 +11,7 @@ import { Context } from "effect"
 import type { Dialect } from "../dialect.js"
 import type { Driver } from "./driver.js"
 import type { DecodeMode, ExecutionMode } from "./plan.js"
+import type { QueryCaches } from "./cache.js"
 
 /** Services required by query execution. */
 export interface DatabaseService {
@@ -35,6 +36,12 @@ export interface DatabaseService {
   readonly mode?: ExecutionMode
   /** Row-decode strictness (spec §15.13). Absent → derived from `mode`. */
   readonly decodeMode?: DecodeMode
+  /**
+   * Named query cache registry backing the non-prepared execution path (spec
+   * §9.1). Absent → the process-wide {@link defaultQueryCaches} (unbounded,
+   * GC-friendly). Install a bounded LRU registry with `withQueryCache`.
+   */
+  readonly queryCache?: QueryCaches
 }
 
 /** Effect context tag that provides the active `DatabaseService`. */

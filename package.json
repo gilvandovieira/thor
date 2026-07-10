@@ -36,6 +36,7 @@
     "bench:overhead:bun": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec bun scripts/bench-overhead.mts",
     "bench:sqlite:bun": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec bun scripts/bench-sqlite.mts",
     "bench:hotpath": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-hotpath.mts",
+    "bench:cache": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-cache.mts",
     "bench:hotpath:bun": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec bun scripts/bench-hotpath.mts",
     "bench:gate": "pnpm --filter @gilvandovieira/thor run build && BENCH_GATE=1 pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-hotpath.mts",
     "bench:baseline": "pnpm --filter @gilvandovieira/thor run build && BENCH_UPDATE_BASELINE=1 pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-hotpath.mts",

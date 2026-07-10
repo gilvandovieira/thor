@@ -322,9 +322,10 @@ exactly what unblocks **G6b** (Levels 3–5, 9) and **H5b** (join/subquery fuzzi
 
 # Part II — v1 milestone
 
-> **Resumed after Part 0 P0 and the P1 release gate landed.** Epic K is the first
-> resumed v1 expansion. P2-11/P2-12 remain beta gates, so alpha work may proceed
-> but no beta/public release may bypass those maintenance and documentation tasks.
+> **Resumed after Part 0 P0 and the P1 release gate landed.** Epics K and L (the
+> alpha.1 compiled-query + cache foundation) are the first resumed v1 expansion.
+> P2-11/P2-12 remain beta gates, so alpha work may proceed but no beta/public
+> release may bypass those maintenance and documentation tasks.
 
 Source of truth: [`thor-project-v1-spec.md`](./thor-project-v1-spec.md) (the
 production-readiness release). v1 keeps the v0 foundation (typed/runtime IR,
@@ -342,7 +343,7 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | Epic | Theme | v1 spec | Milestone | Builds on | Status |
 |---|---|---|---|---|---|
 | K | Compiled Query API (`.compile()` → executable handle) | §8 | alpha.1 | D (`.prepare`) | ✅ K1–K5 |
-| L | Query caches + precompilation modes | §9, §10 | alpha.1 | F, D, E | ❌ |
+| L | Query caches + precompilation modes | §9, §10 | alpha.1 | F, D, E | ✅ L1–L6 |
 | M | Dialect hardening v1 (full contract, MySQL/Postgres) | §11 | alpha.2 | B | 🟡 (v0 suites pass) |
 | N | Runtime lanes v1 (Node + Bun) | §12 | alpha.3 | C | 🟡 (caps + Bun harness) |
 | O | Migration hardening v1 (dry-run, expand/contract, policies) | §15 | alpha.4 | migrator (§13 v0) | 🟡 |
@@ -392,14 +393,20 @@ implemented and verified. ✅
 
 > Formalize the ad-hoc WeakMaps (Epics F/D) into named, bounded cache layers.
 
-| # | Task | Spec | Acceptance |
-|---|---|---|---|
-| L1 | Name the 5 cache layers: shape, compile, prepared, decoder, capability | §9.1 | each keyed by **shape, not values** (§9.2); documented |
-| L2 | `db.withQueryCache({ maxSize, strategy: "lru" })` | §9.3 | bounded caches with eviction; default sizes |
-| L3 | `query.compile({ cache, prepare })` options | §9.3 | opt in/out of cache + prepared per compile |
-| L4 | `compile()` / `compilePrepared()` / `compileUnsafeHot()` | §9.4 | prepared when driver supports; `compileUnsafeHot` requires explicit unsafe opt-in on pre-validated paths |
-| L5 | `db.withMode("safe"\|"trusted"\|"unsafe-hot")` sugar over Epic E | §10 | rename `unsafe`→`unsafe-hot`; `withMode` on `db`, not only the layer |
-| L6 | Cache-layer benchmarks + hit/miss counters | §9, §19 | cold/warm/prepared measured per layer; feeds observability (S) |
+| # | Status | Task | Spec | Acceptance |
+|---|---|---|---|---|
+| L1 | ✅ | Name the 5 cache layers: shape, compile, prepared, decoder, capability | §9.1 | `execution/cache.ts` names all five as `CacheLayer`s in a `QueryCaches` registry, each keyed by **shape, not values** (§9.2); `run.ts` routes the non-prepared path through them; documented in `docs/query-cache.md` |
+| L2 | ✅ | `db.withQueryCache({ maxSize, strategy: "lru" })` | §9.3 | `withQueryCache(layer, { maxSize, strategy })` (and `db.withQueryCache`) installs a bounded `BoundedLruCache` per layer with LRU eviction; default (omit `maxSize`) stays unbounded/GC-friendly |
+| L3 | ✅ | `query.compile({ cache, prepare })` options | §9.3 | `.compile(dialect?, { cache, prepare, mode })` opts prepared/cache-observation per compile without baking values |
+| L4 | ✅ | `compile()` / `compilePrepared()` / `compileUnsafeHot()` | §9.4 | all three on every terminal; `compilePrepared` forces prepared reuse; `compileUnsafeHot` requires the explicit method (prepared + decode-skip) yet still enforces capability guards |
+| L5 | ✅ | `db.withMode("safe"\|"trusted"\|"unsafe-hot")` sugar over Epic E | §10 | `unsafe`→`unsafe-hot` with a normalized deprecated alias; `withMode`/`withQueryCache` exposed on `db` as well as the layer wrapper |
+| L6 | ✅ | Cache-layer benchmarks + hit/miss counters | §9, §19 | `bench:cache` measures cold/warm/prepared and prints per-layer hit/miss/eviction/size counters; `db.queryCache.stats()` exposes them for observability (S) |
+
+**Release-work record:** prerequisites Epics F/D/E ✅; owner Thor maintainers;
+required tests `query-cache.test.ts` plus full unit/type/docs/quality checks;
+closes the alpha.1 claim that hot-path caches are named, bounded, observable, and
+never keyed by parameter values. **Definition of done:** L1–L6 are implemented and
+verified. ✅
 
 ## Epic M — Dialect hardening v1 (§11, alpha.2)
 

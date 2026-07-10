@@ -129,13 +129,27 @@ export {
 } from "./execution/transaction.js"
 export {
   type ExecutionMode,
+  type CanonicalExecutionMode,
   type DecodeMode,
   planKey,
   resolveDecodeMode,
+  normalizeMode,
   withMode,
+  withQueryCache,
   DEFAULT_EXECUTION_MODE,
   DEFAULT_DECODE_MODE
 } from "./execution/plan.js"
+export {
+  type QueryCacheOptions,
+  type CacheStrategy,
+  type CacheLayer,
+  type CacheLayerStats,
+  QueryCaches,
+  WeakCacheLayer,
+  BoundedLruCache,
+  makeQueryCaches,
+  defaultQueryCaches
+} from "./execution/cache.js"
 
 // Capabilities & errors
 export * as Capabilities from "./capabilities/index.js"
