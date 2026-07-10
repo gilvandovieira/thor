@@ -268,6 +268,7 @@ pnpm db:up        # or start postgres@5433 + mysql@3307 yourself
 - [`docs/advanced-queries.md`](docs/advanced-queries.md) — joins, subqueries, aggregation, CTEs, upserts
 - [`docs/routines.md`](docs/routines.md) — declared functions, table-valued sources, procedures, and capability behavior
 - [`docs/driver-benchmarks.md`](docs/driver-benchmarks.md) — the two Postgres drivers, prepared vs unprepared, hot-path cost
+- [`docs/query-builder-benchmarks.md`](docs/query-builder-benchmarks.md) — Thor versus Drizzle and Prisma query construction, method, results, and caveats
 - [`docs/optimization-strategies.md`](docs/optimization-strategies.md) — cache keys and the hot path
 - [`docs/api-documentation.md`](docs/api-documentation.md) — JSDoc conventions
 - [`docs/thor-project-v1-spec.md`](docs/thor-project-v1-spec.md) — the specification · [`docs/roadmap.md`](docs/roadmap.md) — progress by epic

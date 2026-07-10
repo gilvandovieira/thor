@@ -5,3 +5,5 @@ minimumReleaseAgeStrict: true
 allowBuilds:
   esbuild: true
   better-sqlite3: true
+  '@prisma/engines': true
+  prisma: true

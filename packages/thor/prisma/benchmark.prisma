@@ -1,0 +1,27 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../.generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model BenchUser {
+  id    String  @id @default(uuid()) @db.Uuid
+  email String  @unique
+  name  String?
+  age   Int?
+  posts BenchPost[]
+
+  @@map("bench_users")
+}
+
+model BenchPost {
+  id     String    @id @default(uuid()) @db.Uuid
+  userId String    @map("user_id") @db.Uuid
+  user   BenchUser @relation(fields: [userId], references: [id])
+
+  @@map("bench_posts")
+}
