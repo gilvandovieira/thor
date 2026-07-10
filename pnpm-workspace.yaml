@@ -2,6 +2,8 @@ packages:
   - "packages/*"
 minimumReleaseAge: 10080
 minimumReleaseAgeStrict: true
+overrides:
+  undici-types: 6.27.0
 allowBuilds:
   esbuild: true
   better-sqlite3: true

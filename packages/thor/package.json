@@ -4,6 +4,26 @@
   "description": "Effect-native ORM/database toolkit: fluent schema/query authoring, typed + runtime IR, capability matrix, guards, safe migrations, safe routines.",
   "type": "module",
   "license": "MIT",
+  "homepage": "https://github.com/gilvandovieira/thor#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gilvandovieira/thor.git",
+    "directory": "packages/thor"
+  },
+  "bugs": {
+    "url": "https://github.com/gilvandovieira/thor/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "sideEffects": false,
   "exports": {
     ".": {
@@ -49,22 +69,22 @@
   },
   "scripts": {
     "build": "tsc -b",
+    "clean": "rm -rf dist .tsbuildinfo",
+    "prepack": "pnpm run clean && pnpm run build",
     "typecheck": "tsc -b --noEmit",
     "bench": "tsx src/bench/index.ts"
   },
   "peerDependencies": {
     "effect": "^3.21.0"
   },
-  "dependencies": {
-    "effect": "^3.21.0"
-  },
   "devDependencies": {
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
-    "@types/node": "^26.1.0",
+    "@types/node": "22.19.0",
     "@types/pg": "8.20.0",
     "better-sqlite3": "12.11.1",
     "drizzle-orm": "^0.45.2",
+    "effect": "^3.21.0",
     "mysql2": "^3.22.5",
     "pg": "8.22.0",
     "postgres": "3.4.9",

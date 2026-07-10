@@ -4,20 +4,38 @@
   "description": "Thor migration CLI.",
   "type": "module",
   "license": "MIT",
+  "homepage": "https://github.com/gilvandovieira/thor#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gilvandovieira/thor.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/gilvandovieira/thor/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "thor": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc -b",
+    "clean": "rm -rf dist .tsbuildinfo",
+    "prepack": "pnpm run clean && pnpm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "tsx src/index.ts"
   },
-  "dependencies": {
-    "@gilvandovieira/thor": "workspace:*",
-    "effect": "^3.21.0"
-  },
   "devDependencies": {
-    "@types/node": "^26.1.0",
+    "@types/node": "22.19.0",
     "tsx": "^4.22.5"
   }
 }

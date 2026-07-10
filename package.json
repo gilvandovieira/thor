@@ -6,13 +6,19 @@
   "type": "module",
   "packageManager": "pnpm@11.3.0",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "build": "pnpm -r run build",
-    "docs:check": "node scripts/check-docs.mjs",
+    "docs:check": "node scripts/check-docs.mjs && node scripts/check-readme-examples.mjs && node scripts/generate-capabilities.mjs --check",
+    "docs:examples": "node scripts/check-readme-examples.mjs",
+    "quality:check": "biome ci packages/thor/src/execution/transaction.ts packages/thor/src/ir/query-analysis.ts packages/thor/src/sql/raw.ts packages/thor/test/transaction.test.ts packages/thor/test/scoped-layers.test.ts scripts/test-packages.mjs && knip",
+    "quality:fix": "biome check --write packages/thor/src/execution/transaction.ts packages/thor/src/ir/query-analysis.ts packages/thor/src/sql/raw.ts packages/thor/test/transaction.test.ts packages/thor/test/scoped-layers.test.ts scripts/test-packages.mjs",
     "typecheck": "pnpm -r run typecheck",
+    "test:types": "pnpm --filter @gilvandovieira/thor run build && tsc -p packages/thor/test/tsconfig.json",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:packages": "pnpm build && node scripts/test-packages.mjs",
     "test:property": "pnpm --filter @gilvandovieira/thor run build && vitest run packages/thor/test/property-ir.test.ts",
     "test:watch": "vitest",
     "test:contract:sqlite:node": "pnpm --filter @gilvandovieira/thor run build && vitest run packages/thor/test/sqlite.contract.test.ts",
@@ -37,8 +43,12 @@
     "bench:e2e": "pnpm db:up && DATABASE_URL=postgres://thor:thor@localhost:5433/thor pnpm bench:drivers; ec=$?; pnpm db:down; exit $ec"
   },
   "devDependencies": {
-    "@types/node": "^26.1.0",
+    "@biomejs/biome": "2.2.4",
+    "@types/node": "22.19.0",
+    "@vitest/coverage-v8": "^4.1.9",
+    "effect": "^3.21.0",
     "fast-check": "4.8.0",
+    "knip": "^5.62.0",
     "typescript": "6.0.3",
     "vitest": "^4.1.9"
   }
