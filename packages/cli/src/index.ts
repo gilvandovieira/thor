@@ -20,13 +20,18 @@ Commands:
                     Print postgres/sqlite/mysql or runtime capability statuses
   skills <list|export>
                     List or export Thor LLM skills (--to <dir>, --format md|json)
+  inspect <schema|routines>
+                    Introspect the configured database
+  introspect        Print the live database's Schema IR
+  pull              Write the introspected Schema IR to thor.introspected.json
+  drift             Report differences between the database and schema-as-code
+  doctor            Check runtime/config/connectivity/journal/drift/capabilities
 `
 
 /**
  * @returns Nothing. Dispatches the command represented by `process.argv`.
-
  */
-const main = (): void => {
+const main = async (): Promise<void> => {
   const [command, ...rest] = process.argv.slice(2)
   const cwd = process.cwd()
 
@@ -45,15 +50,23 @@ const main = (): void => {
       return commands.capabilities(rest)
     case "skills":
       return commands.skills(cwd, rest)
+    case "inspect":
+      return commands.inspect(cwd, rest)
+    case "introspect":
+      return commands.introspect(cwd)
+    case "pull":
+      return commands.pull(cwd)
+    case "drift":
+      return commands.drift(cwd)
+    case "doctor":
+      return commands.doctor(cwd)
     default:
       process.stderr.write(`Unsupported command: ${command}.\n\n${HELP}`)
       process.exitCode = 1
   }
 }
 
-try {
-  main()
-} catch (error) {
+main().catch((error) => {
   process.stderr.write(`Error: ${(error as Error).message}\n`)
   process.exitCode = 1
-}
+})

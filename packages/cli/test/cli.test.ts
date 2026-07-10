@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -19,6 +19,32 @@ const project = (): string => {
   const directory = mkdtempSync(join(tmpdir(), "thor-cli-"))
   directories.push(directory)
   return directory
+}
+
+const SCHEMA_TS = (extraColumn = false): string =>
+  `import { sqlite } from "@gilvandovieira/thor"
+export const users = sqlite.table("users", {
+  id: sqlite.uuid("id").primaryKey(),
+  email: sqlite.text("email").notNull()${extraColumn ? ",\n  name: sqlite.text(\"name\").notNull()" : ""}
+})
+`
+const USERS_DDL = 'create table "users" ("id" text not null, "email" text not null, primary key ("id"))'
+
+// A project under packages/cli/ so tsx can resolve @gilvandovieira/thor from the
+// workspace, with a SQLite database created from the given DDL.
+const dbProject = async (schemaSource: string): Promise<string> => {
+  const dir = mkdtempSync(join(resolve("packages/cli"), ".dbtest-"))
+  directories.push(dir)
+  writeFileSync(join(dir, "schema.ts"), schemaSource)
+  writeFileSync(
+    join(dir, "thor.config.json"),
+    JSON.stringify({ migrationsDir: "migrations", schema: "schema.ts", database: { dialect: "sqlite", url: "app.db" } })
+  )
+  const { DatabaseSync } = await import("node:sqlite")
+  const db = new DatabaseSync(join(dir, "app.db"))
+  db.exec(USERS_DDL)
+  db.close()
+  return dir
 }
 
 afterEach(() => {
@@ -135,5 +161,50 @@ describe("published CLI surface", () => {
     const badSub = spawnSync(process.execPath, [cli, "skills", "wat"], { cwd, encoding: "utf8" })
     expect(badSub.status).toBe(1)
     expect(badSub.stderr).toContain("Usage: thor skills")
+  })
+})
+
+describe("database-connected commands (spec §16.2, §20.2)", () => {
+  it("inspect schema introspects the live database", async () => {
+    const cwd = await dbProject(SCHEMA_TS())
+    const output = JSON.parse(execFileSync(process.execPath, [cli, "inspect", "schema"], { cwd, encoding: "utf8" }))
+    expect(output.tables[0].name).toBe("users")
+    expect(output.tables[0].primaryKey).toEqual(["id"])
+    expect(output.tables[0].columns.map((c: { name: string }) => c.name)).toEqual(["id", "email"])
+  })
+
+  it("pull writes the introspected schema to a JSON snapshot", async () => {
+    const cwd = await dbProject(SCHEMA_TS())
+    execFileSync(process.execPath, [cli, "pull"], { cwd })
+    const snapshot = JSON.parse(readFileSync(join(cwd, "thor.introspected.json"), "utf8"))
+    expect(snapshot.tables[0].name).toBe("users")
+  })
+
+  it("drift reports in sync when the schema matches", async () => {
+    const cwd = await dbProject(SCHEMA_TS())
+    expect(execFileSync(process.execPath, [cli, "drift"], { cwd, encoding: "utf8" })).toContain("No drift")
+  })
+
+  it("drift detects an extra schema column and exits non-zero", async () => {
+    const cwd = await dbProject(SCHEMA_TS(true))
+    const result = spawnSync(process.execPath, [cli, "drift"], { cwd, encoding: "utf8" })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain("Drift detected")
+    expect(result.stdout).toContain("name")
+  })
+
+  it("doctor reports healthy checks", async () => {
+    const cwd = await dbProject(SCHEMA_TS())
+    const output = execFileSync(process.execPath, [cli, "doctor"], { cwd, encoding: "utf8" })
+    expect(output).toContain("connectivity: connected")
+    expect(output).toContain("drift: in sync")
+    expect(output).toContain("dialect: sqlite")
+  })
+
+  it("requires a configured database", () => {
+    const cwd = project()
+    const result = spawnSync(process.execPath, [cli, "drift"], { cwd, encoding: "utf8" })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain("No database configured")
   })
 })

@@ -20,15 +20,32 @@ import {
   type CapabilityMatrix
 } from "@gilvandovieira/thor/capabilities"
 import { SKILLS, skillFiles, type SkillExportFormat } from "@gilvandovieira/thor/skills"
+import { detectDrift, makeIntrospector } from "@gilvandovieira/thor/introspect"
+import { makeMigrator } from "@gilvandovieira/thor/migrate"
+import { Effect } from "effect"
+import { type DatabaseConfig, loadSchemaTables, runWithDatabase } from "./database.js"
 
 const CONFIG_FILE = "thor.config.json"
 
 interface ThorConfig {
   readonly migrationsDir: string
   readonly schema: string
+  readonly database?: DatabaseConfig
 }
 
 const defaultConfig: ThorConfig = { migrationsDir: "migrations", schema: "src/schema.ts" }
+
+/**
+ * @param cfg - Resolved CLI config.
+ * @returns The configured database settings.
+ * @throws {Error} When no `database` is configured.
+ */
+const requireDatabase = (cfg: ThorConfig): DatabaseConfig => {
+  if (!cfg.database) {
+    throw new Error(`No database configured. Add a "database" block to ${CONFIG_FILE}: { "dialect": "sqlite", "url": "app.db" }`)
+  }
+  return cfg.database
+}
 
 /**
  * @param cwd - Project working directory.
@@ -211,4 +228,137 @@ export const skills = (cwd: string, args: ReadonlyArray<string>): void => {
   }
 
   throw new Error("Usage: thor skills <list|export> [--to <dir>] [--format md|json]")
+}
+
+// --- database-connected commands (spec §16.2, §20.1-20.2) --------------------
+
+/**
+ * @param cwd - Project root.
+ * @returns The live database's introspected Schema IR.
+ */
+const currentSchema = (cwd: string) =>
+  runWithDatabase(requireDatabase(loadConfig(cwd)), Effect.flatMap(makeIntrospector(), (introspector) => introspector.currentSchema()))
+
+/**
+ * Introspect the live database and print its Schema IR as JSON (spec §16.2).
+ *
+ * @stable
+ * @param cwd - Project root.
+ * @returns Nothing.
+ */
+export const introspect = async (cwd: string): Promise<void> => {
+  log(JSON.stringify(await currentSchema(cwd), null, 2))
+}
+
+/**
+ * `thor inspect <schema|routines>` (spec §16.2).
+ *
+ * @stable
+ * @param cwd - Project root.
+ * @param args - `schema` or `routines`.
+ * @returns Nothing.
+ * @throws {Error} When the subcommand is missing or unknown.
+ */
+export const inspect = async (cwd: string, args: ReadonlyArray<string>): Promise<void> => {
+  const sub = args[0]
+  if (sub === "schema") return introspect(cwd)
+  if (sub === "routines") {
+    log("Routine introspection is not available yet; introspection currently covers tables, columns, keys, and indexes.")
+    return
+  }
+  throw new Error("Usage: thor inspect <schema|routines>")
+}
+
+/**
+ * Write the introspected Schema IR to a JSON snapshot (spec §16.2).
+ *
+ * @stable
+ * @param cwd - Project root.
+ * @returns Nothing.
+ */
+export const pull = async (cwd: string): Promise<void> => {
+  const schema = await currentSchema(cwd)
+  writeFileSync(join(cwd, "thor.introspected.json"), JSON.stringify(schema, null, 2) + "\n")
+  log(`Wrote thor.introspected.json (${schema.tables.length} table(s))`)
+}
+
+/**
+ * Diff the live database against schema-as-code and report drift (spec §16.5).
+ * Exits non-zero when drift is detected.
+ *
+ * @stable
+ * @param cwd - Project root.
+ * @returns Nothing.
+ */
+export const drift = async (cwd: string): Promise<void> => {
+  const cfg = loadConfig(cwd)
+  const database = requireDatabase(cfg)
+  const tables = await loadSchemaTables(cwd, cfg.schema)
+  const report = await runWithDatabase(
+    database,
+    Effect.flatMap(makeIntrospector(), (introspector) => introspector.drift(tables))
+  )
+  if (report.inSync) {
+    log("No drift: the database matches the schema.")
+    return
+  }
+  log(`Drift detected (${report.changes.length}):`)
+  for (const change of report.changes) log(`  - ${change.message}`)
+  process.exitCode = 1
+}
+
+/** One diagnostic line printed by `thor doctor`. */
+type Check = { readonly status: "ok" | "warn" | "fail"; readonly name: string; readonly detail: string }
+
+/**
+ * Run environment, configuration, connectivity, journal, drift, and capability
+ * checks (spec §20.2). Exits non-zero when any check fails.
+ *
+ * @stable
+ * @param cwd - Project root.
+ * @returns Nothing.
+ */
+export const doctor = async (cwd: string): Promise<void> => {
+  const checks: Check[] = []
+  const add = (status: Check["status"], name: string, detail: string) => checks.push({ status, name, detail })
+  const cfg = loadConfig(cwd)
+
+  add("ok", "runtime", detectRuntimeCapabilities().runtime)
+  add(existsSync(join(cwd, CONFIG_FILE)) ? "ok" : "warn", "config", existsSync(join(cwd, CONFIG_FILE)) ? CONFIG_FILE : `${CONFIG_FILE} missing (defaults)`)
+
+  if (!cfg.database) {
+    add("fail", "database", "no database configured")
+  } else {
+    add("ok", "dialect", cfg.database.dialect)
+    const matrix = DIALECT_CAPABILITIES[cfg.database.dialect]
+    if (matrix) {
+      const counts = ALL_CAPABILITIES.reduce<Record<string, number>>((acc, capability) => {
+        const status = statusOf(matrix, capability)
+        acc[status] = (acc[status] ?? 0) + 1
+        return acc
+      }, {})
+      add("ok", "capabilities", Object.entries(counts).map(([status, count]) => `${count} ${status}`).join(", "))
+    }
+    try {
+      const tables = await loadSchemaTables(cwd, cfg.schema).catch(() => [] as never)
+      const { schema, applied } = await runWithDatabase(
+        cfg.database,
+        Effect.gen(function* () {
+          const introspector = yield* makeIntrospector()
+          const migrator = yield* makeMigrator({ schema: tables })
+          return { schema: yield* introspector.currentSchema(), applied: yield* migrator.status() }
+        })
+      )
+      add("ok", "connectivity", "connected")
+      add("ok", "journal", `${applied.length} applied migration(s)`)
+      const report = detectDrift(tables, schema)
+      add(report.inSync ? "ok" : "warn", "drift", report.inSync ? "in sync" : `${report.changes.length} change(s)`)
+    } catch (error) {
+      add("fail", "connectivity", (error as Error).message)
+    }
+  }
+
+  const icon = { ok: "✓", warn: "!", fail: "✗" } as const
+  for (const check of checks) log(`${icon[check.status]} ${check.name}: ${check.detail}`)
+  if (checks.some((check) => check.status === "fail")) process.exitCode = 1
 }

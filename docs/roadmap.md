@@ -347,11 +347,11 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | M | Dialect hardening v1 (full contract, MySQL/Postgres) | §11 | alpha.2 | B | ✅ M1–M5 |
 | N | Runtime lanes v1 (Node + Bun) | §12 | alpha.3 | C | 🟡 N1–N3/N5 ✅ · N4 ❌ |
 | O | Migration hardening v1 (dry-run, expand/contract, policies) | §15 | alpha.4 | migrator (§13 v0) | ✅ O1–O6 |
-| P | Introspection & drift detection | §16 | alpha.4 | migrator✅, **M✅** | 🟡 P1/P2/P3 ✅ · P4/P5 ❌ (⟵ T) |
+| P | Introspection & drift detection | §16 | alpha.4 | migrator✅, **M✅** | ✅ P1–P5 (views/enums/routines introspection follow-up) |
 | Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J✅**, FK (Q1) | ✅ Q1–Q6 |
 | R | Routines v1 (functions/procedures, typed + guarded) | §14 | beta | routine v0✅, J✅ | ✅ R1–R6 (OUT-params follow-up) |
 | S | Observability (metadata, spans, param-redaction) | §17 | beta | annotations (§7.4 v0) | ✅ S1–S5 |
-| T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI v0; ⟵ P, U, W1 | 🟡 T3/T5 ✅ · T1/T2 ⟵ P✅ · T4 ⟵ W1✅ |
+| T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI v0; ⟵ P, U, W1 | 🟡 T2/T3/T5 ✅ · T1 🟡 (migrator cmds left) · T4 ⟵ W1✅ |
 | U | LLM skills (11 skill files + manifest + export) | §21 | beta | — | ✅ U1–U5 |
 | V | API stability levels + error model v1 | §6, §22 | beta | errors v0✅; ⟵ Q | 🟡 (V1 done) |
 | W | Benchmarks v1 + docs v1 (cold/warm/hot, Node+Bun) | §19, §23 | beta | I✅, L✅; W2 ⟵ N, W5 ⟵ Q/P/U/V | 🟡 W1/W3 ✅ |
@@ -512,8 +512,8 @@ verified. ✅
 | P1 | ✅ | `Introspector` service: `currentSchema()` | §16.3 | `introspect/` module + `Introspector`/`IntrospectorLive` read live DB → `IntrospectedSchema` (tables/columns/primary keys/foreign keys/**indexes**); live SQLite E2E + per-dialect fake-driver tests. Views/enums/routines/extensions are **schema-catalog objects not modeled by schema-as-code**, so they belong to `thor pull` (P4), not drift |
 | P2 | ✅ | `Introspector.drift(expectedSchema)` | §16.3, §16.5 | `Introspector.drift(tables, options?)` diffs the live `IntrospectedSchema` against schema-as-code → a `DriftReport` (missing/extra tables & columns, nullability, primary-key, and foreign-key changes; journal table ignored); structural drift only (type-diff deferred — SQLite affinity is lossy); pure + live-SQLite tests |
 | P3 | ✅ | Per-dialect introspection queries (pg/sqlite/mysql) | §16.4 | PostgreSQL/MySQL via `information_schema` (set-based), SQLite via `table_info`/`foreign_key_list` pragmas; per-dialect strategies selected by `dialect.id`; parsing unit-tested per dialect |
-| P4 | ❌ | CLI `thor pull` / `introspect` / `inspect schema` / `inspect routines` | §16.2 | writes/prints introspected Schema IR (⟵ P1, T1) |
-| P5 | ❌ | Wire `drift` into `thor doctor` + migration flow | §16.5, §20.2 | drift surfaced pre-migration (⟵ P2, T2) |
+| P4 | ✅ | CLI `thor pull` / `introspect` / `inspect schema` / `inspect routines` | §16.2 | `thor introspect`/`inspect schema` print the live Schema IR, `pull` writes a `thor.introspected.json` snapshot; `inspect routines` reports the pending routine-introspection scope; SQLite E2E subprocess tests |
+| P5 | ✅ | Wire `drift` into `thor doctor` + migration flow | §16.5, §20.2 | `thor drift` loads schema-as-code (via tsx) and reports live-vs-code drift, exiting non-zero on drift; `thor doctor` surfaces drift alongside connectivity/journal/capabilities |
 
 > **P1/P2/P3 ✅.** The Introspector reads everything schema-as-code models
 > (tables/columns/PKs/FKs/indexes) across all three dialects, and drift compares
@@ -584,8 +584,8 @@ implemented and verified. ✅
 
 | # | Status | Task | Spec | Acceptance |
 |---|---|---|---|---|
-| T1 | ❌ | Wire DB-connected commands to the live migrator/introspector | §20.1 | `up`/`down`/`generate`/`drift`/`pull`/`inspect` run against a configured DB (⟵ P) |
-| T2 | ❌ | `thor doctor` | §20.2 | checks runtime/dialect/driver/connectivity/journal/pending/drift/capabilities/config (⟵ P) |
+| T1 | 🟡 | Wire DB-connected commands to the live migrator/introspector | §20.1 | **DB-connection plumbing done** (`cli/database.ts`: config `database` block, per-dialect layer via `node:sqlite`/optional `pg`/`mysql2`, tsx schema-as-code loading); `drift`/`pull`/`introspect`/`inspect` run against a configured DB. Remaining: wire `up`/`down`/`generate` to the live migrator |
+| T2 | ✅ | `thor doctor` | §20.2 | checks runtime, config, dialect, connectivity, journal, drift, and a capability summary; exits non-zero on failure; SQLite E2E test |
 | T3 | ✅ | `thor capabilities <dialect\|runtime>` | §20.3 | dialect matrix (M5) + **runtime variant**: `thor capabilities runtime` prints each `ALL_RUNTIME_CAPABILITIES` as native/unsupported for the detected host; subprocess tests |
 | T4 | ❌ | `thor bench <query\|compile\|decode\|runtime>` | §20.4 | runs the bench groups; `--node`/`--bun` (⟵ W1) |
 | T5 | ✅ | `thor skills list\|export` | §20.5, §21 | `thor skills list` prints the index; `thor skills export [--to <dir>] [--format md\|json]` writes Epic U's `skillFiles` under `<to>/thor` (default `.agents/skills`); subprocess tests cover list/export/errors |
