@@ -11,9 +11,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import {
   ALL_CAPABILITIES,
+  ALL_RUNTIME_CAPABILITIES,
   MySQLCapabilities,
   PostgresCapabilities,
   SQLiteCapabilities,
+  detectRuntimeCapabilities,
   statusOf,
   type CapabilityMatrix
 } from "@gilvandovieira/thor/capabilities"
@@ -127,19 +129,33 @@ const DIALECT_CAPABILITIES: Readonly<Record<string, CapabilityMatrix>> = {
 }
 
 /**
- * Prints every declared capability status for a built-in SQL dialect.
+ * Prints every declared capability status for a built-in SQL dialect, or — with
+ * the `runtime` target — the current JavaScript host's detected runtime
+ * capabilities (spec §20.3).
  *
  * @stable
- * @param args - Exactly one dialect name: postgres, sqlite, or mysql.
+ * @param args - Exactly one target: `postgres`, `sqlite`, `mysql`, or `runtime`.
  * @returns Nothing.
- * @throws {Error} When the dialect argument is missing, extra, or unknown.
+ * @throws {Error} When the target argument is missing, extra, or unknown.
  */
 export const capabilities = (args: ReadonlyArray<string>): void => {
-  if (args.length !== 1) throw new Error("Usage: thor capabilities <postgres|sqlite|mysql>")
-  const dialect = args[0]!
-  const matrix = DIALECT_CAPABILITIES[dialect]
-  if (!matrix) throw new Error(`Unknown dialect: ${dialect}. Expected one of: postgres, sqlite, mysql.`)
+  if (args.length !== 1) throw new Error("Usage: thor capabilities <postgres|sqlite|mysql|runtime>")
+  const target = args[0]!
+
+  if (target === "runtime") {
+    // Runtime capabilities are present or absent (never emulated); report them as
+    // native/unsupported for the detected host.
+    const profile = detectRuntimeCapabilities()
+    const rows = ALL_RUNTIME_CAPABILITIES.map(
+      (capability) => `${capability}\t${profile.capabilities.has(capability) ? "native" : "unsupported"}`
+    )
+    process.stdout.write([`Runtime: ${profile.runtime}`, "Capability\tStatus", ...rows, ""].join("\n"))
+    return
+  }
+
+  const matrix = DIALECT_CAPABILITIES[target]
+  if (!matrix) throw new Error(`Unknown target: ${target}. Expected one of: postgres, sqlite, mysql, runtime.`)
 
   const rows = ALL_CAPABILITIES.map((capability) => `${capability}\t${statusOf(matrix, capability)}`)
-  process.stdout.write([`Dialect: ${dialect}`, "Capability\tStatus", ...rows, ""].join("\n"))
+  process.stdout.write([`Dialect: ${target}`, "Capability\tStatus", ...rows, ""].join("\n"))
 }

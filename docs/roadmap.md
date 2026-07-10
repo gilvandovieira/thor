@@ -351,10 +351,10 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J✅**, FK (Q1) | ✅ Q1–Q6 |
 | R | Routines v1 (functions/procedures, typed + guarded) | §14 | beta | routine v0✅, J✅ | ✅ R1–R6 (OUT-params follow-up) |
 | S | Observability (metadata, spans, param-redaction) | §17 | beta | annotations (§7.4 v0) | ✅ S1–S5 |
-| T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI v0; ⟵ P, U, W1 (T3 ⟵ M5✅) | ❌ |
+| T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI v0; ⟵ P, U, W1 | 🟡 T3 ✅ · T1/T2 ⟵ P · T4 ⟵ W1 · T5 ⟵ U |
 | U | LLM skills (11 skill files + manifest + export) | §21 | beta | — (U4 ⟵ T) | 🟡 U1–U3/U5 ✅ · U4 ⟵ T |
 | V | API stability levels + error model v1 | §6, §22 | beta | errors v0✅; ⟵ Q | 🟡 (V1 done) |
-| W | Benchmarks v1 + docs v1 (cold/warm/hot, Node+Bun) | §19, §23 | beta | I✅, L✅; W2 ⟵ N, W5 ⟵ Q/P/U/V | 🟡 |
+| W | Benchmarks v1 + docs v1 (cold/warm/hot, Node+Bun) | §19, §23 | beta | I✅, L✅; W2 ⟵ N, W5 ⟵ Q/P/U/V | 🟡 W1/W3 ✅ |
 
 ## v1 milestone → epic map
 
@@ -386,7 +386,7 @@ Ready now (all prerequisites satisfied)
                      benchmarks I✅, debugging/safety✅)
   U3 ⟵ U2 │ U5 ⟵ U2
   R2 ⟵ J✅ (aggregation/window — verify vs J3/J4) │ R3 ⟵ routine v0✅, tx meta✅
-  W1 ⟵ I✅, L✅ (cache group) │ W3 ⟵ I5✅
+  W1 ✅ ⟵ I✅, L✅ (cache group) │ W3 ✅ ⟵ I5✅
   V1 ✅ ⟵ K✅,M✅,O✅ stable surface (Q relation tags remain owned by Q6) │ V3 ⟵ errors✅,M,O,S
 
 Blocked on other undone epics
@@ -395,9 +395,9 @@ Blocked on other undone epics
   T1 ⟵ O✅ (up/down/generate/drift) + ⧗ P (pull/inspect)
   T2 ⟵ O✅, M5✅, C✅ + ⧗ P (drift check)
   T3 ⟵ M5✅ (dialect variant shipped; only the `runtime` variant ⟵ C✅ remains)
-  T4 ⟵ ⧗ W1 (bench groups), I✅
+  T4 ⟵ W1✅ (bench groups), I✅
   T5 ⟵ ⧗ U4 │ U4 ⟵ U1–U3, ⧗ T (CLI host)
-  W2 ⟵ W1, N1–N3/N5✅ (N4 benchmark record) │ W4 ⟵ W2
+  W2 ⟵ W1✅, N1–N3/N5✅ (N4 benchmark record) │ W4 ⟵ W2
   W5 ⟵ K✅,L✅,S✅,Q✅ + ⧗ P, ⧗ U, ⧗ V   (final docs pass)
   V2 ⟵ V1✅ │ V4 ⟵ V3 + all error-producing epics (Q✅)
 
@@ -407,7 +407,7 @@ Already satisfied by completed work (close these out)
 
 **Suggested remaining order:** **T1/T2** (⟵ P) with **T3** already mostly shipped → **P4/P5**
 (⟵ T) → **U1–U3/U5** any time → **U4 + T5** (CLI export) →
-**W1/W3** any time, **W2** after N, **V1/V3** early then **V2/V4** after Q → **W5**
+**W2** after N, **V1/V3** early then **V2/V4** after Q → **W5**
 last (docs over the whole surface).
 
 ---
@@ -582,13 +582,13 @@ implemented and verified. ✅
 
 > Wires the v0 CLI stubs (`up`/`down`/`generate`/`drift`/`pull`) to the live migrator + adds new commands.
 
-| # | Task | Spec | Acceptance |
-|---|---|---|---|
-| T1 | Wire DB-connected commands to the live migrator/introspector | §20.1 | `up`/`down`/`generate`/`drift`/`pull`/`inspect` run against a configured DB |
-| T2 | `thor doctor` | §20.2 | checks runtime/dialect/driver/connectivity/journal/pending/drift/capabilities/config |
-| T3 | `thor capabilities <dialect\|runtime>` | §20.3 | prints native/emulated/unsupported/unknown |
-| T4 | `thor bench <query\|compile\|decode\|runtime>` | §20.4 | runs the bench groups; `--node`/`--bun` |
-| T5 | `thor skills list\|export` | §20.5, §21 | exports skill files to an agent workspace (`--to`, `--format md\|json`) |
+| # | Status | Task | Spec | Acceptance |
+|---|---|---|---|---|
+| T1 | ❌ | Wire DB-connected commands to the live migrator/introspector | §20.1 | `up`/`down`/`generate`/`drift`/`pull`/`inspect` run against a configured DB (⟵ P) |
+| T2 | ❌ | `thor doctor` | §20.2 | checks runtime/dialect/driver/connectivity/journal/pending/drift/capabilities/config (⟵ P) |
+| T3 | ✅ | `thor capabilities <dialect\|runtime>` | §20.3 | dialect matrix (M5) + **runtime variant**: `thor capabilities runtime` prints each `ALL_RUNTIME_CAPABILITIES` as native/unsupported for the detected host; subprocess tests |
+| T4 | ❌ | `thor bench <query\|compile\|decode\|runtime>` | §20.4 | runs the bench groups; `--node`/`--bun` (⟵ W1) |
+| T5 | ❌ | `thor skills list\|export` | §20.5, §21 | exports skill files to an agent workspace (`--to`, `--format md\|json`) — Epic U's `skillFiles` renders the content (U4); this wires it to the CLI (⟵ U) |
 
 ## Epic U — LLM skills (§21, beta)
 
@@ -625,13 +625,19 @@ Q6 are marked `@experimental`. ✅
 
 > Extends Epic I with the v1 benchmark groups + baselines under both runtimes.
 
-| # | Task | Spec | Acceptance |
-|---|---|---|---|
-| W1 | Benchmark groups: build/IR/compile/decode/effect/cache/runtime | §19.1 | each stage measured separately |
-| W2 | Cold / warm / hot baselines under **Node and Bun** | §19.5, §25 | recorded baselines; gate per runtime |
-| W3 | Hot-path targets tracked (warm cached path) | §19.3 | overhead vs target reported (extends I5) |
-| W4 | Benchmark gates stabilized | §19.6, beta | tighten `bench:gate` threshold once baselines settle |
-| W5 | v1 docs pass | §23 | README + subpath docs cover compiled queries, relations, introspection, observability, skills, stability |
+| # | Status | Task | Spec | Acceptance |
+|---|---|---|---|---|
+| W1 | ✅ | Benchmark groups: build/IR/compile/decode/effect/cache/runtime | §19.1 | `bench-stages.mts` independently measures build, complete IR construction, stable-IR compile, precompiled row decode, and the shared Effect boundary; `bench:cache` remains dedicated; `bench:runtime-node`/`bench:runtime-bun` run the identical matrix |
+| W2 | ❌ | Cold / warm / hot baselines under **Node and Bun** | §19.5, §25 | recorded baselines; gate per runtime |
+| W3 | ✅ | Hot-path targets tracked (warm cached path) | §19.3 | `bench:hotpath` classifies `point.warm` against ≤2 µs and the smallest prepared path against a ≤1 µs ideal boundary; human and structured JSON reports include value, target, ratio, excess, and MET/OVER status |
+| W4 | ❌ | Benchmark gates stabilized | §19.6, beta | tighten `bench:gate` threshold once baselines settle |
+| W5 | ❌ | v1 docs pass | §23 | README + subpath docs cover compiled queries, relations, introspection, observability, skills, stability |
+
+**Release-work record:** W1/W3 are complete. The canonical stage matrix makes
+the required own-code boundaries independently executable under Node and Bun,
+while the existing cache benchmark retains cache-layer counters. Target tracking
+now evaluates the specified warm cached path and reports misses without turning
+the aspirational target into W4's future release gate. ✅
 
 ---
 
@@ -664,7 +670,7 @@ Q6 are marked `@experimental`. ✅
 6. **R2, R3** ✅ — finish routines (R2 ⟵ J✅; R6 already done via O6)
 7. **N1, N2, N3, N5** ✅ — Node/Bun runtime lanes (⟵ B/C/M✅)
 8. **U1 → U2 → U3, U5** — 11 skills + manifest + invariant (all subjects exist)
-9. **W1, W3** — bench groups + hot-path tracking (cache group ⟵ L✅)
+9. **W1, W3** ✅ — bench groups + hot-path tracking (cache group ⟵ L✅)
 
 **Wave 2 — CLI integration (⟵ P, W1, U)**
 

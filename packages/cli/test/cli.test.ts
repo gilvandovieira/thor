@@ -5,6 +5,7 @@ import { join, resolve } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   ALL_CAPABILITIES,
+  ALL_RUNTIME_CAPABILITIES,
   MySQLCapabilities,
   PostgresCapabilities,
   SQLiteCapabilities,
@@ -29,7 +30,7 @@ describe("published CLI surface", () => {
     const help = execFileSync(process.execPath, [cli, "--help"], { cwd, encoding: "utf8" })
     expect(help).toContain("init")
     expect(help).toContain("create <name>")
-    expect(help).toContain("capabilities <dialect>")
+    expect(help).toContain("capabilities <dialect|runtime>")
     expect(help).not.toContain("up                Apply")
 
     execFileSync(process.execPath, [cli, "init"], { cwd })
@@ -60,12 +61,25 @@ describe("published CLI surface", () => {
     }
   })
 
+  it("prints the detected runtime's capabilities", () => {
+    const cwd = project()
+    const output = execFileSync(process.execPath, [cli, "capabilities", "runtime"], { cwd, encoding: "utf8" })
+    const lines = output.trim().split("\n")
+    expect(lines[0]).toBe("Runtime: node")
+    expect(lines[1]).toBe("Capability\tStatus")
+    const reported = new Set(lines.slice(2).map((row) => row.split("\t")[0]))
+    expect(reported.size).toBe(ALL_RUNTIME_CAPABILITIES.length)
+    // Node is detected as native; Bun is unsupported on this host.
+    expect(output).toContain("runtime.node\tnative")
+    expect(output).toContain("runtime.bun\tunsupported")
+  })
+
   it("rejects missing, extra, and unknown capability targets", () => {
     const cwd = project()
     for (const [args, message] of [
       [["capabilities"], "Usage: thor capabilities"],
       [["capabilities", "sqlite", "extra"], "Usage: thor capabilities"],
-      [["capabilities", "oracle"], "Unknown dialect: oracle"]
+      [["capabilities", "oracle"], "Unknown target: oracle"]
     ] as const) {
       const result = spawnSync(process.execPath, [cli, ...args], { cwd, encoding: "utf8" })
       expect(result.status).toBe(1)

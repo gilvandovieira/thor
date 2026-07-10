@@ -16,8 +16,8 @@ Usage: thor <command> [args]
 Commands:
   init              Create config, migrations folder, and journal
   create <name>     Create an empty/manual migration
-  capabilities <dialect>
-                    Print postgres/sqlite/mysql capability statuses
+  capabilities <dialect|runtime>
+                    Print postgres/sqlite/mysql or runtime capability statuses
 `
 
 /**
