@@ -18,6 +18,7 @@ export const ALL_RUNTIME_CAPABILITIES = [
   "runtime.nodeCrypto",
   "runtime.fs",
   "runtime.process",
+  "runtime.workerThreads",
   "runtime.testRunner",
   "runtime.sqlite.node",
   "runtime.sqlite.bun",
@@ -111,6 +112,7 @@ export const detectRuntimeCapabilities = (
     capabilities.add("runtime.node")
     capabilities.add("runtime.nodeCrypto")
     capabilities.add("runtime.fs")
+    capabilities.add("runtime.workerThreads")
 
     const [major = 0, minor = 0] = versions?.node?.split(".").map(Number) ?? []
     if (major > 22 || (major === 22 && minor >= 5)) capabilities.add("runtime.sqlite.node")

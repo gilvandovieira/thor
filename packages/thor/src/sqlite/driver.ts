@@ -12,6 +12,7 @@ import {
   assertRuntimeCapabilities,
   defineRuntimeRequirements,
   detectRuntimeCapabilities,
+  hasRuntimeCapability,
   type RuntimeCapabilityProfile,
   type RuntimeRequirements
 } from "../capabilities/runtime.js"
@@ -216,6 +217,24 @@ export const makeBunSQLiteDriver = (
   profile: RuntimeCapabilityProfile = detectRuntimeCapabilities()
 ): Driver => makeDriver(client, BunSQLiteDriverRuntime, profile)
 
+/**
+ * Selects the native SQLite adapter declared by a runtime capability profile.
+ *
+ * @experimental Runtime-driven adapter selection may grow with additional hosts.
+ * @param client - Native synchronous SQLite client for the detected host.
+ * @param profile - Runtime capabilities; defaults to host detection.
+ * @returns A Node- or Bun-bound Thor SQLite driver.
+ * @throws {RuntimeCapabilityError} When no native SQLite adapter is available.
+ */
+export const makeRuntimeSQLiteDriver = (
+  client: SQLiteClient,
+  profile: RuntimeCapabilityProfile = detectRuntimeCapabilities()
+): Driver => {
+  if (hasRuntimeCapability(profile, "runtime.bun")) return makeBunSQLiteDriver(client, profile)
+  if (hasRuntimeCapability(profile, "runtime.node")) return makeNodeSQLiteDriver(client, profile)
+  return makeNodeSQLiteDriver(client, profile)
+}
+
 /** Options shared by generic and runtime-specific SQLite layers. */
 export interface SQLiteLayerOptions {
   /** Whether emulated SQL capabilities may execute. */
@@ -278,6 +297,21 @@ export const BunSQLiteLayer = (
   options: SQLiteLayerOptions = {}
 ): Layer.Layer<Database> =>
   sqliteLayer(makeBunSQLiteDriver(client, options.runtime ?? detectRuntimeCapabilities()), options)
+
+/**
+ * Creates a native SQLite layer selected from the active runtime capabilities.
+ *
+ * @experimental Runtime-driven adapter selection may grow with additional hosts.
+ * @param client - Native synchronous SQLite client for the active host.
+ * @param options - Execution policy and optional runtime override.
+ * @returns A layer carrying the selected runtime requirements on its driver.
+ * @throws {RuntimeCapabilityError} When no native SQLite adapter is available.
+ */
+export const RuntimeSQLiteLayer = (
+  client: SQLiteClient,
+  options: SQLiteLayerOptions = {}
+): Layer.Layer<Database> =>
+  sqliteLayer(makeRuntimeSQLiteDriver(client, options.runtime ?? detectRuntimeCapabilities()), options)
 
 /**
  * Creates an owned SQLite layer and closes it when the Effect scope ends.

@@ -345,7 +345,7 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | K | Compiled Query API (`.compile()` → executable handle) | §8 | alpha.1 | D (`.prepare`) | ✅ K1–K5 |
 | L | Query caches + precompilation modes | §9, §10 | alpha.1 | F, D, E | ✅ L1–L6 |
 | M | Dialect hardening v1 (full contract, MySQL/Postgres) | §11 | alpha.2 | B | ✅ M1–M5 |
-| N | Runtime lanes v1 (Node + Bun) | §12 | alpha.3 | C | 🟡 (caps + Bun harness) |
+| N | Runtime lanes v1 (Node + Bun) | §12 | alpha.3 | C | 🟡 N1–N3/N5 ✅ · N4 ❌ |
 | O | Migration hardening v1 (dry-run, expand/contract, policies) | §15 | alpha.4 | migrator (§13 v0) | ✅ O1–O6 |
 | P | Introspection & drift detection | §16 | alpha.4 | migrator✅, **M✅** | 🟡 P1/P2/P3 ✅ · P4/P5 ❌ (⟵ T) |
 | Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J✅**, FK (Q1) | ✅ Q1–Q6 |
@@ -380,7 +380,7 @@ v1-beta     Observability, skills, API stability → R, S, T, U, V, W
 Ready now (all prerequisites satisfied)
   Q1–Q6 ✅                              (typed graph, IR planner, explicit strategies, no N+1)
   P1 🟡 ⟵ M✅, schema IR✅ │ P3 ✅ ⟵ M✅ │ P2 ✅ ⟵ P1 core,Q1✅
-  N1 ⟵ B✅,C✅,M✅ │ N2 ⟵ C✅ │ N3 ⟵ C✅,M3✅ │ N5 ⟵ N1
+  N1–N3,N5 ✅                           (formal lanes, capability selection, shared invariant)
   U1 ⟵ — │ U2 ⟵ U1 (all 11 subjects exist: schema/query/exec/testing✅,
                      capabilities M✅, migrations O✅, routines R✅, dialects M✅,
                      benchmarks I✅, debugging/safety✅)
@@ -397,7 +397,7 @@ Blocked on other undone epics
   T3 ⟵ M5✅ (dialect variant shipped; only the `runtime` variant ⟵ C✅ remains)
   T4 ⟵ ⧗ W1 (bench groups), I✅
   T5 ⟵ ⧗ U4 │ U4 ⟵ U1–U3, ⧗ T (CLI host)
-  W2 ⟵ W1, ⧗ N (Bun lane) │ W4 ⟵ W2
+  W2 ⟵ W1, N1–N3/N5✅ (N4 benchmark record) │ W4 ⟵ W2
   W5 ⟵ K✅,L✅,S✅,Q✅ + ⧗ P, ⧗ U, ⧗ V   (final docs pass)
   V2 ⟵ V1✅ │ V4 ⟵ V3 + all error-producing epics (Q✅)
 
@@ -406,7 +406,7 @@ Already satisfied by completed work (close these out)
 ```
 
 **Suggested remaining order:** **T1/T2** (⟵ P) with **T3** already mostly shipped → **P4/P5**
-(⟵ T) → **U1–U3/U5** any time → **U4 + T5** (CLI export) → **N1–N3/N5** any time →
+(⟵ T) → **U1–U3/U5** any time → **U4 + T5** (CLI export) →
 **W1/W3** any time, **W2** after N, **V1/V3** early then **V2/V4** after Q → **W5**
 last (docs over the whole surface).
 
@@ -472,13 +472,18 @@ implemented and verified. ✅
 
 > Builds on C (runtime capabilities modeled; Bun contract harness ready — C3).
 
-| # | Task | Spec | Acceptance |
-|---|---|---|---|
-| N1 | Formal **Node lane** + **Bun lane** in CI | §12, §18 | both lanes run the shared suites; Bun for supported adapters |
-| N2 | Runtime capability matrix drives adapter selection | §12.1 | `runtime.sqlite.bun` etc. gate driver availability |
-| N3 | Bun-specific SQLite driver path sharing the SQLite dialect | §12.3 | `bun:sqlite` adapter passes the same suite/fixture |
-| N4 | Runtime benchmarks (Node vs Bun) recorded | §12, §19 | `bench:*:bun` lanes formalized; results in `driver-benchmarks.md` |
-| N5 | Runtime testing invariant enforced | §12.4 | "valid only when the adapter passes the suite under that runtime" |
+| # | Status | Task | Spec | Acceptance |
+|---|---|---|---|---|
+| N1 | ✅ | Formal **Node lane** + **Bun lane** in CI | §12, §18 | `test:runtime:node` and `test:runtime:bun` run the shared SQLite contract in dedicated CI lanes; Bun also runs the shared feature fixture |
+| N2 | ✅ | Runtime capability matrix drives adapter selection | §12.1 | `makeRuntimeSQLiteDriver` / `RuntimeSQLiteLayer` select Node or Bun from the detected profile and reject unavailable native adapters before use; matrix includes the specified worker-thread capability |
+| N3 | ✅ | Bun-specific SQLite driver path sharing the SQLite dialect | §12.3 | `bun:sqlite` uses `RuntimeSQLiteLayer`, the shared `SQLiteDialect`, and the same contract and feature fixtures as Node |
+| N4 | ❌ | Runtime benchmarks (Node vs Bun) recorded | §12, §19 | `bench:*:bun` lanes formalized; results in `driver-benchmarks.md` |
+| N5 | ✅ | Runtime testing invariant enforced | §12.4 | the runner-neutral contract asserts the layer's driver declares the expected runtime requirements and that the actual host satisfies every requirement |
+
+**Release-work record:** N1–N3 and N5 are complete. Runtime capabilities remain
+separate from dialect capabilities; native SQLite selection is capability-driven,
+and both Node and Bun prove their selected adapter contract under the actual host.
+N4 remains the only open runtime task and is owned by the benchmark/baseline pass. ✅
 
 ## Epic O — Migration hardening v1 (§15, alpha.4)
 
@@ -652,7 +657,7 @@ Q6 are marked `@experimental`. ✅
 
 5. **Q2 → Q3 → Q4 → Q5 → Q6** ✅ — relation layer (Q4 join ⟵ J✅; Q6 ⟵ V1)
 6. **R2, R3** ✅ — finish routines (R2 ⟵ J✅; R6 already done via O6)
-7. **N1, N2, N3, N5** — Node/Bun runtime lanes (⟵ B/C/M✅)
+7. **N1, N2, N3, N5** ✅ — Node/Bun runtime lanes (⟵ B/C/M✅)
 8. **U1 → U2 → U3, U5** — 11 skills + manifest + invariant (all subjects exist)
 9. **W1, W3** — bench groups + hot-path tracking (cache group ⟵ L✅)
 

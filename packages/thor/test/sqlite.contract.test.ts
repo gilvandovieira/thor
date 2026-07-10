@@ -8,7 +8,7 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { DatabaseSync } from "node:sqlite"
-import { NodeSQLiteLayer, SQLiteDialect } from "@gilvandovieira/thor/sqlite"
+import { NodeSQLiteDriverRuntime, RuntimeSQLiteLayer, SQLiteDialect } from "@gilvandovieira/thor/sqlite"
 import {
   SQLITE_CONTRACT_RESET,
   type ContractTestApi,
@@ -23,6 +23,7 @@ makeDialectContractSuite(api, {
   name: "node:sqlite",
   dialect: SQLiteDialect,
   reset: SQLITE_CONTRACT_RESET,
-  layer: NodeSQLiteLayer(client),
+  layer: RuntimeSQLiteLayer(client),
+  runtime: NodeSQLiteDriverRuntime,
   teardown: () => client.close()
 })

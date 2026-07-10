@@ -25,6 +25,8 @@
     "test:contract:sqlite:node": "pnpm --filter @gilvandovieira/thor run build && vitest run packages/thor/test/sqlite.contract.test.ts",
     "test:contract:sqlite:bun": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec bun test test-bun/sqlite.contract.test.ts",
     "test:contract:sqlite": "pnpm test:contract:sqlite:node && pnpm test:contract:sqlite:bun",
+    "test:runtime:node": "pnpm test:contract:sqlite:node",
+    "test:runtime:bun": "pnpm test:contract:sqlite:bun",
     "bench": "pnpm --filter @gilvandovieira/thor run bench",
     "bench:builders": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec prisma generate --schema prisma/benchmark.prisma && pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-query-builders.mts",
     "bench:report": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-hotpath.mts && pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-overhead.mts && pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-sqlite.mts",

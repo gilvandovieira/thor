@@ -7,7 +7,7 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test"
 import { Database } from "bun:sqlite"
-import { BunSQLiteLayer, SQLiteDialect } from "@gilvandovieira/thor/sqlite"
+import { BunSQLiteDriverRuntime, BunSQLiteLayer, RuntimeSQLiteLayer, SQLiteDialect } from "@gilvandovieira/thor/sqlite"
 import {
   ADVANCED_SQL_FEATURES,
   LEVEL_1_2_FEATURES,
@@ -34,7 +34,8 @@ makeDialectContractSuite(api, {
   name: "bun:sqlite",
   dialect: SQLiteDialect,
   reset: SQLITE_CONTRACT_RESET,
-  layer: BunSQLiteLayer(client)
+  layer: RuntimeSQLiteLayer(client),
+  runtime: BunSQLiteDriverRuntime
 })
 
 runSqlFeatureIntegration(api, {

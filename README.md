@@ -28,8 +28,9 @@ Your tables  →  a query you build  →  checked against the database's abiliti
 pnpm add @gilvandovieira/thor effect
 ```
 
-Thor supports maintained Node.js releases starting at Node 22. The SQLite
-adapter also has a Bun contract-test lane.
+Thor supports maintained Node.js releases starting at Node 22. The native
+`node:sqlite` adapter requires Node 22.5 or newer; SQLite also has a Bun-native
+contract-test lane.
 
 Everything ships from one package. The common things (`db`, `pg`, `eq`, `param`,
 …) come from the top level; deeper surfaces live under subpaths like

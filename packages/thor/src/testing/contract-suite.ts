@@ -25,6 +25,11 @@ import { CapabilityError, ConstraintError } from "../errors/index.js"
 import type { Capability } from "../capabilities/capability.js"
 import { isSatisfied } from "../capabilities/matrix.js"
 import type { Dialect } from "../dialect.js"
+import {
+  detectRuntimeCapabilities,
+  missingRuntimeCapabilities,
+  type RuntimeRequirements
+} from "../capabilities/runtime.js"
 
 /** Minimal matcher interface required by the runner-agnostic suite. */
 export interface ContractExpectation {
@@ -102,6 +107,8 @@ export interface DialectContractOptions {
   readonly reset: ReadonlyArray<string>
   /** Whether emulated capabilities count as supported (default false). */
   readonly allowEmulation?: boolean
+  /** Runtime contract the tested adapter must declare and satisfy on this host. */
+  readonly runtime?: RuntimeRequirements
   /** @returns Optional setup completion. */
   readonly setup?: () => void | Promise<void>
   /** @returns Optional teardown completion. */
@@ -153,6 +160,14 @@ export const makeDialectContractSuite = (api: ContractTestApi, options: DialectC
     beforeEach(async () => {
       for (const statement of options.reset) await script(statement)
     })
+
+    if (options.runtime) {
+      it("declares and satisfies its host runtime contract", async () => {
+        const service = await run(Database)
+        expect(service.driver.runtime).toBe(options.runtime)
+        expect(missingRuntimeCapabilities(service.driver.runtime, detectRuntimeCapabilities())).toEqual([])
+      })
+    }
 
     it("insert then select round-trips a row", async () => {
       await run(db.insert(users).values({ email: "a@example.com", name: "Ada" }).run())

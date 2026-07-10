@@ -12,6 +12,7 @@ import {
   BunSQLiteDriverRuntime,
   makeBunSQLiteDriver,
   makeNodeSQLiteDriver,
+  makeRuntimeSQLiteDriver,
   makeSQLiteDriver,
   NodeSQLiteDriverRuntime,
   SQLiteDriverRuntime,
@@ -41,6 +42,7 @@ describe("runtime capability detection", () => {
       "runtime.node",
       "runtime.nodeCrypto",
       "runtime.fs",
+      "runtime.workerThreads",
       "runtime.sqlite.node",
       "runtime.process",
       "runtime.webCrypto",
@@ -132,5 +134,26 @@ describe("SQLite runtime adapters", () => {
     const driver = makeBunSQLiteDriver(client, profile)
 
     expect(driver.runtime).toBe(BunSQLiteDriverRuntime)
+  })
+
+  it("selects the native adapter from the runtime capability matrix", () => {
+    const node = defineRuntimeCapabilities("node", ["runtime.node", "runtime.sqlite.node"])
+    const bun = defineRuntimeCapabilities("bun", ["runtime.bun", "runtime.sqlite.bun"])
+
+    expect(makeRuntimeSQLiteDriver(client, node).runtime).toBe(NodeSQLiteDriverRuntime)
+    expect(makeRuntimeSQLiteDriver(client, bun).runtime).toBe(BunSQLiteDriverRuntime)
+  })
+
+  it("rejects runtime selection when native SQLite is unavailable", () => {
+    const unknown = defineRuntimeCapabilities("unknown", ["runtime.webCrypto"])
+    const bunWithoutSQLite = defineRuntimeCapabilities("bun", ["runtime.bun"])
+
+    expect(() => makeRuntimeSQLiteDriver(client, unknown)).toThrow(RuntimeCapabilityError)
+    try {
+      makeRuntimeSQLiteDriver(client, bunWithoutSQLite)
+      expect.unreachable("Bun without native SQLite should fail")
+    } catch (error) {
+      expect(error).toMatchObject({ missing: ["runtime.sqlite.bun"] })
+    }
   })
 })
