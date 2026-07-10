@@ -18,7 +18,7 @@ import { and, eq, gt, isNull, not, or } from "../sql/predicates.js"
 import { asc, desc, param } from "../sql/expressions.js"
 import { avg, count, excluded, exists, max, min, rowNumber, scalar, sum } from "../sql/advanced-expressions.js"
 import { alias, defineTable } from "../schema/table.js"
-import { integer, SafeIntegerCodec, text, timestamp, uuid } from "../schema/index.js"
+import { bigint, boolean, integer, jsonb, real, SafeIntegerCodec, text, timestamp, uuid } from "../schema/index.js"
 import type { Capability } from "../capabilities/capability.js"
 import { isSatisfied } from "../capabilities/matrix.js"
 import type { Dialect } from "../dialect.js"
@@ -49,8 +49,17 @@ const posts = defineTable("posts", {
   userId: uuid("user_id").notNull(),
   title: text("title").notNull()
 })
+/** Fixture exercising Level 6 data types across dialect-independent codecs. */
+const typed = defineTable("typed", {
+  id: uuid("id").primaryKey(),
+  active: boolean("active").notNull(),
+  score: bigint("score").notNull(),
+  ratio: real("ratio").notNull(),
+  at: timestamp("at").notNull(),
+  meta: jsonb("meta", Schema.Struct({ role: Schema.String })).notNull()
+})
 /** Shared schema fixtures passed to every SQL feature definition. */
-export const sqlFeatureFixtures = { users, posts } as const
+export const sqlFeatureFixtures = { users, posts, typed } as const
 
 /** Type of the shared schema fixtures passed to SQL feature builders. */
 export type SqlFeatureFixtures = typeof sqlFeatureFixtures
@@ -495,6 +504,75 @@ export const LEVEL_1_2_FEATURES: ReadonlyArray<SqlFeature> = [
 ]
 
 /** Epic J feature definitions spanning matrix Levels 3, 4, 5, and 7. */
+/**
+ * Level 6 (data types): each dialect-independent codec decodes its driver
+ * representations back to the runtime type. Column type appears only in DDL, so
+ * the SELECT SQL is dialect-neutral; the interesting axis is decode.
+ */
+export const DATA_TYPE_FEATURES: ReadonlyArray<SqlFeature> = [
+  defineSqlFeatureSuite({
+    id: "datatype.boolean",
+    level: 6,
+    requires: [],
+    build: ({ typed }) => db.select({ active: typed.active }).from(typed),
+    assertSql: {
+      postgres: 'SELECT "typed"."active" AS "active" FROM "typed"',
+      sqlite: 'SELECT "typed"."active" AS "active" FROM "typed"',
+      mysql: "SELECT `typed`.`active` AS `active` FROM `typed`"
+    },
+    exec: "all",
+    driverRows: [{ active: 1 }], // SQLite's 0/1; the codec also accepts native booleans
+    assertResult: [{ active: true }]
+  }),
+  defineSqlFeatureSuite({
+    id: "datatype.bigint",
+    level: 6,
+    requires: [],
+    build: ({ typed }) => db.select({ score: typed.score }).from(typed),
+    assertSql: {
+      postgres: 'SELECT "typed"."score" AS "score" FROM "typed"',
+      sqlite: 'SELECT "typed"."score" AS "score" FROM "typed"',
+      mysql: "SELECT `typed`.`score` AS `score` FROM `typed`"
+    },
+    exec: "all",
+    driverRows: [{ score: "9007199254740993" }], // beyond MAX_SAFE_INTEGER: decoded losslessly
+    assertResult: [{ score: 9007199254740993n }]
+  }),
+  defineSqlFeatureSuite({
+    id: "datatype.real",
+    level: 6,
+    requires: [],
+    build: ({ typed }) => db.select({ ratio: typed.ratio }).from(typed),
+    assertSql: {
+      postgres: 'SELECT "typed"."ratio" AS "ratio" FROM "typed"',
+      sqlite: 'SELECT "typed"."ratio" AS "ratio" FROM "typed"',
+      mysql: "SELECT `typed`.`ratio` AS `ratio` FROM `typed`"
+    },
+    exec: "all",
+    driverRows: [{ ratio: "1.5" }], // decimal text from the driver
+    assertResult: [{ ratio: 1.5 }]
+  }),
+  defineSqlFeatureSuite({
+    id: "datatype.timestamp",
+    level: 6,
+    requires: [],
+    build: ({ typed }) => db.select({ at: typed.at }).from(typed),
+    assertSql: {
+      postgres: 'SELECT "typed"."at" AS "at" FROM "typed"',
+      sqlite: 'SELECT "typed"."at" AS "at" FROM "typed"',
+      mysql: "SELECT `typed`.`at` AS `at` FROM `typed`"
+    },
+    exec: "all",
+    driverRows: [{ at: "2026-01-01T00:00:00.000Z" }], // ISO string decoded to Date
+    assertResult: [{ at: new Date("2026-01-01T00:00:00.000Z") }]
+  })
+  // NOTE: a `json`/`jsonb` feature is intentionally omitted here. PostgreSQL
+  // returns JSON as a parsed value, but SQLite/MySQL return it as text and the
+  // current json codec does not parse text — cross-dialect JSON decoding is a
+  // tracked follow-up (its own codec change), not a feature-matrix gap.
+]
+
+/** Levels 3–5, 7, 9: joins, subqueries, aggregation, CTEs, window functions, upserts. */
 export const ADVANCED_SQL_FEATURES: ReadonlyArray<SqlFeature> = [
   defineSqlFeatureSuite({
     id: "join.inner.alias",

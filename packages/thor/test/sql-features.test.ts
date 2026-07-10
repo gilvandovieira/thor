@@ -10,6 +10,7 @@ import { MySQLDialect } from "@gilvandovieira/thor/mysql"
 import {
   ADVANCED_SQL_FEATURES,
   type ContractTestApi,
+  DATA_TYPE_FEATURES,
   LEVEL_1_2_FEATURES,
   ROUTINE_SQL_FEATURES,
   runSqlFeatureMatrix
@@ -20,6 +21,7 @@ const api: ContractTestApi = { describe, it, beforeAll: noop, afterAll: noop, be
 
 for (const dialect of [PostgresDialect, SQLiteDialect, MySQLDialect]) {
   runSqlFeatureMatrix(api, { dialect, features: LEVEL_1_2_FEATURES })
+  runSqlFeatureMatrix(api, { dialect, features: DATA_TYPE_FEATURES })
   runSqlFeatureMatrix(api, { dialect, features: ADVANCED_SQL_FEATURES })
   runSqlFeatureMatrix(api, { dialect, features: ROUTINE_SQL_FEATURES })
 }

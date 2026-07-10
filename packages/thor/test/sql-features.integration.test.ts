@@ -10,6 +10,7 @@ import { NodeSQLiteLayer, SQLiteDialect } from "@gilvandovieira/thor/sqlite"
 import {
   ADVANCED_SQL_FEATURES,
   type ContractTestApi,
+  DATA_TYPE_FEATURES,
   LEVEL_1_2_FEATURES,
   ROUTINE_SQL_FEATURES,
   SQLITE_FEATURE_RESET,
@@ -22,7 +23,7 @@ const client = new DatabaseSync(":memory:")
 
 runSqlFeatureIntegration(api, {
   dialect: SQLiteDialect,
-  features: [...LEVEL_1_2_FEATURES, ...ADVANCED_SQL_FEATURES, ...ROUTINE_SQL_FEATURES],
+  features: [...LEVEL_1_2_FEATURES, ...DATA_TYPE_FEATURES, ...ADVANCED_SQL_FEATURES, ...ROUTINE_SQL_FEATURES],
   layer: NodeSQLiteLayer(client),
   reset: SQLITE_FEATURE_RESET,
   teardown: () => client.close()
