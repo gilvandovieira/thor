@@ -347,14 +347,14 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | M | Dialect hardening v1 (full contract, MySQL/Postgres) | §11 | alpha.2 | B | ✅ M1–M5 |
 | N | Runtime lanes v1 (Node + Bun) | §12 | alpha.3 | C | 🟡 (caps + Bun harness) |
 | O | Migration hardening v1 (dry-run, expand/contract, policies) | §15 | alpha.4 | migrator (§13 v0) | ✅ O1–O6 |
-| P | Introspection & drift detection | §16 | alpha.4 | migrator `drift()` | ❌ |
-| Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J**, FK metadata | ❌ |
-| R | Routines v1 (functions/procedures, typed + guarded) | §14 | beta | routine module (wired in v0) | 🟡 |
+| P | Introspection & drift detection | §16 | alpha.4 | migrator✅, **M✅** | ❌ (core unblocked) |
+| Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J✅**, FK (Q1) | ❌ (unblocked) |
+| R | Routines v1 (functions/procedures, typed + guarded) | §14 | beta | routine v0✅, J✅; **R6 ⟵ O6✅** | 🟡 (R6 done; R2/R3 left) |
 | S | Observability (metadata, spans, param-redaction) | §17 | beta | annotations (§7.4 v0) | ✅ S1–S5 |
-| T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI (v0) | ❌ |
-| U | LLM skills (11 skill files + manifest + export) | §21 | beta | — | ❌ |
-| V | API stability levels + error model v1 | §6, §22 | beta | errors (v0) | ❌ |
-| W | Benchmarks v1 + docs v1 (cold/warm/hot, Node+Bun) | §19, §23 | beta | I | 🟡 |
+| T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI v0; ⟵ P, U, W1 (T3 ⟵ M5✅) | ❌ |
+| U | LLM skills (11 skill files + manifest + export) | §21 | beta | — (U4 ⟵ T) | ❌ (unblocked) |
+| V | API stability levels + error model v1 | §6, §22 | beta | errors v0✅; ⟵ Q | ❌ |
+| W | Benchmarks v1 + docs v1 (cold/warm/hot, Node+Bun) | §19, §23 | beta | I✅, L✅; W2 ⟵ N, W5 ⟵ Q/P/U/V | 🟡 |
 
 ## v1 milestone → epic map
 
@@ -366,6 +366,52 @@ v1-alpha.4  Migration hardening + introspection  → O, P
 v1-alpha.5  Relation layer                        → Q   (⟵ J)
 v1-beta     Observability, skills, API stability → R, S, T, U, V, W
 ```
+
+## Remaining dependency tree (updated 2026-07-10)
+
+> **Done:** K, L, M, O, S ✅ (v1) and J, I, F, E, D, C, B ✅ (v0). This graph is
+> the per-task prerequisite tree for the **undone** epics (N, P, Q, R, T, U, V, W).
+> `✅` = prerequisite now satisfied · `⧗ X` = still waiting on task/epic `X`.
+> **Key changes from completed work:** O6 closes **R6**; M5 largely delivers **T3**;
+> M unblocks **P**'s core; J unblocks all of **Q**; L's `bench:cache` seeds **W1**'s
+> cache group.
+
+```txt
+Ready now (all prerequisites satisfied)
+  Q1 ⟵ schema DSL✅                     (FK metadata; also feeds P1/P3)
+  Q2 ⟵ Q1                               │ Q3 ⟵ Q2, IR✅ │ Q4 ⟵ Q3, J✅
+  Q5 ⟵ Q3,Q4 │ Q6 ⟵ Q5, V1
+  P1 ⟵ M✅, schema IR✅ │ P3 ⟵ M✅ (co-req of P1) │ P2 ⟵ P1
+  N1 ⟵ B✅,C✅,M✅ │ N2 ⟵ C✅ │ N3 ⟵ C✅,M3✅ │ N5 ⟵ N1
+  U1 ⟵ — │ U2 ⟵ U1 (all 11 subjects exist: schema/query/exec/testing✅,
+                     capabilities M✅, migrations O✅, routines R✅, dialects M✅,
+                     benchmarks I✅, debugging/safety✅)
+  U3 ⟵ U2 │ U5 ⟵ U2
+  R2 ⟵ J✅ (aggregation/window — verify vs J3/J4) │ R3 ⟵ routine v0✅, tx meta✅
+  W1 ⟵ I✅, L✅ (cache group) │ W3 ⟵ I5✅
+  V1 ⟵ K✅,M✅,O✅ stable surface (⧗ Q for @experimental tags) │ V3 ⟵ errors✅,M,O,S
+
+Blocked on other undone epics
+  P4 ⟵ P1–P3, ⧗ T1        (CLI-facing pull/introspect/inspect)
+  P5 ⟵ P2, O✅, ⧗ T2       (drift into doctor + migration flow)
+  T1 ⟵ O✅ (up/down/generate/drift) + ⧗ P (pull/inspect)
+  T2 ⟵ O✅, M5✅, C✅ + ⧗ P (drift check)
+  T3 ⟵ M5✅ (dialect variant shipped; only the `runtime` variant ⟵ C✅ remains)
+  T4 ⟵ ⧗ W1 (bench groups), I✅
+  T5 ⟵ ⧗ U4 │ U4 ⟵ U1–U3, ⧗ T (CLI host)
+  W2 ⟵ W1, ⧗ N (Bun lane) │ W4 ⟵ W2
+  W5 ⟵ K✅,L✅,S✅ + ⧗ Q, ⧗ P, ⧗ U, ⧗ V   (final docs pass)
+  V2 ⟵ V1 │ V4 ⟵ V3 + all error-producing epics (⧗ Q)
+
+Already satisfied by completed work (close these out)
+  R6 ✅ ⟵ O6                (routine DDL in migrations — done)
+```
+
+**Suggested remaining order:** **Q** (fully unblocked by J) and **P1–P3** (unblocked
+by M) in parallel → **T1/T2** (⟵ P) with **T3** already mostly shipped → **P4/P5**
+(⟵ T) → **U1–U3/U5** any time → **U4 + T5** (CLI export) → **N1–N3/N5** any time →
+**W1/W3** any time, **W2** after N, **V1/V3** early then **V2/V4** after Q → **W5**
+last (docs over the whole surface).
 
 ---
 
@@ -487,8 +533,9 @@ verified. ✅
 > wiring already landed in v0 (Level 9 matrix, G6b). Implemented and tested in
 > `routine-query.test.ts`: scalar calls in expressions (R1), table-valued functions
 > in `from` (R4), procedure `.run()` execution (R3 core), and capability + return-decode
-> safety (R5). Remaining v1 work: advanced named/out arguments, full procedure
-> effect/idempotency/tx-metadata honoring, and routine DDL in migrations (R6, ties to O6).
+> safety (R5). **R6 (routine DDL in migrations) landed with O6.** Remaining v1 work:
+> advanced named/out arguments and full procedure effect/idempotency/tx-metadata
+> honoring (R3), and confirming aggregate/window nodes against J (R2).
 
 | # | Task | Spec | Acceptance |
 |---|---|---|---|
@@ -497,7 +544,7 @@ verified. ✅
 | R3 | Procedure execution through Effect | §14.5 | `db.procedure(p).call(args)` → typed Effect; effects/idempotency/tx metadata honored |
 | R4 | Table-valued functions in `from` | §14.2 | `defineTableFunction` usable as a source |
 | R5 | Routine safety + capability gating | §14.6 | names never interpolated; required extensions/capabilities enforced |
-| R6 | Routine DDL in migrations (create/drop function/procedure) | §15.1 | ties to O6 |
+| R6 | ✅ Routine DDL in migrations (create/drop function/procedure) | §15.1 | **done via O6** — `CreateRoutine`/`DropRoutine` IR ops compile to PostgreSQL/MySQL function/procedure DDL, rejected before the driver on SQLite, phase-classified |
 
 ## Epic S — Observability (§17, beta)
 
@@ -570,8 +617,57 @@ implemented and verified. ✅
 - **Routine safety (§14.6):** declared/typed/capability-aware; names never interpolated → R.
 - **Runtime (§12.4):** valid only when the adapter passes the suite under that runtime → N.
 
-## v1 suggested first cut
+## Final landing order (updated 2026-07-10)
 
-1. **K + L** (alpha.1) — public `.compile()` + named caches; the hot-path API v1 is built around (backbone; reuses D/F/E).
-2. **J** (v0 tail) — joins/aggregation; unblocks **Q** (relation `join` strategy) and the feature-matrix advanced levels.
-3. **P + O** (alpha.4) — introspection/drift + migration hardening; the production-migration story.
+> The original first cut (**K + L**, **J**, **O**) is **done**. This is the
+> authoritative order to land the remaining epics, derived from the
+> [Remaining dependency tree](#remaining-dependency-tree-updated-2026-07-10).
+> Tasks inside a wave parallelize; each wave depends only on earlier ones.
+
+**Wave 0 — Unblockers (start now, parallel)**
+
+1. **Q1** — `column.references()` FK metadata (feeds P2 drift **and** Q2)
+2. **P1 + P3** — `Introspector.currentSchema()` + per-dialect introspection queries (⟵ M✅)
+3. **P2** — `Introspector.drift(expectedSchema)` (⟵ P1, Q1)
+4. **V1** — tag `@stable`/`@experimental`/`@internal` + convention (stable surface settled: K/M/O/S✅)
+
+**Wave 1 — Feature completion (parallel; each ⟵ Wave 0 or v0)**
+
+5. **Q2 → Q3 → Q4 → Q5 → Q6** — relation layer (Q4 join ⟵ J✅; Q6 ⟵ V1)
+6. **R2, R3** — finish routines (R2 ⟵ J✅; R6 already done via O6)
+7. **N1, N2, N3, N5** — Node/Bun runtime lanes (⟵ B/C/M✅)
+8. **U1 → U2 → U3, U5** — 11 skills + manifest + invariant (all subjects exist)
+9. **W1, W3** — bench groups + hot-path tracking (cache group ⟵ L✅)
+
+**Wave 2 — CLI integration (⟵ P, W1, U)**
+
+10. **T3** — finish the `runtime` variant (dialect shipped via M5✅)
+11. **T1, T2** — wire migrator/introspector into the CLI + `thor doctor` (⟵ P core)
+12. **P4, P5** — CLI `pull`/`introspect`/`inspect` + drift-in-doctor/flow (⟵ T1/T2)
+13. **T4** — `thor bench` (⟵ W1)
+14. **U4 + T5** — `thor skills export` (⟵ U1–U3 + CLI host)
+
+**Wave 3 — Stabilize + baselines**
+
+15. **W2** — Node+Bun cold/warm/hot baselines (⟵ W1 + N)
+16. **W4** — gate stabilization (⟵ W2)
+17. **V2** — document stability boundaries (⟵ V1)
+18. **V3 → V4** — freeze error set + completeness pass (V4 ⟵ Q)
+
+**Wave 4 — Final**
+
+19. **W5** — v1 docs pass over the whole surface (⟵ Q, P, U, V, S)
+
+**Critical path** (gates the finish):
+
+```txt
+Q1 → P1 → P2 → T1/T2 → P4/P5 ┐
+Q1 → Q2 → … → Q6 ────────────┼→ W5 (docs, terminal)
+U1 → U2 → U3 → U4 → T5 ───────┤
+V1 → V3 → V4 ─────────────────┘
+```
+
+**W5 (docs) is terminal** — it waits on Q, P, U, and V. The pace-setter is
+**P → T → P4/P5** (introspection gates the CLI); **Q** runs fully in parallel and
+only rejoins at V4/W5. Milestones: Wave 0–1 close **alpha.3 (N)**, **alpha.4 (P)**,
+**alpha.5 (Q)**; Waves 2–4 are **beta (R, T, U, V, W)**.
