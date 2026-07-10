@@ -80,6 +80,36 @@ defineMigration({
 })
 ```
 
+## Routine DDL (§15.1, §14)
+
+`CreateRoutine` / `DropRoutine` operations create and drop stored functions and
+procedures. Bodies are dialect-specific PL code, so `returns`, `language`, and
+`body` are **trusted SQL** — treat them like `unsafeSql`, never request data.
+
+```ts
+const op: MigrationOperation = {
+  _tag: "CreateRoutine",
+  routine: "function",
+  name: "add_one",
+  args: [{ name: "n", type: "integer" }],
+  returns: "integer",
+  language: "sql",
+  body: "select n + 1",
+  replace: true,
+  destructive: false, reversible: true, capabilities: []
+}
+```
+
+- **PostgreSQL** renders full `CREATE [OR REPLACE] FUNCTION/PROCEDURE … AS $$ … $$`.
+- **MySQL** renders `CREATE FUNCTION/PROCEDURE …` (no `OR REPLACE`; drop takes no
+  argument list). Multi-statement bodies need a DELIMITER-aware driver at
+  execution time.
+- **SQLite** has no stored routines, so these operations fail with a tagged
+  `MigrationError` **before the driver**.
+
+A created routine is an expand-phase step; a dropped one is contract-phase and
+destructive, so it obeys the policy rules above.
+
 ## Transactional-DDL awareness (§15.1)
 
 The migrator wraps each step in a transaction on dialects with transactional DDL

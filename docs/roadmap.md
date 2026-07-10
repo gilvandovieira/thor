@@ -346,7 +346,7 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | L | Query caches + precompilation modes | §9, §10 | alpha.1 | F, D, E | ✅ L1–L6 |
 | M | Dialect hardening v1 (full contract, MySQL/Postgres) | §11 | alpha.2 | B | ✅ M1–M5 |
 | N | Runtime lanes v1 (Node + Bun) | §12 | alpha.3 | C | 🟡 (caps + Bun harness) |
-| O | Migration hardening v1 (dry-run, expand/contract, policies) | §15 | alpha.4 | migrator (§13 v0) | 🟡 O1–O5 ✅ · O6 partial |
+| O | Migration hardening v1 (dry-run, expand/contract, policies) | §15 | alpha.4 | migrator (§13 v0) | ✅ O1–O6 |
 | P | Introspection & drift detection | §16 | alpha.4 | migrator `drift()` | ❌ |
 | Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J**, FK metadata | ❌ |
 | R | Routines v1 (functions/procedures, typed + guarded) | §14 | beta | routine module (wired in v0) | 🟡 |
@@ -448,13 +448,14 @@ implemented and verified. ✅
 | O3 | ✅ | Migration policies incl. `expand-only`, `allow-reviewed-destructive` | §15.4 | full policy set (`disabled`/`validate-only`/`safe-only`/`expand-only`/`allow-reviewed-destructive`, deprecated `allow-destructive`); `migrationPhase` classifier; `apply` is now policy-guarded; default `safe-only` blocks destructive auto-migration |
 | O4 | ✅ | Seed/backfill helpers | §15.1 | `backfill(effect)` wraps a typed data effect (`db.update(...).run()`) as a migration step, normalizing failures to `MigrationError` |
 | O5 | ✅ | Transactional-DDL capability awareness | §15.1 | migrator wraps each step in a transaction on transactional-DDL dialects (PG/SQLite) and applies without one where unsupported (MySQL); covered by `migration-hardening.test.ts` + `migrator.test.ts` |
-| O6 | 🟡 partial | Generated-migration tests + routine/function DDL support | §15.1 | generated-migration snapshot/behavior tests landed; **routine/function DDL ops deferred** — they extend each dialect's `compileOperation` (Epic M's `postgres/`/`sqlite/`/`mysql/` surface) and are sequenced after M to avoid churn |
+| O6 | ✅ | Generated-migration tests + routine/function DDL support | §15.1 | `CreateRoutine`/`DropRoutine` IR ops compile to PostgreSQL and MySQL function/procedure DDL, are rejected before the driver on SQLite, and are phase-classified (create=expand, drop=contract/destructive); generated-migration snapshot + behavior tests cover all three dialects |
 
-**Release-work record:** prerequisite v0 migrator ✅; owner Thor maintainers;
-required tests `migration-hardening.test.ts`, `migrate.test.ts`, `migrator.test.ts`,
-type/docs/quality checks; closes the reviewable-planning, expand/contract, and
-production-policy parts of the alpha.4 migration claim. **Definition of done:**
-O1–O5 implemented and verified; O6 routine-DDL half tracked for after M. 🟡
+**Release-work record:** prerequisites v0 migrator ✅, Epic M dialect surface ✅;
+owner Thor maintainers; required tests `migration-hardening.test.ts`,
+`migrate.test.ts`, `migrator.test.ts`, type/docs/quality checks; closes the
+reviewable-planning, expand/contract, production-policy, and routine-DDL parts of
+the alpha.4 migration claim. **Definition of done:** O1–O6 implemented and
+verified. ✅
 
 ## Epic P — Introspection & drift detection (§16, alpha.4)
 

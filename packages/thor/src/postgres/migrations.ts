@@ -88,6 +88,16 @@ const compilePostgresOperation = (operation: MigrationOperation): string => {
       return `alter table ${quote(operation.table)} alter column ${quote(operation.column)} set not null;`
     case "DropNotNull":
       return `alter table ${quote(operation.table)} alter column ${quote(operation.column)} drop not null;`
+    case "CreateRoutine": {
+      const args = operation.args.map((arg) => `${arg.name ? `${quote(arg.name)} ` : ""}${arg.type}`).join(", ")
+      const header = `create ${operation.replace ? "or replace " : ""}${operation.routine} ${quote(operation.name)}(${args})`
+      const returns = operation.routine === "function" && operation.returns ? ` returns ${operation.returns}` : ""
+      return `${header}${returns} language ${operation.language} as $$${operation.body}$$;`
+    }
+    case "DropRoutine": {
+      const args = operation.args ? `(${operation.args.map((arg) => arg.type).join(", ")})` : ""
+      return `drop ${operation.routine} ${operation.ifExists ? "if exists " : ""}${quote(operation.name)}${args};`
+    }
     case "RawSql":
       return operation.sql.trim().endsWith(";") ? operation.sql : `${operation.sql};`
   }

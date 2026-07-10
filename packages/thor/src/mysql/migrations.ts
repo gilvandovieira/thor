@@ -131,6 +131,17 @@ export const compileMySQLOperation = (operation: MigrationOperation): string => 
     case "SetNotNull":
     case "DropNotNull":
       return unsupportedAlter(operation)
+    case "CreateRoutine": {
+      // MySQL has no CREATE OR REPLACE for routines and no LANGUAGE/`$$` — the
+      // trusted body carries characteristics + BEGIN/END. Live execution needs a
+      // DELIMITER-aware driver for multi-statement bodies.
+      const args = operation.args.map((arg) => `${arg.name ? `${quote(arg.name)} ` : ""}${arg.type}`).join(", ")
+      const returns = operation.routine === "function" && operation.returns ? ` returns ${operation.returns}` : ""
+      return `create ${operation.routine} ${quote(operation.name)}(${args})${returns} ${operation.body}`
+    }
+    case "DropRoutine":
+      // MySQL DROP FUNCTION/PROCEDURE takes no argument list.
+      return `drop ${operation.routine} ${operation.ifExists ? "if exists " : ""}${quote(operation.name)};`
     case "RawSql":
       return operation.sql.trim().endsWith(";") ? operation.sql : `${operation.sql};`
   }

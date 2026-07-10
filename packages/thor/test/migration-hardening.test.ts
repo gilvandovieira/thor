@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest"
 import { Effect, Layer } from "effect"
-import { Database, type Driver, type RawRow, db, pg } from "@gilvandovieira/thor"
+import { Database, type Driver, MySQLDialect, type RawRow, db, pg } from "@gilvandovieira/thor"
 import { PostgresDialect } from "@gilvandovieira/thor/postgres"
+import { SQLiteDialect } from "@gilvandovieira/thor/sqlite"
 import {
   type JournalEntry,
   type MigrationOperation,
@@ -219,6 +220,51 @@ describe("Epic O1 — diff, plan, dryRun (spec §15.3)", () => {
     ))
     expect(entry.id).toBe("9002_drop")
     expect(h.scripts.join("\n")).toContain("drop table")
+  })
+})
+
+describe("Epic O6 — routine/function DDL (spec §15.1, §14)", () => {
+  const createFn: MigrationOperation = {
+    _tag: "CreateRoutine", routine: "function", name: "add_one",
+    args: [{ name: "n", type: "integer" }], returns: "integer", language: "sql",
+    body: "select n + 1", replace: true, destructive: false, reversible: true, capabilities: []
+  }
+  const createProc: MigrationOperation = {
+    _tag: "CreateRoutine", routine: "procedure", name: "do_it",
+    args: [{ name: "x", type: "integer" }], language: "sql", body: "begin end",
+    destructive: false, reversible: true, capabilities: []
+  }
+  const dropFn: MigrationOperation = {
+    _tag: "DropRoutine", routine: "function", name: "add_one",
+    args: [{ type: "integer" }], ifExists: true, destructive: true, reversible: false, capabilities: []
+  }
+
+  it("classifies create as expand and drop as contract", () => {
+    expect(migrationPhase(createFn)).toBe("expand")
+    expect(migrationPhase(dropFn)).toBe("contract")
+    // A dropped routine is destructive, so safe-only blocks it.
+    expect(guardOperations([dropFn], "safe-only").map((e) => e.guard)).toEqual(["destructive-migration"])
+  })
+
+  it("compiles PostgreSQL function/procedure DDL", () => {
+    expect(PostgresDialect.migrations.compileOperation(createFn))
+      .toBe(`create or replace function "add_one"("n" integer) returns integer language sql as $$select n + 1$$;`)
+    expect(PostgresDialect.migrations.compileOperation(createProc))
+      .toBe(`create procedure "do_it"("x" integer) language sql as $$begin end$$;`)
+    expect(PostgresDialect.migrations.compileOperation(dropFn))
+      .toBe(`drop function if exists "add_one"(integer);`)
+  })
+
+  it("compiles MySQL routine DDL (no OR REPLACE, no arg list on drop)", () => {
+    expect(MySQLDialect.migrations.compileOperation(createFn))
+      .toBe("create function `add_one`(`n` integer) returns integer select n + 1")
+    expect(MySQLDialect.migrations.compileOperation(dropFn))
+      .toBe("drop function if exists `add_one`;")
+  })
+
+  it("rejects stored routines on SQLite before the driver", () => {
+    expect(() => SQLiteDialect.migrations.compileOperation(createFn)).toThrow(/does not support stored function/)
+    expect(() => SQLiteDialect.migrations.compileOperation(dropFn)).toThrow(/does not support stored function/)
   })
 })
 

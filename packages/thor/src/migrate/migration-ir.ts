@@ -133,6 +133,45 @@ export interface RawSqlOp extends OpBase {
   readonly unchecked: true
 }
 
+/** Whether a routine is a value-returning function or a called procedure. */
+export type RoutineKind = "function" | "procedure"
+
+/** A routine argument. `type` is trusted dialect SQL type text (never interpolated user data). */
+export interface RoutineArgSpec {
+  readonly name?: string
+  readonly type: string
+}
+
+/**
+ * Creates a stored function or procedure (spec §14, §15.1). Routine bodies are
+ * inherently dialect-specific PL code, so `returns`, `language`, and `body` carry
+ * trusted SQL text — treat them like `unsafeSql`, never request data.
+ */
+export interface CreateRoutineOp extends OpBase {
+  readonly _tag: "CreateRoutine"
+  readonly routine: RoutineKind
+  readonly name: string
+  readonly args: ReadonlyArray<RoutineArgSpec>
+  /** Return type SQL for functions; ignored for procedures. */
+  readonly returns?: string
+  /** Routine language (e.g. `sql`, `plpgsql`). */
+  readonly language: string
+  /** Trusted routine body. */
+  readonly body: string
+  /** Emit `CREATE OR REPLACE` where the dialect supports it. */
+  readonly replace?: boolean
+}
+
+/** Drops a stored function or procedure. */
+export interface DropRoutineOp extends OpBase {
+  readonly _tag: "DropRoutine"
+  readonly routine: RoutineKind
+  readonly name: string
+  /** Argument types for overload disambiguation where the dialect requires them. */
+  readonly args?: ReadonlyArray<RoutineArgSpec>
+  readonly ifExists?: boolean
+}
+
 /** Discriminated union compiled by each dialect's migration strategy. */
 export type MigrationOperation =
   | CreateTableOp
@@ -145,6 +184,8 @@ export type MigrationOperation =
   | SetNotNullOp
   | DropNotNullOp
   | RawSqlOp
+  | CreateRoutineOp
+  | DropRoutineOp
 
 /** A planned, guarded sequence of operations for one migration. */
 export interface MigrationPlan {
@@ -166,6 +207,7 @@ export const migrationPhase = (op: MigrationOperation): "expand" | "contract" =>
   switch (op._tag) {
     case "CreateTable":
     case "DropNotNull":
+    case "CreateRoutine":
       return "expand"
     case "AddColumn": {
       // Adding a required column breaks old inserts; a unique one can collide on
@@ -179,6 +221,7 @@ export const migrationPhase = (op: MigrationOperation): "expand" | "contract" =>
     case "SetNotNull":
     case "DropColumn":
     case "DropTable":
+    case "DropRoutine":
     case "RawSql":
       return "contract"
   }

@@ -156,6 +156,9 @@ export const compileSQLiteOperation = (operation: MigrationOperation): string =>
     case "SetNotNull":
     case "DropNotNull":
       return unsupportedAlter(operation)
+    case "CreateRoutine":
+    case "DropRoutine":
+      throw new Error(`SQLite does not support stored ${operation.routine}s`)
     case "RawSql":
       return operation.sql.trim().endsWith(";") ? operation.sql : `${operation.sql};`
   }
