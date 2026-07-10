@@ -13,7 +13,6 @@ import type { Dialect } from "../dialect.js"
 import { CompileError } from "../errors/index.js"
 import type { QueryIR, SelectionField } from "../ir/query-ir.js"
 import { PostgresDialect } from "../postgres/dialect.js"
-import { defaultQueryCaches } from "./cache.js"
 import { Database, type DatabaseService } from "./database.js"
 import type { CompiledStatement } from "./driver.js"
 import type { CanonicalExecutionMode } from "./plan.js"
@@ -239,9 +238,9 @@ class CompiledQueryImpl<
    * @returns The service, or a policy-overridden copy.
    */
   private applyPolicy(db: DatabaseService): DatabaseService {
-    const { mode, prepare } = this.options
-    if (mode === undefined && prepare === undefined) return db
-    const next: DatabaseService = { ...db }
+    const { cache, mode, prepare } = this.options
+    if (mode === undefined && prepare === undefined && cache !== false) return db
+    const next: DatabaseService = { ...db, recordPreparedCache: cache !== false }
     if (mode !== undefined) {
       // Drop any inherited explicit decode override so decode derives from mode.
       const mutable = next as { mode: typeof mode; decodeMode?: unknown }
@@ -267,9 +266,6 @@ class CompiledQueryImpl<
       const service = this.applyPolicy(db)
       const failure = this.plan.guard(service.dialect, service.allowEmulation)
       if (failure) return Effect.fail(failure) as unknown as Effect.Effect<Output, Error>
-      if (this.options.cache !== false && service.preparedStatements && this.statement.paramOrder.length > 0) {
-        ;(service.queryCache ?? defaultQueryCaches).notePrepared(this.statement.cacheKey)
-      }
       return this.executor(this.plan, this.statement, service, args[0] ?? {})
     })
   }

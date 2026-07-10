@@ -350,7 +350,7 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | P | Introspection & drift detection | §16 | alpha.4 | migrator `drift()` | ❌ |
 | Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J**, FK metadata | ❌ |
 | R | Routines v1 (functions/procedures, typed + guarded) | §14 | beta | routine module (wired in v0) | 🟡 |
-| S | Observability (metadata, spans, param-redaction) | §17 | beta | annotations (§7.4 v0) | ❌ |
+| S | Observability (metadata, spans, param-redaction) | §17 | beta | annotations (§7.4 v0) | ✅ S1–S5 |
 | T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI (v0) | ❌ |
 | U | LLM skills (11 skill files + manifest + export) | §21 | beta | — | ❌ |
 | V | API stability levels + error model v1 | §6, §22 | beta | errors (v0) | ❌ |
@@ -501,13 +501,20 @@ verified. ✅
 
 ## Epic S — Observability (§17, beta)
 
-| # | Task | Spec | Acceptance |
-|---|---|---|---|
-| S1 | Structured per-query metadata | §17.1 | kind/dialect/runtime/tables/hash/compile+prepared cache hit-miss/duration/rowCount/errorTag/txn id |
-| S2 | Effect tracing spans with `thor.*` names | §17.2 | `thor.query.select.users`, `thor.transaction.commit`, `thor.migration.apply` |
-| S3 | Parameter-logging modes `none` / `redacted` / `unsafe-full` | §17.3 | default never logs raw params; `unsafe-full` explicit |
-| S4 | `db.withObservability({ tracing, metrics, logSql, logParams })` | §17.4 | opt-in tracing/metrics/log levels |
-| S5 | Observability invariant test | §17.5 | no sensitive data leaks by default (asserted) |
+| # | Status | Task | Spec | Acceptance |
+|---|---|---|---|---|
+| S1 | ✅ | Structured per-query metadata | §17.1 | kind/dialect/runtime/tables/hash/compile+prepared cache hit-miss/duration/rowCount/errorTag/txn id |
+| S2 | ✅ | Effect tracing spans with `thor.*` names | §17.2 | `thor.query.select.users`, `thor.transaction.commit`, `thor.migration.apply` |
+| S3 | ✅ | Parameter-logging modes `none` / `redacted` / `unsafe-full` | §17.3 | default never logs raw params; `unsafe-full` explicit |
+| S4 | ✅ | `db.withObservability({ tracing, metrics, logSql, logParams })` | §17.4 | opt-in tracing/metrics/log levels |
+| S5 | ✅ | Observability invariant test | §17.5 | no sensitive data leaks by default (asserted) |
+
+**Release-work record:** prerequisite query annotations ✅; owner Thor
+maintainers; required tests `observability.test.ts` plus full unit/type/docs
+checks; closes the beta observability claim with Effect-native spans and metrics,
+structured events, cache outcomes, transaction/migration context, and explicit
+unsafe boundaries for raw SQL and parameters. **Definition of done:** S1–S5 are
+implemented and verified. ✅
 
 ## Epic T — CLI v1 (§20, beta)
 

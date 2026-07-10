@@ -12,6 +12,7 @@ import type { Dialect } from "../dialect.js"
 import type { Driver } from "./driver.js"
 import type { DecodeMode, ExecutionMode } from "./plan.js"
 import type { QueryCaches } from "./cache.js"
+import type { ObservabilityConfig, ObservabilityContext } from "../observability/index.js"
 
 /** Services required by query execution. */
 export interface DatabaseService {
@@ -42,6 +43,12 @@ export interface DatabaseService {
    * GC-friendly). Install a bounded LRU registry with `withQueryCache`.
    */
   readonly queryCache?: QueryCaches
+  /** Opt-in tracing, metrics, and safe logging configuration (spec §17). */
+  readonly observability?: ObservabilityConfig
+  /** Transaction and migration context propagated into query metadata. */
+  readonly observabilityContext?: ObservabilityContext
+  /** Whether execution should update prepared-cache observation counters. @internal */
+  readonly recordPreparedCache?: boolean
 }
 
 /** Effect context tag that provides the active `DatabaseService`. */

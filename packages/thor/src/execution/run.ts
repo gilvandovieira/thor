@@ -21,6 +21,7 @@ import type { CommandResult, CompiledStatement, RawRow } from "./driver.js"
 import { type DatabaseService } from "./database.js"
 import { DEFAULT_EXECUTION_MODE, resolveDecodeMode } from "./plan.js"
 import { defaultQueryCaches, type QueryCaches } from "./cache.js"
+import { observeQuery, type QueryCacheOutcome, type QueryObservationState } from "../observability/index.js"
 
 /**
  * The named query cache registry backing a service's non-prepared execution
@@ -296,6 +297,48 @@ const bindValues = (
 const preparedNameFor = (db: DatabaseService, compiled: CompiledStatement): string | undefined =>
   db.preparedStatements && compiled.paramOrder.length > 0 ? compiled.cacheKey : undefined
 
+/**
+ * @param caches - Active query caches.
+ * @param ir - Normalized query shape.
+ * @param dialect - Target SQL dialect.
+ * @returns Whether dialect SQL is already retained in the compile cache.
+ */
+const hasCompiled = (caches: QueryCaches, ir: QueryIR, dialect: Dialect): boolean =>
+  (caches.compile.peek(ir) as Map<Dialect, CompiledStatement> | undefined)?.has(dialect) ?? false
+
+const preparedByDriver = new WeakMap<object, Set<string>>()
+
+/**
+ * Record prepared-shape reuse once and return its per-execution outcome.
+ *
+ * @param db - Active database service.
+ * @param caches - Active query caches.
+ * @param compiled - Compiled query shape.
+ * @returns The observed prepared-cache outcome.
+ */
+const notePrepared = (
+  db: DatabaseService,
+  caches: QueryCaches,
+  compiled: CompiledStatement
+): QueryCacheOutcome => {
+  if (!preparedNameFor(db, compiled) || db.recordPreparedCache === false) return "not-used"
+  let prepared = preparedByDriver.get(db.driver)
+  if (!prepared) {
+    prepared = new Set()
+    preparedByDriver.set(db.driver, prepared)
+  }
+  const hit = prepared.has(compiled.cacheKey)
+  prepared.add(compiled.cacheKey)
+  caches.notePrepared(compiled.cacheKey)
+  return hit ? "hit" : "miss"
+}
+
+/** @returns Fresh mutable facts scoped to one execution. */
+const observationState = (): QueryObservationState => ({
+  compileCache: "not-used",
+  preparedCache: "not-used"
+})
+
 type RowDecoder = (raw: RawRow) => Either.Either<Record<string, unknown>, ParseResult.ParseError>
 
 /**
@@ -543,6 +586,15 @@ export class PreparedExecutionPlan {
   }
 
   /**
+   * @param dialect - Target dialect.
+   * @returns Whether this plan already retains SQL for the dialect's current profile.
+   * @internal
+   */
+  hasCompilation(dialect: Dialect): boolean {
+    return this.compilations.get(dialect)?.profileHash === dialect.profileHash
+  }
+
+  /**
    * Returns the cached guard result for a dialect profile and policy.
    *
    * @param dialect - Active SQL dialect.
@@ -640,18 +692,24 @@ export const executePreparedRows = <A>(
   plan: PreparedExecutionPlan,
   db: DatabaseService,
   args: QueryArgs
-): Effect.Effect<ReadonlyArray<A>, QueryError> => {
-  const failure = plan.guard(db.dialect, db.allowEmulation)
-  if (failure) return Effect.fail(failure)
-
-  const compiled = plan.compile(db.dialect)
-  const trusted = resolveDecodeMode(db.mode ?? DEFAULT_EXECUTION_MODE, db.decodeMode) === "trusted"
-  return Effect.flatMap(plan.bind(compiled.paramOrder, args), (values) =>
-    Effect.flatMap(db.driver.query(compiled.sql, values, preparedNameFor(db, compiled)), (rows) =>
-      trusted ? Effect.succeed(rows as ReadonlyArray<A>) : (plan.decode(rows) as Effect.Effect<ReadonlyArray<A>, DecodeError>)
-    )
-  )
-}
+): Effect.Effect<ReadonlyArray<A>, QueryError> => Effect.suspend(() => {
+  const state = observationState()
+  const execution = Effect.gen(function* () {
+    const failure = plan.guard(db.dialect, db.allowEmulation)
+    if (failure) return yield* Effect.fail(failure)
+    state.compileCache = plan.hasCompilation(db.dialect) ? "hit" : "miss"
+    const compiled = plan.compile(db.dialect)
+    state.compiledSql = compiled.sql
+    state.paramOrder = compiled.paramOrder
+    const values = yield* plan.bind(compiled.paramOrder, args)
+    state.values = values
+    state.preparedCache = notePrepared(db, cachesFor(db), compiled)
+    const rows = yield* db.driver.query(compiled.sql, values, preparedNameFor(db, compiled))
+    const trusted = resolveDecodeMode(db.mode ?? DEFAULT_EXECUTION_MODE, db.decodeMode) === "trusted"
+    return trusted ? rows as ReadonlyArray<A> : (yield* plan.decode(rows)) as ReadonlyArray<A>
+  })
+  return observeQuery(db, plan.ir, args, state, execution, (rows) => rows.length)
+})
 
 /**
  * Executes a prepared command plan with per-call values.
@@ -665,15 +723,22 @@ export const executePreparedCommand = (
   plan: PreparedExecutionPlan,
   db: DatabaseService,
   args: QueryArgs
-): Effect.Effect<CommandResult, QueryError> => {
-  const failure = plan.guard(db.dialect, db.allowEmulation)
-  if (failure) return Effect.fail(failure)
-
-  const compiled = plan.compile(db.dialect)
-  return Effect.flatMap(plan.bind(compiled.paramOrder, args), (values) =>
-    db.driver.execute(compiled.sql, values, preparedNameFor(db, compiled))
-  )
-}
+): Effect.Effect<CommandResult, QueryError> => Effect.suspend(() => {
+  const state = observationState()
+  const execution = Effect.gen(function* () {
+    const failure = plan.guard(db.dialect, db.allowEmulation)
+    if (failure) return yield* Effect.fail(failure)
+    state.compileCache = plan.hasCompilation(db.dialect) ? "hit" : "miss"
+    const compiled = plan.compile(db.dialect)
+    state.compiledSql = compiled.sql
+    state.paramOrder = compiled.paramOrder
+    const values = yield* plan.bind(compiled.paramOrder, args)
+    state.values = values
+    state.preparedCache = notePrepared(db, cachesFor(db), compiled)
+    return yield* db.driver.execute(compiled.sql, values, preparedNameFor(db, compiled))
+  })
+  return observeQuery(db, plan.ir, args, state, execution, (result) => result.rowCount)
+})
 
 /**
  * Executes rows through an already compiled plan without guard traversal or SQL
@@ -692,14 +757,21 @@ export const executeCompiledRows = <A>(
   compiled: CompiledStatement,
   db: DatabaseService,
   args: QueryArgs
-): Effect.Effect<ReadonlyArray<A>, QueryError> => {
-  const trusted = resolveDecodeMode(db.mode ?? DEFAULT_EXECUTION_MODE, db.decodeMode) === "trusted"
-  return Effect.flatMap(plan.bind(compiled.paramOrder, args), (values) =>
-    Effect.flatMap(db.driver.query(compiled.sql, values, preparedNameFor(db, compiled)), (rows) =>
-      trusted ? Effect.succeed(rows as ReadonlyArray<A>) : (plan.decode(rows) as Effect.Effect<ReadonlyArray<A>, DecodeError>)
-    )
-  )
-}
+): Effect.Effect<ReadonlyArray<A>, QueryError> => Effect.suspend(() => {
+  const state = observationState()
+  state.compileCache = "hit"
+  state.compiledSql = compiled.sql
+  state.paramOrder = compiled.paramOrder
+  const execution = Effect.gen(function* () {
+    const values = yield* plan.bind(compiled.paramOrder, args)
+    state.values = values
+    state.preparedCache = notePrepared(db, cachesFor(db), compiled)
+    const rows = yield* db.driver.query(compiled.sql, values, preparedNameFor(db, compiled))
+    const trusted = resolveDecodeMode(db.mode ?? DEFAULT_EXECUTION_MODE, db.decodeMode) === "trusted"
+    return trusted ? rows as ReadonlyArray<A> : (yield* plan.decode(rows)) as ReadonlyArray<A>
+  })
+  return observeQuery(db, plan.ir, args, state, execution, (rows) => rows.length)
+})
 
 /**
  * Executes a command through an already compiled plan without guard traversal
@@ -716,10 +788,18 @@ export const executeCompiledCommand = (
   compiled: CompiledStatement,
   db: DatabaseService,
   args: QueryArgs
-): Effect.Effect<CommandResult, QueryError> =>
-  Effect.flatMap(plan.bind(compiled.paramOrder, args), (values) =>
-    db.driver.execute(compiled.sql, values, preparedNameFor(db, compiled))
-  )
+): Effect.Effect<CommandResult, QueryError> => Effect.suspend(() => {
+  const state = observationState()
+  state.compileCache = "hit"
+  state.compiledSql = compiled.sql
+  state.paramOrder = compiled.paramOrder
+  const execution = Effect.flatMap(plan.bind(compiled.paramOrder, args), (values) => {
+    state.values = values
+    state.preparedCache = notePrepared(db, cachesFor(db), compiled)
+    return db.driver.execute(compiled.sql, values, preparedNameFor(db, compiled))
+  })
+  return observeQuery(db, plan.ir, args, state, execution, (result) => result.rowCount)
+})
 
 /**
  * Guards, compiles, binds, executes, and decodes a row-returning query.
@@ -736,18 +816,25 @@ export const executeRows = <A>(
   fields: ReadonlyArray<SelectionField>,
   db: DatabaseService,
   args: QueryArgs
-): Effect.Effect<ReadonlyArray<A>, QueryError> =>
-  Effect.gen(function* () {
+): Effect.Effect<ReadonlyArray<A>, QueryError> => Effect.suspend(() => {
+  const state = observationState()
+  const execution = Effect.gen(function* () {
     const caches = cachesFor(db)
     const shape = shapeVia(caches, ir)
     yield* guardForMode(caches, shape, db)
+    state.compileCache = hasCompiled(caches, shape, db.dialect) ? "hit" : "miss"
     const compiled = compileVia(caches, shape, db.dialect)
+    state.compiledSql = compiled.sql
+    state.paramOrder = compiled.paramOrder
     const values = yield* bindValues(shape, compiled.paramOrder, args)
+    state.values = values
     const prepared = preparedNameFor(db, compiled)
-    if (prepared) caches.notePrepared(prepared)
+    state.preparedCache = notePrepared(db, caches, compiled)
     const rows = yield* db.driver.query(compiled.sql, values, prepared)
     return (yield* decodeForMode(caches, fields, rows, db)) as ReadonlyArray<A>
   })
+  return observeQuery(db, ir, args, state, execution, (rows) => rows.length)
+})
 
 /**
  * Guards, compiles, binds, and executes a command without row decoding.
@@ -761,17 +848,24 @@ export const executeCommand = (
   ir: QueryIR,
   db: DatabaseService,
   args: QueryArgs
-): Effect.Effect<CommandResult, QueryError> =>
-  Effect.gen(function* () {
+): Effect.Effect<CommandResult, QueryError> => Effect.suspend(() => {
+  const state = observationState()
+  const execution = Effect.gen(function* () {
     const caches = cachesFor(db)
     const shape = shapeVia(caches, ir)
     yield* guardForMode(caches, shape, db)
+    state.compileCache = hasCompiled(caches, shape, db.dialect) ? "hit" : "miss"
     const compiled = compileVia(caches, shape, db.dialect)
+    state.compiledSql = compiled.sql
+    state.paramOrder = compiled.paramOrder
     const values = yield* bindValues(shape, compiled.paramOrder, args)
+    state.values = values
     const prepared = preparedNameFor(db, compiled)
-    if (prepared) caches.notePrepared(prepared)
+    state.preparedCache = notePrepared(db, caches, compiled)
     return yield* db.driver.execute(compiled.sql, values, prepared)
   })
+  return observeQuery(db, ir, args, state, execution, (result) => result.rowCount)
+})
 
 // --- cardinality refinements (spec §6.5) ------------------------------------
 

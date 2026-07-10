@@ -19,6 +19,7 @@ import type { DialectStatement } from "../dialect.js"
 import { type AnyTable, tableMeta } from "../schema/table.js"
 import { Database, type DatabaseService } from "../execution/database.js"
 import { runTransaction } from "../execution/transaction.js"
+import { observeLifecycle } from "../observability/index.js"
 import { IrreversibleMigrationError, MigrationError, TransactionError } from "../errors/index.js"
 import type { MigrationOperation, MigrationPlan } from "./migration-ir.js"
 import {
@@ -199,8 +200,28 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
 
     const deleteJournal = (id: string) => exec(dialect.deleteJournal(JOURNAL), [id])
 
-    const runStep = (step: MigrationStep): Effect.Effect<void, MigrationError> =>
-      isSqlStatement(step) ? execScript(step.sql).pipe(Effect.asVoid) : Effect.provideService(step, Database, db)
+    const migrationDatabase = (migrationId: string, database: DatabaseService = db): DatabaseService => ({
+      ...database,
+      observabilityContext: { ...database.observabilityContext, migrationId }
+    })
+
+    const runStep = (
+      step: MigrationStep,
+      migrationId: string,
+      database: DatabaseService
+    ): Effect.Effect<void, MigrationError> =>
+      isSqlStatement(step)
+        ? execScript(step.sql).pipe(Effect.asVoid)
+        : Effect.provideService(step, Database, migrationDatabase(migrationId, database))
+
+    const observeMigration = <A, E>(operation: string, migrationId: string | undefined, effect: Effect.Effect<A, E>) =>
+      observeLifecycle(
+        db,
+        "migration",
+        operation,
+        effect,
+        { ...db.observabilityContext, ...(migrationId ? { migrationId } : {}) }
+      )
 
     const replay = <A, E>(exit: Exit.Exit<A, E>): Effect.Effect<A, E> =>
       Exit.isSuccess(exit) ? Effect.succeed(exit.value) : Effect.failCause(exit.cause)
@@ -224,8 +245,11 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
     }
 
     /** Run `body` inside a transaction, committing on success and rolling back on any exit failure. */
-    const withTx = <A, E>(body: Effect.Effect<A, E>): Effect.Effect<A, E | MigrationError> =>
-      runTransaction(db, body).pipe(Effect.mapErrorCause((cause) => Cause.map(cause, (error) =>
+    const withTx = <A, E, R>(
+      body: Effect.Effect<A, E, R>,
+      database: DatabaseService = db
+    ): Effect.Effect<A, E | MigrationError, Exclude<R, Database>> =>
+      runTransaction(database, body).pipe(Effect.mapErrorCause((cause) => Cause.map(cause, (error) =>
         error instanceof TransactionError
           ? new MigrationError({ message: error.message, cause: error })
           : error)))
@@ -286,10 +310,13 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
 
     const up: MigratorService["up"] = () => {
       const defs = migrations()
-      const applyOne = (migration: MigrationDefinition): Effect.Effect<JournalEntry, MigrationError> =>
+      const applyOne = (
+        migration: MigrationDefinition,
+        database: DatabaseService
+      ): Effect.Effect<JournalEntry, MigrationError> =>
         Effect.gen(function* () {
           const start = Date.now()
-          yield* runStep(migration.up)
+          yield* runStep(migration.up, migration.id, database)
           const entry: JournalEntry = {
             id: migration.id,
             name: migration.name,
@@ -299,7 +326,7 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
           }
           yield* insertJournal(entry)
           return entry
-        })
+        }).pipe((effect) => observeMigration("apply", migration.id, effect))
 
       if (hasAdvisoryLock) {
         return withLock(Effect.gen(function* () {
@@ -311,7 +338,10 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
           const pending = defs.filter((migration) => !applied.has(migration.id))
           const entries: JournalEntry[] = []
           for (const migration of pending) {
-            entries.push(yield* (dialect.transactionalDdl ? withTx(applyOne(migration)) : applyOne(migration)))
+            const scoped = migrationDatabase(migration.id)
+            entries.push(yield* (dialect.transactionalDdl
+              ? withTx(Effect.flatMap(Database, (active) => applyOne(migration, active)), scoped)
+              : applyOne(migration, scoped)))
           }
           return entries
         }))
@@ -328,12 +358,13 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
         const entries: JournalEntry[] = []
         while (true) {
           const entry = yield* withTx(Effect.gen(function* () {
+            const active = yield* Database
             yield* ensureJournal
             const appliedEntries = yield* readApplied
             yield* validateApplied(defs, appliedEntries)
             const applied = new Set(appliedEntries.map((item) => item.id))
             const next = defs.find((migration) => !applied.has(migration.id))
-            return next ? yield* applyOne(next) : null
+            return next ? yield* applyOne(next, active) : null
           }))
           if (!entry) break
           entries.push(entry)
@@ -344,6 +375,7 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
 
     const down: MigratorService["down"] = () => {
       const downBody = (transactionalStep: boolean) => Effect.gen(function* () {
+        const active = yield* Database
         yield* ensureJournal
         const applied = yield* readApplied
         const defs = migrations()
@@ -363,14 +395,20 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
           )
         }
         const downStep = def.down
-        const rollbackOne = Effect.gen(function* () {
-              yield* runStep(downStep)
-              yield* deleteJournal(def.id)
-        })
-        yield* (transactionalStep ? withTx(rollbackOne) : rollbackOne)
+        const rollbackOne = (database: DatabaseService) => observeMigration("rollback", def.id, Effect.gen(function* () {
+          yield* runStep(downStep, def.id, database)
+          yield* deleteJournal(def.id)
+        }))
+        yield* (transactionalStep
+          ? withTx(Effect.flatMap(Database, rollbackOne), migrationDatabase(def.id, active))
+          : rollbackOne(active))
       })
-      if (hasAdvisoryLock) return withLock(downBody(dialect.transactionalDdl))
-      return dialect.transactionalDdl ? withTx(downBody(false)) : downBody(false)
+      const effect = hasAdvisoryLock
+        ? withLock(Effect.provideService(downBody(dialect.transactionalDdl), Database, db))
+        : dialect.transactionalDdl
+        ? withTx(downBody(false))
+        : Effect.provideService(downBody(false), Database, db)
+      return effect
     }
 
     const policy = config.policy ?? "safe-only"
@@ -452,22 +490,24 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
           }
           yield* insertJournal({ ...entry, executionTimeMs: Math.max(0, Math.round(Date.now() - start)) })
         })
-        yield* (transactionalStep ? withTx(applyBody) : applyBody)
+        yield* (transactionalStep ? withTx(applyBody, migrationDatabase(plan.id)) : applyBody)
         return { ...entry, executionTimeMs: Math.max(0, Math.round(Date.now() - start)) }
       })
-      if (hasAdvisoryLock) return withLock(applyLocked(dialect.transactionalDdl))
-      return dialect.transactionalDdl ? withTx(applyLocked(false)) : applyLocked(false)
+      const effect = hasAdvisoryLock
+        ? withLock(applyLocked(dialect.transactionalDdl))
+        : dialect.transactionalDdl ? withTx(applyLocked(false), migrationDatabase(plan.id)) : applyLocked(false)
+      return observeMigration("apply", plan.id, effect)
     }
 
     const drift: MigratorService["drift"] = () =>
-      Effect.gen(function* () {
+      observeMigration("drift", undefined, Effect.gen(function* () {
         const rows = yield* queryRows(dialect.listTables)
         const existing = new Set(rows.map((r) => String(r.table_name)))
         return yield* Effect.try({
           try: () => (config.schema ?? []).filter((t) => !existing.has(tableMeta(t).name)).map(tableToCreateOp),
           catch: (cause) => new MigrationError({ message: `schema cannot be represented as migration DDL: ${String(cause)}`, cause })
         })
-      })
+      }))
 
     return { status, check, up, down, diff, plan, generate, dryRun, apply, drift }
   })

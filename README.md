@@ -33,7 +33,8 @@ adapter also has a Bun contract-test lane.
 
 Everything ships from one package. The common things (`db`, `pg`, `eq`, `param`,
 …) come from the top level; deeper surfaces live under subpaths like
-`@gilvandovieira/thor/postgres`, `/sqlite`, `/mysql`, `/migrate`, and `/testing`.
+`@gilvandovieira/thor/postgres`, `/sqlite`, `/mysql`, `/migrate`,
+`/observability`, and `/testing`.
 
 ## A quick tour
 
@@ -105,6 +106,10 @@ invariants, and the full stable surface. For the named cache layers behind this
 hot path, bounded LRU caches (`withQueryCache`), precompilation modes
 (`compilePrepared`/`compileUnsafeHot`), and the safety modes
 (`safe`/`trusted`/`unsafe-hot`), see [the query cache guide](docs/query-cache.md).
+
+Effect spans, metrics, structured query metadata, and safe SQL/parameter logging
+are opt-in through `db.withObservability(...)`. Raw values are omitted by
+default; see [the observability guide](docs/observability.md).
 
 ### 4. Run it
 

@@ -44,6 +44,7 @@ import {
 import type { CommandResult, CompiledStatement } from "../execution/driver.js"
 import { compilableEffect, type TerminalResult } from "../execution/compiled-query.js"
 import { withMode, withQueryCache } from "../execution/plan.js"
+import { withObservability } from "../observability/index.js"
 import {
   type Expr,
   type MergeParameterMaps,
@@ -1345,6 +1346,8 @@ export const db = {
    * `db`-level sugar over the layer wrapper of the same name.
    */
   withQueryCache,
+  /** Wrap a `Database` layer with Effect tracing, metrics, and safe logging (spec §17). */
+  withObservability,
   /**
    * @param fields - Output aliases mapped to columns or expressions.
    * @returns A select awaiting `from()`.

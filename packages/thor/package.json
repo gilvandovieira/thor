@@ -65,6 +65,10 @@
     "./capabilities": {
       "types": "./dist/capabilities/index.d.ts",
       "default": "./dist/capabilities/index.js"
+    },
+    "./observability": {
+      "types": "./dist/observability/index.d.ts",
+      "default": "./dist/observability/index.js"
     }
   },
   "scripts": {

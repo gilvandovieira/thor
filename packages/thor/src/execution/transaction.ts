@@ -6,6 +6,7 @@
 import { Cause, Effect, Exit } from "effect"
 import { TransactionError } from "../errors/index.js"
 import { Database, type DatabaseService } from "./database.js"
+import { observeLifecycle } from "../observability/index.js"
 
 /** Isolation levels supported by Thor's transaction API. */
 export type TransactionIsolationLevel = "read-uncommitted" | "read-committed" | "repeatable-read" | "serializable"
@@ -34,6 +35,7 @@ export interface TransactionOptions<E = unknown> {
 }
 
 interface TransactionState {
+  readonly id: string
   readonly depth: number
   readonly nextSavepoint: { value: number }
 }
@@ -50,7 +52,14 @@ const transactionError =
 
 /** @param database - Active service. @param sql - Lifecycle SQL. @param phase - Diagnostic phase. @returns A void lifecycle Effect. */
 const lifecycle = (database: DatabaseService, sql: string, phase: string) =>
-  database.driver.execute(sql, []).pipe(Effect.mapError(transactionError(phase)), Effect.asVoid)
+  observeLifecycle(
+    database,
+    "transaction",
+    phase,
+    database.driver.execute(sql, []).pipe(Effect.mapError(transactionError(phase)), Effect.asVoid)
+  )
+
+let transactionCounter = 0
 
 /**
  * @param database - Active database service.
@@ -112,20 +121,25 @@ export const runTransaction = <A, E, R>(
       Effect.gen(function* () {
         if (current) {
           const name = `thor_sp_${++current.nextSavepoint.value}`
-          yield* lifecycle(database, `savepoint ${name}`, "savepoint")
           const nestedDatabase: TransactionDatabaseService = {
             ...database,
-            transactionState: { depth: current.depth + 1, nextSavepoint: current.nextSavepoint }
+            transactionState: { id: current.id, depth: current.depth + 1, nextSavepoint: current.nextSavepoint },
+            observabilityContext: {
+              ...database.observabilityContext,
+              transactionId: current.id,
+              transactionScope: current.depth + 1
+            }
           }
+          yield* lifecycle(nestedDatabase, `savepoint ${name}`, "savepoint")
           const bodyExit = yield* Effect.exit(restore(Effect.provideService(body, Database, nestedDatabase)))
           if (Exit.isSuccess(bodyExit)) {
-            yield* lifecycle(database, `release savepoint ${name}`, "savepoint release")
+            yield* lifecycle(nestedDatabase, `release savepoint ${name}`, "savepoint release")
             return bodyExit.value
           }
           return yield* finishAfterFailure<A, E>(
             bodyExit.cause,
-            lifecycle(database, `rollback to savepoint ${name}`, "savepoint rollback").pipe(
-              Effect.zipRight(lifecycle(database, `release savepoint ${name}`, "savepoint release"))
+            lifecycle(nestedDatabase, `rollback to savepoint ${name}`, "savepoint rollback").pipe(
+              Effect.zipRight(lifecycle(nestedDatabase, `release savepoint ${name}`, "savepoint release"))
             )
           )
         }
@@ -137,19 +151,25 @@ export const runTransaction = <A, E, R>(
               ? cause
               : new TransactionError({ message: "Transaction options are invalid", cause })
         })
-        for (const [sql, phase] of start) yield* lifecycle(database, sql, phase)
+        const transactionId = `tx-${++transactionCounter}`
         const transactionDatabase: TransactionDatabaseService = {
           ...database,
-          transactionState: { depth: 1, nextSavepoint: { value: 0 } }
+          transactionState: { id: transactionId, depth: 1, nextSavepoint: { value: 0 } },
+          observabilityContext: {
+            ...database.observabilityContext,
+            transactionId,
+            transactionScope: 1
+          }
         }
+        for (const [sql, phase] of start) yield* lifecycle(transactionDatabase, sql, phase)
         const bodyExit = yield* Effect.exit(restore(Effect.provideService(body, Database, transactionDatabase)))
         if (Exit.isSuccess(bodyExit)) {
-          yield* lifecycle(database, database.dialect.migrations.commitTransaction ?? "commit", "commit")
+          yield* lifecycle(transactionDatabase, database.dialect.migrations.commitTransaction ?? "commit", "commit")
           return bodyExit.value
         }
         return yield* finishAfterFailure<A, E>(
           bodyExit.cause,
-          lifecycle(database, database.dialect.migrations.rollbackTransaction ?? "rollback", "rollback")
+          lifecycle(transactionDatabase, database.dialect.migrations.rollbackTransaction ?? "rollback", "rollback")
         )
       })
     )

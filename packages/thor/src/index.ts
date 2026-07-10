@@ -150,6 +150,19 @@ export {
   makeQueryCaches,
   defaultQueryCaches
 } from "./execution/cache.js"
+export {
+  withObservability,
+  type LifecycleObservabilityEvent,
+  type ObservabilityConfig,
+  type ObservabilityContext,
+  type ObservabilityEvent,
+  type ObservabilityOptions,
+  type ObservedParameter,
+  type ParameterLoggingMode,
+  type QueryCacheOutcome,
+  type QueryObservabilityEvent,
+  type SqlLoggingMode
+} from "./observability/index.js"
 
 // Capabilities & errors
 export * as Capabilities from "./capabilities/index.js"
