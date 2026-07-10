@@ -13,6 +13,7 @@ import { normalizeAction } from "./assemble.js"
 import type {
   DialectIntrospection,
   IntrospectedForeignKey,
+  IntrospectedIndex,
   IntrospectedSchema,
   IntrospectedTable,
   IntrospectionQuery
@@ -66,7 +67,21 @@ const introspectTable = (query: IntrospectionQuery, name: string) =>
       }
     })
 
-    return { name, columns, primaryKey, foreignKeys } satisfies IntrospectedTable
+    // Only explicitly created indexes (origin "c"); "pk"/"u" are constraint-backed.
+    const indexListRows = yield* query(`pragma index_list(${quote(name)})`)
+    const indexes: IntrospectedIndex[] = []
+    for (const indexRow of indexListRows) {
+      if (String(indexRow.origin) !== "c") continue
+      const indexName = String(indexRow.name)
+      const infoRows = yield* query(`pragma index_info(${quote(indexName)})`)
+      indexes.push({
+        name: indexName,
+        columns: [...infoRows].sort((a, b) => Number(a.seqno) - Number(b.seqno)).map((row) => String(row.name)),
+        unique: Number(indexRow.unique) === 1
+      })
+    }
+
+    return { name, columns, primaryKey, foreignKeys, indexes } satisfies IntrospectedTable
   })
 
 /** SQLite introspection strategy. */

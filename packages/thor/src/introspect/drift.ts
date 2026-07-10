@@ -36,6 +36,9 @@ export type DriftChange =
     }
   | { readonly _tag: "MissingForeignKey"; readonly table: string; readonly columns: ReadonlyArray<string>; readonly message: string }
   | { readonly _tag: "ExtraForeignKey"; readonly table: string; readonly columns: ReadonlyArray<string>; readonly message: string }
+  | { readonly _tag: "MissingIndex"; readonly table: string; readonly index: string; readonly message: string }
+  | { readonly _tag: "ExtraIndex"; readonly table: string; readonly index: string; readonly message: string }
+  | { readonly _tag: "IndexChanged"; readonly table: string; readonly index: string; readonly message: string }
 
 /** The outcome of a drift check (spec §16.5). */
 export interface DriftReport {
@@ -133,6 +136,24 @@ const diffTable = (name: string, expected: AnyTable, live: IntrospectedTable, ch
   for (const [key, fk] of liveForeignKeys) {
     if (!expectedForeignKeys.has(key)) {
       changes.push({ _tag: "ExtraForeignKey", table: name, columns: fk.columns, message: `foreign key on "${name}" (${fk.columns.join(", ")}) exists in the database but not in the schema` })
+    }
+  }
+
+  const expectedIndexes = new Map(meta.indexes.map((index) => [index.name, index]))
+  const liveIndexes = new Map(live.indexes.map((index) => [index.name, index]))
+  for (const [index, spec] of expectedIndexes) {
+    const liveIndex = liveIndexes.get(index)
+    if (!liveIndex) {
+      changes.push({ _tag: "MissingIndex", table: name, index, message: `index "${index}" on "${name}" is missing from the database` })
+      continue
+    }
+    if (!arraysEqual(spec.columns, liveIndex.columns) || spec.unique !== liveIndex.unique) {
+      changes.push({ _tag: "IndexChanged", table: name, index, message: `index "${index}" on "${name}" differs between the database and the schema` })
+    }
+  }
+  for (const index of liveIndexes.keys()) {
+    if (!expectedIndexes.has(index)) {
+      changes.push({ _tag: "ExtraIndex", table: name, index, message: `index "${index}" on "${name}" exists in the database but not in the schema` })
     }
   }
 }

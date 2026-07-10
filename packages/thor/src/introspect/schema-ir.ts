@@ -28,6 +28,16 @@ export interface IntrospectedColumn {
   readonly default: string | null
 }
 
+/** A secondary index as reported by the live database (primary key excluded). */
+export interface IntrospectedIndex {
+  /** Index name. */
+  readonly name: string
+  /** Indexed columns, in index order. */
+  readonly columns: ReadonlyArray<string>
+  /** Whether the index enforces uniqueness. */
+  readonly unique: boolean
+}
+
 /** A foreign key as reported by the live database. */
 export interface IntrospectedForeignKey {
   /** Local columns, in key order. */
@@ -50,6 +60,8 @@ export interface IntrospectedTable {
   readonly primaryKey: ReadonlyArray<string>
   /** Foreign keys declared on the table. */
   readonly foreignKeys: ReadonlyArray<IntrospectedForeignKey>
+  /** Secondary indexes (excludes the primary-key and constraint-backed indexes). */
+  readonly indexes: ReadonlyArray<IntrospectedIndex>
 }
 
 /** The live database shape (spec §16.4). */

@@ -4,7 +4,7 @@
  * @module introspect/postgres
  */
 import { Effect } from "effect"
-import { type RawColumn, type RawForeignKey, type RawPrimaryKey, assembleSchema, normalizeAction } from "./assemble.js"
+import { type RawColumn, type RawForeignKey, type RawIndex, type RawPrimaryKey, assembleSchema, normalizeAction } from "./assemble.js"
 import type { DialectIntrospection } from "./schema-ir.js"
 
 const TABLES =
@@ -34,6 +34,20 @@ const FOREIGN_KEYS =
   "where tc.constraint_type = 'FOREIGN KEY' and tc.table_schema = 'public' " +
   "order by tc.constraint_name, kcu.ordinal_position"
 
+// Secondary indexes only: exclude the primary key and any index backing a
+// constraint (unique/exclusion), so this mirrors the schema `indexes` option.
+const INDEXES =
+  "select t.relname as table_name, i.relname as index_name, a.attname as column_name, ix.indisunique as is_unique " +
+  "from pg_index ix " +
+  "join pg_class i on i.oid = ix.indexrelid " +
+  "join pg_class t on t.oid = ix.indrelid " +
+  "join pg_namespace n on n.oid = t.relnamespace " +
+  "join lateral unnest(ix.indkey) with ordinality as k(attnum, ord) on true " +
+  "join pg_attribute a on a.attrelid = t.oid and a.attnum = k.attnum " +
+  "where n.nspname = 'public' and not ix.indisprimary " +
+  "and not exists (select 1 from pg_constraint c where c.conindid = ix.indexrelid) " +
+  "order by t.relname, i.relname, k.ord"
+
 /** PostgreSQL introspection strategy. */
 export const PostgresIntrospection: DialectIntrospection = {
   dialect: "postgres",
@@ -47,6 +61,7 @@ export const PostgresIntrospection: DialectIntrospection = {
       const columnRows = yield* query(COLUMNS)
       const pkRows = yield* query(PRIMARY_KEYS)
       const fkRows = yield* query(FOREIGN_KEYS)
+      const indexRows = yield* query(INDEXES)
 
       const columns: RawColumn[] = columnRows.map((row) => ({
         table: String(row.table_name),
@@ -73,6 +88,13 @@ export const PostgresIntrospection: DialectIntrospection = {
         }
       })
 
-      return assembleSchema(tableRows.map((row) => String(row.table_name)), columns, primaryKeys, foreignKeys)
+      const indexes: RawIndex[] = indexRows.map((row) => ({
+        table: String(row.table_name),
+        name: String(row.index_name),
+        column: String(row.column_name),
+        unique: row.is_unique === true || row.is_unique === "t" || row.is_unique === 1
+      }))
+
+      return assembleSchema(tableRows.map((row) => String(row.table_name)), columns, primaryKeys, foreignKeys, indexes)
     })
 }

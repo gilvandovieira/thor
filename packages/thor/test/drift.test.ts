@@ -21,7 +21,8 @@ const liveUsers: IntrospectedTable = {
     { name: "age", type: "integer", nullable: true, default: null }
   ],
   primaryKey: ["id"],
-  foreignKeys: []
+  foreignKeys: [],
+  indexes: []
 }
 const live = (...tables: IntrospectedTable[]): IntrospectedSchema => ({ tables })
 
@@ -42,7 +43,7 @@ describe("Epic P2 — drift detection (spec §16.5)", () => {
     expect(detectDrift([], live(liveUsers)).changes).toEqual([
       expect.objectContaining({ _tag: "ExtraTable", table: "users" })
     ])
-    const journal: IntrospectedTable = { name: "_thor_migrations", columns: [], primaryKey: [], foreignKeys: [] }
+    const journal: IntrospectedTable = { name: "_thor_migrations", columns: [], primaryKey: [], foreignKeys: [], indexes: [] }
     expect(detectDrift([], live(journal)).inSync).toBe(true)
   })
 
@@ -84,10 +85,34 @@ describe("Epic P2 — drift detection (spec §16.5)", () => {
         { name: "author_id", type: "uuid", nullable: false, default: null }
       ],
       primaryKey: ["id"],
-      foreignKeys: []
+      foreignKeys: [],
+      indexes: []
     }
     expect(detectDrift([posts], live(livePosts)).changes).toEqual([
       expect.objectContaining({ _tag: "MissingForeignKey", table: "posts", columns: ["author_id"] })
+    ])
+  })
+
+  it("detects missing and extra indexes", () => {
+    const indexed = pg.table("indexed", { id: pg.uuid("id").primaryKey(), slug: pg.text("slug").notNull() }, {
+      indexes: [{ name: "indexed_slug_idx", columns: ["slug"], unique: true }]
+    })
+    const liveNoIndex: IntrospectedTable = {
+      name: "indexed",
+      columns: [
+        { name: "id", type: "uuid", nullable: false, default: null },
+        { name: "slug", type: "text", nullable: false, default: null }
+      ],
+      primaryKey: ["id"],
+      foreignKeys: [],
+      indexes: []
+    }
+    expect(detectDrift([indexed], live(liveNoIndex)).changes).toEqual([
+      expect.objectContaining({ _tag: "MissingIndex", table: "indexed", index: "indexed_slug_idx" })
+    ])
+    const liveExtra: IntrospectedTable = { ...liveNoIndex, indexes: [{ name: "indexed_slug_idx", columns: ["slug"], unique: true }, { name: "stray_idx", columns: ["id"], unique: false }] }
+    expect(detectDrift([indexed], live(liveExtra)).changes).toEqual([
+      expect.objectContaining({ _tag: "ExtraIndex", table: "indexed", index: "stray_idx" })
     ])
   })
 })

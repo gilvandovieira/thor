@@ -28,7 +28,9 @@ describe("Epic P1/P3 — Introspector.currentSchema (spec §16.3, §16.4)", () =
           { name: "title", type: "TEXT", notnull: 0, dflt_value: "'untitled'", pk: 0 }
         ]
       }, // pragma table_info(posts)
-      { rows: [{ id: 0, seq: 0, table: "authors", from: "author_id", to: "id", on_update: "NO ACTION", on_delete: "CASCADE" }] } // pragma foreign_key_list(posts)
+      { rows: [{ id: 0, seq: 0, table: "authors", from: "author_id", to: "id", on_update: "NO ACTION", on_delete: "CASCADE" }] }, // pragma foreign_key_list(posts)
+      { rows: [{ seq: 0, name: "posts_title_idx", unique: 0, origin: "c", partial: 0 }] }, // pragma index_list(posts)
+      { rows: [{ seqno: 0, cid: 2, name: "title" }] } // pragma index_info(posts_title_idx)
     )
 
     expect(await currentSchema(driver, SQLiteDialect)).toEqual({
@@ -41,15 +43,18 @@ describe("Epic P1/P3 — Introspector.currentSchema (spec §16.3, §16.4)", () =
             { name: "title", type: "TEXT", nullable: true, default: "'untitled'" }
           ],
           primaryKey: ["id"],
-          foreignKeys: [{ columns: ["author_id"], references: { table: "authors", columns: ["id"] }, onDelete: "cascade" }]
+          foreignKeys: [{ columns: ["author_id"], references: { table: "authors", columns: ["id"] }, onDelete: "cascade" }],
+          indexes: [{ name: "posts_title_idx", columns: ["title"], unique: false }]
         }
       ]
     })
-    // TABLES + (table_info + foreign_key_list) per table.
+    // TABLES + (table_info + foreign_key_list + index_list + index_info) per table.
     expect(driver.calls.map((call) => call.sql)).toEqual([
       "select name from sqlite_schema where type = 'table' and name not like 'sqlite_%' order by name",
       'pragma table_info("posts")',
-      'pragma foreign_key_list("posts")'
+      'pragma foreign_key_list("posts")',
+      'pragma index_list("posts")',
+      'pragma index_info("posts_title_idx")'
     ])
   })
 
@@ -67,7 +72,8 @@ describe("Epic P1/P3 — Introspector.currentSchema (spec §16.3, §16.4)", () =
         rows: [
           { table_name: "posts", constraint_name: "posts_author_id_fkey", column_name: "author_id", foreign_table: "authors", foreign_column: "id", delete_rule: "CASCADE", update_rule: "NO ACTION" }
         ]
-      } // foreign keys
+      }, // foreign keys
+      { rows: [{ table_name: "posts", index_name: "posts_author_id_idx", column_name: "author_id", is_unique: false }] } // indexes
     )
 
     expect((await currentSchema(driver, PostgresDialect)).tables[0]).toEqual({
@@ -77,9 +83,10 @@ describe("Epic P1/P3 — Introspector.currentSchema (spec §16.3, §16.4)", () =
         { name: "author_id", type: "uuid", nullable: false, default: null }
       ],
       primaryKey: ["id"],
-      foreignKeys: [{ columns: ["author_id"], references: { table: "authors", columns: ["id"] }, onDelete: "cascade" }]
+      foreignKeys: [{ columns: ["author_id"], references: { table: "authors", columns: ["id"] }, onDelete: "cascade" }],
+      indexes: [{ name: "posts_author_id_idx", columns: ["author_id"], unique: false }]
     })
-    expect(driver.calls).toHaveLength(4) // one set-based query per aspect, no N+1
+    expect(driver.calls).toHaveLength(5) // one set-based query per aspect, no N+1
   })
 
   it("reads a MySQL schema and keeps the full column_type", async () => {
@@ -119,7 +126,7 @@ describe.skipIf(!supportsNodeSqlite)("Epic P1/P3 — live SQLite introspection (
       id: sqlite.uuid("id").primaryKey(),
       authorId: sqlite.uuid("author_id").notNull().references(() => authors.id, { onDelete: "cascade" }),
       title: sqlite.text("title").nullable()
-    })
+    }, { indexes: [{ name: "posts_title_idx", columns: ["title"] }] })
 
     try {
       const schema = await Effect.runPromise(
@@ -142,6 +149,7 @@ describe.skipIf(!supportsNodeSqlite)("Epic P1/P3 — live SQLite introspection (
       expect(posts_.foreignKeys).toEqual([
         { columns: ["author_id"], references: { table: "authors", columns: ["id"] }, onDelete: "cascade" }
       ])
+      expect(posts_.indexes).toEqual([{ name: "posts_title_idx", columns: ["title"], unique: false }])
     } finally {
       client.close()
     }

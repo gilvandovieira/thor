@@ -7,7 +7,7 @@
  * @module introspect/mysql
  */
 import { Effect } from "effect"
-import { type RawColumn, type RawForeignKey, type RawPrimaryKey, assembleSchema, normalizeAction } from "./assemble.js"
+import { type RawColumn, type RawForeignKey, type RawIndex, type RawPrimaryKey, assembleSchema, normalizeAction } from "./assemble.js"
 import type { DialectIntrospection } from "./schema-ir.js"
 
 const TABLES =
@@ -30,6 +30,14 @@ const FOREIGN_KEYS =
   "where k.table_schema = database() and k.referenced_table_name is not null " +
   "order by k.constraint_name, k.ordinal_position"
 
+// Non-primary indexes from information_schema.statistics. Note: MySQL also lists
+// indexes that back unique/foreign-key constraints here.
+const INDEXES =
+  "select table_name, index_name, column_name, non_unique " +
+  "from information_schema.statistics " +
+  "where table_schema = database() and index_name <> 'PRIMARY' " +
+  "order by table_name, index_name, seq_in_index"
+
 /** MySQL introspection strategy. */
 export const MySQLIntrospection: DialectIntrospection = {
   dialect: "mysql",
@@ -43,6 +51,7 @@ export const MySQLIntrospection: DialectIntrospection = {
       const columnRows = yield* query(COLUMNS)
       const pkRows = yield* query(PRIMARY_KEYS)
       const fkRows = yield* query(FOREIGN_KEYS)
+      const indexRows = yield* query(INDEXES)
 
       const columns: RawColumn[] = columnRows.map((row) => ({
         table: String(row.table_name),
@@ -69,6 +78,13 @@ export const MySQLIntrospection: DialectIntrospection = {
         }
       })
 
-      return assembleSchema(tableRows.map((row) => String(row.table_name)), columns, primaryKeys, foreignKeys)
+      const indexes: RawIndex[] = indexRows.map((row) => ({
+        table: String(row.table_name),
+        name: String(row.index_name),
+        column: String(row.column_name),
+        unique: Number(row.non_unique) === 0
+      }))
+
+      return assembleSchema(tableRows.map((row) => String(row.table_name)), columns, primaryKeys, foreignKeys, indexes)
     })
 }

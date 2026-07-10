@@ -8,7 +8,7 @@
  *
  * @module introspect/assemble
  */
-import type { IntrospectedForeignKey, IntrospectedSchema, IntrospectedTable } from "./schema-ir.js"
+import type { IntrospectedForeignKey, IntrospectedIndex, IntrospectedSchema, IntrospectedTable } from "./schema-ir.js"
 
 /** A normalized column row. */
 export interface RawColumn {
@@ -36,6 +36,14 @@ export interface RawForeignKey {
   readonly onUpdate?: string
 }
 
+/** A normalized index member row, in index order. */
+export interface RawIndex {
+  readonly table: string
+  readonly name: string
+  readonly column: string
+  readonly unique: boolean
+}
+
 /**
  * Group normalized rows into an {@link IntrospectedSchema}.
  *
@@ -43,13 +51,15 @@ export interface RawForeignKey {
  * @param columns - Column rows in `(table, ordinal)` order.
  * @param primaryKeys - Primary-key member rows in key order.
  * @param foreignKeys - Foreign-key member rows in `(constraint, ordinal)` order.
+ * @param indexes - Index member rows in `(index, ordinal)` order.
  * @returns The assembled schema.
  */
 export const assembleSchema = (
   tableNames: ReadonlyArray<string>,
   columns: ReadonlyArray<RawColumn>,
   primaryKeys: ReadonlyArray<RawPrimaryKey>,
-  foreignKeys: ReadonlyArray<RawForeignKey>
+  foreignKeys: ReadonlyArray<RawForeignKey>,
+  indexes: ReadonlyArray<RawIndex>
 ): IntrospectedSchema => {
   const tables: IntrospectedTable[] = tableNames.map((name) => {
     const tableColumns = columns
@@ -76,7 +86,21 @@ export const assembleSchema = (
       }
     })
 
-    return { name, columns: tableColumns, primaryKey, foreignKeys: tableForeignKeys }
+    // Group this table's index rows by index name, preserving column order.
+    const byIndex = new Map<string, RawIndex[]>()
+    for (const row of indexes) {
+      if (row.table !== name) continue
+      const group = byIndex.get(row.name) ?? []
+      group.push(row)
+      byIndex.set(row.name, group)
+    }
+    const tableIndexes: IntrospectedIndex[] = [...byIndex.entries()].map(([indexName, group]) => ({
+      name: indexName,
+      columns: group.map((row) => row.column),
+      unique: group[0]!.unique
+    }))
+
+    return { name, columns: tableColumns, primaryKey, foreignKeys: tableForeignKeys, indexes: tableIndexes }
   })
 
   return { tables }
