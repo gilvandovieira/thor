@@ -362,6 +362,8 @@ pnpm db:up        # or start postgres@5433 + mysql@3307 yourself
 - [`docs/driver-benchmarks.md`](docs/driver-benchmarks.md) — plain-language benchmark guide, prepared vs unprepared drivers, and hot-path cost
 - [`docs/query-builder-benchmarks.md`](docs/query-builder-benchmarks.md) — Thor versus Drizzle and Prisma query construction, method, results, and caveats
 - [`docs/optimization-strategies.md`](docs/optimization-strategies.md) — cache keys and the hot path
+- [`docs/errors.md`](docs/errors.md) — the frozen tagged-error set, fields, and `catchTag` guidance
+- [`docs/api-stability.md`](docs/api-stability.md) — `@stable`/`@experimental`/`@internal` boundaries
 - [`docs/api-documentation.md`](docs/api-documentation.md) — JSDoc conventions
 - [`docs/thor-project-v1-spec.md`](docs/thor-project-v1-spec.md) — the specification · [`docs/roadmap.md`](docs/roadmap.md) — progress by epic
 </content>

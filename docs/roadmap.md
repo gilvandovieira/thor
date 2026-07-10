@@ -353,7 +353,7 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | S | Observability (metadata, spans, param-redaction) | §17 | beta | annotations (§7.4 v0) | ✅ S1–S5 |
 | T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI v0; ⟵ P, U, W1 | 🟡 T1/T2/T3/T5 ✅ · T4 ⟵ W1✅ |
 | U | LLM skills (11 skill files + manifest + export) | §21 | beta | — | ✅ U1–U5 |
-| V | API stability levels + error model v1 | §6, §22 | beta | errors v0✅; ⟵ Q | 🟡 (V1 done) |
+| V | API stability levels + error model v1 | §6, §22 | beta | errors v0✅ | ✅ V1–V4 |
 | W | Benchmarks v1 + docs v1 (cold/warm/hot, Node+Bun) | §19, §23 | beta | I✅, L✅; W2 ⟵ N, W5 ⟵ Q/P/U/V | 🟡 W1/W3 ✅ |
 
 ## v1 milestone → epic map
@@ -610,9 +610,9 @@ follow-up work rather than being guessed in the CLI. ✅
 | # | Status | Task | Spec | Acceptance |
 |---|---|---|---|---|
 | V1 | ✅ | Tag APIs `@stable` / `@experimental` / `@internal` | §6 | settled schema/query/compiled/migration/error/capability/dialect/testing/CLI anchors carry source tags; all current query terminals are stable, inspect/legacy prepare/unsafe-hot/runtime capabilities are experimental, IR/cache anchors are internal; compiler-API audit prevents drift |
-| V2 | ❌ | Document the boundaries | §6, §23 | stability doc; `inspect()` stable-for-debug only |
-| V3 | ❌ | Freeze + document the public tagged error set | §22 | every public error tag listed with fields + `catchTag` guidance |
-| V4 | ❌ | Error model completeness pass | §22 | no generic exceptions where a tagged error should exist |
+| V2 | ✅ | Document the boundaries | §6, §23 | `docs/api-stability.md` documents the `@stable`/`@experimental`/`@internal` levels, lists the anchors, and states `inspect()`/compiled-query metadata are stable-for-debug only |
+| V3 | ✅ | Freeze + document the public tagged error set | §22 | `docs/errors.md` lists every tag with category/fields/when + `catchTag` guidance, and maps spec §22's consolidated names (`IntrospectionError`→`DriverError`, `RelationPlanningError`→`GuardError`, `RetrySafetyError`→`TransactionError`, `CacheError`→none); `errors.test.ts` freezes the set |
+| V4 | ✅ | Error model completeness pass | §22 | audit confirms the Effect error surface is fully tagged; remaining `throw`s are programmer errors (`TypeError`/`RangeError` for API misuse) or internal invariants wrapped into `MigrationError`/`DriverError` at the boundary; documented in `docs/errors.md` |
 
 **Release-work record:** prerequisites K/M/O/S and the settled current public
 surface ✅; owner Thor maintainers; required checks `check-api-stability.mjs`,
