@@ -9,13 +9,15 @@
  *
  * @module cli/database
  */
-import { resolve } from "node:path"
+import { existsSync, readdirSync } from "node:fs"
+import { extname, resolve } from "node:path"
 import { Effect, type Layer } from "effect"
 import type { Database } from "@gilvandovieira/thor"
 import { type AnyTable, isTable } from "@gilvandovieira/thor/schema"
 import { NodeSQLiteLayer } from "@gilvandovieira/thor/sqlite"
 import { PostgresLayer } from "@gilvandovieira/thor/postgres"
 import { MySQLLayer } from "@gilvandovieira/thor/mysql"
+import type { MigrationDefinition } from "@gilvandovieira/thor/migrate"
 
 /** Supported CLI database dialects. */
 export type DatabaseDialect = "postgres" | "sqlite" | "mysql"
@@ -116,4 +118,37 @@ export const loadSchemaTables = async (cwd: string, schemaPath: string): Promise
   })
   const module = await tsImport(resolve(cwd, schemaPath), import.meta.url)
   return Object.values(module).filter(isTable)
+}
+
+/** @param value - Unknown module export. @returns Whether it is migration-shaped. */
+const isMigration = (value: unknown): value is MigrationDefinition =>
+  typeof value === "object" && value !== null &&
+  typeof (value as { id?: unknown }).id === "string" &&
+  typeof (value as { name?: unknown }).name === "string" &&
+  "up" in value
+
+/**
+ * Loads migration modules in deterministic filename order.
+ *
+ * @param cwd - Project root.
+ * @param migrationsDir - Configured migration directory.
+ * @returns Validated migration definitions.
+ * @throws {Error} When a module has no valid default migration export.
+ */
+export const loadMigrations = async (cwd: string, migrationsDir: string): Promise<ReadonlyArray<MigrationDefinition>> => {
+  const directory = resolve(cwd, migrationsDir)
+  if (!existsSync(directory)) return []
+  const { tsImport } = await importOptional("tsx/esm/api").catch(() => {
+    throw new Error("Loading migrations needs the 'tsx' package")
+  })
+  const migrations: MigrationDefinition[] = []
+  const files = readdirSync(directory)
+    .filter((file) => [".js", ".mjs", ".ts"].includes(extname(file)))
+    .sort()
+  for (const file of files) {
+    const module = await tsImport(resolve(directory, file), import.meta.url)
+    if (!isMigration(module.default)) throw new Error(`Migration ${file} must default-export defineMigration(...)`)
+    migrations.push(module.default)
+  }
+  return migrations
 }

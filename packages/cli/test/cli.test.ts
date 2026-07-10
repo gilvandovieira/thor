@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -32,7 +32,7 @@ const USERS_DDL = 'create table "users" ("id" text not null, "email" text not nu
 
 // A project under packages/cli/ so tsx can resolve @gilvandovieira/thor from the
 // workspace, with a SQLite database created from the given DDL.
-const dbProject = async (schemaSource: string): Promise<string> => {
+const dbProject = async (schemaSource: string, createUsers = true): Promise<string> => {
   const dir = mkdtempSync(join(resolve("packages/cli"), ".dbtest-"))
   directories.push(dir)
   writeFileSync(join(dir, "schema.ts"), schemaSource)
@@ -42,9 +42,26 @@ const dbProject = async (schemaSource: string): Promise<string> => {
   )
   const { DatabaseSync } = await import("node:sqlite")
   const db = new DatabaseSync(join(dir, "app.db"))
-  db.exec(USERS_DDL)
+  if (createUsers) db.exec(USERS_DDL)
   db.close()
   return dir
+}
+
+const MIGRATION_TS = `import { defineMigration, sql } from "@gilvandovieira/thor/migrate"
+export default defineMigration({
+  id: "20260710000000_create_users",
+  name: "create_users",
+  up: sql\`${USERS_DDL}\`,
+  down: sql\`drop table "users"\`
+})
+`
+
+/** @returns A configured empty SQLite project with one users migration. */
+const migrationProject = async (): Promise<string> => {
+  const cwd = await dbProject(SCHEMA_TS(), false)
+  mkdirSync(join(cwd, "migrations"), { recursive: true })
+  writeFileSync(join(cwd, "migrations", "20260710000000_create_users.ts"), MIGRATION_TS)
+  return cwd
 }
 
 afterEach(() => {
@@ -57,8 +74,8 @@ describe("published CLI surface", () => {
     const help = execFileSync(process.execPath, [cli, "--help"], { cwd, encoding: "utf8" })
     expect(help).toContain("init")
     expect(help).toContain("create <name>")
+    expect(help).toContain("up                Apply pending migrations")
     expect(help).toContain("capabilities <dialect|runtime>")
-    expect(help).not.toContain("up                Apply")
 
     execFileSync(process.execPath, [cli, "init"], { cwd })
     execFileSync(process.execPath, [cli, "create", "add_users"], { cwd })
@@ -144,11 +161,11 @@ describe("published CLI surface", () => {
     expect(bundle.skills[0].content).toContain("# Thor Skill:")
   })
 
-  it("fails placeholder commands, unsafe names, and bad skills usage with a non-zero exit", () => {
+  it("fails unconfigured commands, unsafe names, and bad skills usage with a non-zero exit", () => {
     const cwd = project()
-    const unsupported = spawnSync(process.execPath, [cli, "up"], { cwd, encoding: "utf8" })
-    expect(unsupported.status).toBe(1)
-    expect(unsupported.stderr).toContain("Unsupported command: up")
+    const unconfigured = spawnSync(process.execPath, [cli, "up"], { cwd, encoding: "utf8" })
+    expect(unconfigured.status).toBe(1)
+    expect(unconfigured.stderr).toContain("No database configured")
 
     const unsafe = spawnSync(process.execPath, [cli, "create", "../escape"], { cwd, encoding: "utf8" })
     expect(unsafe.status).toBe(1)
@@ -165,6 +182,39 @@ describe("published CLI surface", () => {
 })
 
 describe("database-connected commands (spec §16.2, §20.2)", () => {
+  it("applies, reports, validates, and rolls back live migrations", async () => {
+    const cwd = await migrationProject()
+
+    const applied = execFileSync(process.execPath, [cli, "up"], { cwd, encoding: "utf8" })
+    expect(applied).toContain("Applied 20260710000000_create_users create_users")
+    expect(execFileSync(process.execPath, [cli, "check"], { cwd, encoding: "utf8" })).toContain("journal is valid")
+    const status = execFileSync(process.execPath, [cli, "status"], { cwd, encoding: "utf8" })
+    expect(status).toContain("Applied: 1")
+    expect(status).toContain("Pending: 0")
+    expect(execFileSync(process.execPath, [cli, "up"], { cwd, encoding: "utf8" })).toContain("up to date")
+    expect(execFileSync(process.execPath, [cli, "doctor"], { cwd, encoding: "utf8" })).toContain("pending: 0 migration(s)")
+    expect(execFileSync(process.execPath, [cli, "down"], { cwd, encoding: "utf8" })).toContain("Rolled back")
+
+    const { DatabaseSync } = await import("node:sqlite")
+    const database = new DatabaseSync(join(cwd, "app.db"))
+    const table = database.prepare("select name from sqlite_master where type = 'table' and name = 'users'").get()
+    database.close()
+    expect(table).toBeUndefined()
+  }, 15_000)
+
+  it("generates an irreversible create-table migration", async () => {
+    const cwd = await dbProject(SCHEMA_TS(), false)
+    const output = execFileSync(process.execPath, [cli, "generate", "create_users"], { cwd, encoding: "utf8" })
+    expect(output).toContain("1 create-table operation")
+    const file = readdirSync(join(cwd, "migrations")).find((name) => name.endsWith("_create_users.ts"))
+    expect(file).toBeDefined()
+    const source = readFileSync(join(cwd, "migrations", file!), "utf8")
+    expect(source).toContain("irreversible: true")
+    expect(source).toContain("create table")
+    expect(execFileSync(process.execPath, [cli, "up"], { cwd, encoding: "utf8" })).toContain("Applied")
+    expect(execFileSync(process.execPath, [cli, "drift"], { cwd, encoding: "utf8" })).toContain("No drift")
+  })
+
   it("inspect schema introspects the live database", async () => {
     const cwd = await dbProject(SCHEMA_TS())
     const output = JSON.parse(execFileSync(process.execPath, [cli, "inspect", "schema"], { cwd, encoding: "utf8" }))
@@ -191,6 +241,13 @@ describe("database-connected commands (spec §16.2, §20.2)", () => {
     expect(result.status).toBe(1)
     expect(result.stdout).toContain("Drift detected")
     expect(result.stdout).toContain("name")
+  })
+
+  it("blocks an up-to-date migration run when structural drift remains", async () => {
+    const cwd = await dbProject(SCHEMA_TS(true))
+    const result = spawnSync(process.execPath, [cli, "up"], { cwd, encoding: "utf8" })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain("Schema drift detected")
   })
 
   it("doctor reports healthy checks", async () => {

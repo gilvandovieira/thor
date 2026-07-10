@@ -231,7 +231,7 @@ so all three databases behave consistently.
 
 ## Migrations
 
-Thor has a live programmatic migrator and a deliberately narrow `thor` CLI.
+Thor has a live programmatic migrator and database-connected `thor` CLI.
 Migrations are journaled with checksums and applied one at a time under the
 database's locking strategy. PostgreSQL and SQLite DDL migrations use
 per-migration transactions; MySQL DDL is non-transactional and a failure can
@@ -269,9 +269,12 @@ dynamic SQL text is genuinely required, mark that trust boundary visibly with
 ```sh
 thor init          # scaffold config + migrations/ + journal
 thor create <name> # new migration file
+thor generate <name> # create-table-only generated migration
+thor status && thor check
+thor up             # apply pending migrations
+thor down           # roll back the latest migration
+thor drift && thor doctor
 thor capabilities postgres # print the authoritative capability matrix
-# Other commands are not published yet and exit non-zero.
-# Use the programmatic Migrator service for status/check/up/down/generate/drift.
 ```
 
 ## Where things stand
@@ -290,7 +293,7 @@ typed builder → runtime IR → capability check → compile → execute → de
 | Prepared handles & performance modes | ✅ Done |
 | Benchmarks + CI regression gate | ✅ Done |
 | Testing helpers & cross-dialect contract suite | ✅ Done |
-| Migrations (live migrator + CLI) | 🟡 Live migrator works programmatically; the DB-connected CLI commands (`up`/`down`/`generate`/`drift`/`pull`) are not shipped yet (Epic T) |
+| Migrations (live migrator + CLI) | ✅ Journaled programmatic migrator plus configured `generate`/`check`/`status`/`up`/`down`/`redo`/`drift`/`pull`/`doctor` commands; generation is currently create-table-only |
 | SQL feature-matrix tests | 🟡 Levels 1–5, 7, and 9 covered; Levels 6, 8, and 10 remain |
 | Stored routines (functions/procedures) | 🟡 Scalar/aggregate expressions, table-function sources, procedure commands, capability guards, and return decoding done; advanced named/out arguments and routine DDL remain |
 

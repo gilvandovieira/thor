@@ -351,7 +351,7 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J✅**, FK (Q1) | ✅ Q1–Q6 |
 | R | Routines v1 (functions/procedures, typed + guarded) | §14 | beta | routine v0✅, J✅ | ✅ R1–R6 (OUT-params follow-up) |
 | S | Observability (metadata, spans, param-redaction) | §17 | beta | annotations (§7.4 v0) | ✅ S1–S5 |
-| T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI v0; ⟵ P, U, W1 | 🟡 T2/T3/T5 ✅ · T1 🟡 (migrator cmds left) · T4 ⟵ W1✅ |
+| T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI v0; ⟵ P, U, W1 | 🟡 T1/T2/T3/T5 ✅ · T4 ⟵ W1✅ |
 | U | LLM skills (11 skill files + manifest + export) | §21 | beta | — | ✅ U1–U5 |
 | V | API stability levels + error model v1 | §6, §22 | beta | errors v0✅; ⟵ Q | 🟡 (V1 done) |
 | W | Benchmarks v1 + docs v1 (cold/warm/hot, Node+Bun) | §19, §23 | beta | I✅, L✅; W2 ⟵ N, W5 ⟵ Q/P/U/V | 🟡 W1/W3 ✅ |
@@ -390,11 +390,8 @@ Ready now (all prerequisites satisfied)
   V1 ✅ ⟵ K✅,M✅,O✅ stable surface (Q relation tags remain owned by Q6) │ V3 ⟵ errors✅,M,O,S
 
 Blocked on other undone epics
-  P4 ⟵ P1–P3, ⧗ T1        (CLI-facing pull/introspect/inspect)
-  P5 ⟵ P2, O✅, ⧗ T2       (drift into doctor + migration flow)
-  T1 ⟵ O✅ (up/down/generate/drift) + ⧗ P (pull/inspect)
-  T2 ⟵ O✅, M5✅, C✅ + ⧗ P (drift check)
-  T3 ⟵ M5✅ (dialect variant shipped; only the `runtime` variant ⟵ C✅ remains)
+  P4/P5 ✅ ⟵ P1–P3,T1/T2   (CLI introspection + drift flow)
+  T1/T2/T3 ✅ ⟵ O✅,P✅,M5✅,C✅
   T4 ⟵ W1✅ (bench groups), I✅
   T5 ⟵ ⧗ U4 │ U4 ⟵ U1–U3, ⧗ T (CLI host)
   W2 ⟵ W1✅, N1–N3/N5✅ (N4 benchmark record) │ W4 ⟵ W2
@@ -405,9 +402,8 @@ Already satisfied by completed work (close these out)
   R6 ✅ ⟵ O6                (routine DDL in migrations — done)
 ```
 
-**Suggested remaining order:** **T1/T2** (⟵ P) with **T3** already mostly shipped → **P4/P5**
-(⟵ T) → **U1–U3/U5** any time → **U4 + T5** (CLI export) →
-**W2** after N, **V1/V3** early then **V2/V4** after Q → **W5**
+**Suggested remaining order:** **T4** (⟵ W1✅) → **W2** after N →
+**V1/V3** early then **V2/V4** after Q → **W5**
 last (docs over the whole surface).
 
 ---
@@ -515,11 +511,11 @@ verified. ✅
 | P4 | ✅ | CLI `thor pull` / `introspect` / `inspect schema` / `inspect routines` | §16.2 | `thor introspect`/`inspect schema` print the live Schema IR, `pull` writes a `thor.introspected.json` snapshot; `inspect routines` reports the pending routine-introspection scope; SQLite E2E subprocess tests |
 | P5 | ✅ | Wire `drift` into `thor doctor` + migration flow | §16.5, §20.2 | `thor drift` loads schema-as-code (via tsx) and reports live-vs-code drift, exiting non-zero on drift; `thor doctor` surfaces drift alongside connectivity/journal/capabilities |
 
-> **P1/P2/P3 ✅.** The Introspector reads everything schema-as-code models
+> **P1–P5 ✅.** The Introspector reads everything schema-as-code models
 > (tables/columns/PKs/FKs/indexes) across all three dialects, and drift compares
 > the full structural surface. **Views/enums/routines/extensions** are catalog
-> objects the schema DSL does not model, so they are scoped to `thor pull` (P4)
-> rather than P1. Next: **P4/P5** (CLI-facing, ⟵ Epic T). Live PostgreSQL/MySQL
+> objects the schema DSL does not model, so `thor pull` records the currently
+> modeled Schema IR and reports routine inspection as follow-up scope. Live PostgreSQL/MySQL
 > E2E for P1 tracked with the e2e lane.
 
 ## Epic Q — Relation layer (§13, alpha.5) — ⟵ Epic J
@@ -584,8 +580,13 @@ implemented and verified. ✅
 
 | # | Status | Task | Spec | Acceptance |
 |---|---|---|---|---|
-| T1 | 🟡 | Wire DB-connected commands to the live migrator/introspector | §20.1 | **DB-connection plumbing done** (`cli/database.ts`: config `database` block, per-dialect layer via `node:sqlite`/optional `pg`/`mysql2`, tsx schema-as-code loading); `drift`/`pull`/`introspect`/`inspect` run against a configured DB. Remaining: wire `up`/`down`/`generate` to the live migrator |
-| T2 | ✅ | `thor doctor` | §20.2 | checks runtime, config, dialect, connectivity, journal, drift, and a capability summary; exits non-zero on failure; SQLite E2E test |
+| T1 | ✅ | Wire DB-connected commands to the live migrator/introspector | §20.1 | configured `node:sqlite`/optional `pg`/`mysql2`; tsx loads schema and ordered migration modules; `generate` (create-table-only), `check`, `status`, `up`, `down`, `redo`, `drift`, `pull`, and `inspect` use live Migrator/Introspector services; SQLite subprocess lifecycle tests |
+| T2 | ✅ | `thor doctor` | §20.2 | checks runtime, config/schema, dialect, driver compatibility, connectivity, journal/checksums, pending migrations, drift, and capability summary; drift/failures exit non-zero; SQLite E2E test |
+
+**Release-work record:** T1/T2 are complete within the current core planner
+boundary. Generated migrations intentionally cover missing tables only and are
+marked irreversible; column/rename/reverse-plan generation remains explicit
+follow-up work rather than being guessed in the CLI. ✅
 | T3 | ✅ | `thor capabilities <dialect\|runtime>` | §20.3 | dialect matrix (M5) + **runtime variant**: `thor capabilities runtime` prints each `ALL_RUNTIME_CAPABILITIES` as native/unsupported for the detected host; subprocess tests |
 | T4 | ❌ | `thor bench <query\|compile\|decode\|runtime>` | §20.4 | runs the bench groups; `--node`/`--bun` (⟵ W1) |
 | T5 | ✅ | `thor skills list\|export` | §20.5, §21 | `thor skills list` prints the index; `thor skills export [--to <dir>] [--format md\|json]` writes Epic U's `skillFiles` under `<to>/thor` (default `.agents/skills`); subprocess tests cover list/export/errors |
@@ -674,8 +675,8 @@ the aspirational target into W4's future release gate. ✅
 **Wave 2 — CLI integration (⟵ P, W1, U)**
 
 10. **T3** ✅ — finish the `runtime` variant (dialect shipped via M5✅)
-11. **T1, T2** — wire migrator/introspector into the CLI + `thor doctor` (⟵ P core)
-12. **P4, P5** — CLI `pull`/`introspect`/`inspect` + drift-in-doctor/flow (⟵ T1/T2)
+11. **T1, T2** ✅ — wire migrator/introspector into the CLI + `thor doctor` (⟵ P core)
+12. **P4, P5** ✅ — CLI `pull`/`introspect`/`inspect` + drift-in-doctor/flow (⟵ T1/T2)
 13. **T4** — `thor bench` (⟵ W1)
 14. **U4 + T5** ✅ — `thor skills export` (⟵ U1–U3 + CLI host)
 

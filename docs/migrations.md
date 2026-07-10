@@ -5,6 +5,42 @@ the dialect's locking and transaction strategy. Beyond `up`/`down`/`check`, v1
 adds reviewable planning, environment policies, expand/contract staging, and
 typed backfills (spec §15).
 
+## CLI workflow
+
+Configure a schema module, migration directory, and database in
+`thor.config.json`, then use the same live Migrator through the CLI:
+
+```json
+{
+  "migrationsDir": "migrations",
+  "schema": "src/schema.ts",
+  "database": { "dialect": "sqlite", "url": "app.db" },
+  "policy": "safe-only"
+}
+```
+
+```sh
+thor generate add_users  # additive create-table plans only
+thor status
+thor check
+thor up
+thor down
+thor redo
+thor drift
+thor doctor
+```
+
+Migration files are loaded in filename order and must default-export
+`defineMigration(...)`. `up` validates journal ordering/checksums and surfaces a
+pre-migration structural drift report. Drift blocks an otherwise up-to-date run;
+when migrations are pending it is reported as advisory because the intended
+pending DDL normally explains the difference.
+
+`generate` currently compares table presence and writes an irreversible
+create-table migration. It does not infer column changes, renames, or reverse
+operations; use reviewed manual migrations or the programmatic planning APIs for
+those changes.
+
 ## Review before you apply
 
 Three read-only APIs let you see a change before it runs:

@@ -16,6 +16,12 @@ Usage: thor <command> [args]
 Commands:
   init              Create config, migrations folder, and journal
   create <name>     Create an empty/manual migration
+  generate <name>   Generate a create-table-only migration from schema drift
+  check             Validate migration definitions and journal checksums
+  status            Print applied and pending migrations
+  up                Apply pending migrations
+  down              Roll back the latest migration
+  redo              Roll back and reapply the latest migration
   capabilities <dialect|runtime>
                     Print postgres/sqlite/mysql or runtime capability statuses
   skills <list|export>
@@ -46,6 +52,18 @@ const main = async (): Promise<void> => {
       return commands.init(cwd)
     case "create":
       return commands.create(cwd, rest[0] ?? "")
+    case "generate":
+      return commands.generate(cwd, rest[0] ?? "")
+    case "check":
+      return commands.check(cwd)
+    case "status":
+      return commands.status(cwd)
+    case "up":
+      return commands.up(cwd)
+    case "down":
+      return commands.down(cwd)
+    case "redo":
+      return commands.redo(cwd)
     case "capabilities":
       return commands.capabilities(rest)
     case "skills":
