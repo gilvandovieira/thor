@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { SKILLS, skillFiles, skillManifest } from "@gilvandovieira/thor/skills"
+import { SKILLS, installSkillFiles, skillDocument, skillFiles, skillManifest, skillSlug } from "@gilvandovieira/thor/skills"
 
 const REQUIRED = [
   "thor.schema",
@@ -77,6 +77,25 @@ describe("Epic U4 — exportable file set (§20.5, §21)", () => {
     const bundle = JSON.parse(files[0]!.content)
     expect(bundle.skills).toHaveLength(REQUIRED.length)
     expect(bundle.skills[0].content).toContain("# Thor Skill:")
+  })
+})
+
+describe("npx skills installable format (§20.5)", () => {
+  it("emits one <slug>/SKILL.md per skill with the required frontmatter", () => {
+    const files = installSkillFiles()
+    expect(files.map((file) => file.path)).toEqual(SKILLS.map((skill) => `${skillSlug(skill)}/SKILL.md`))
+    for (const skill of SKILLS) {
+      const slug = skillSlug(skill)
+      // npx skills requires a lowercase, hyphenated, globally unique name.
+      expect(slug).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+      const doc = skillDocument(skill)
+      const frontmatter = doc.match(/^---\n([\s\S]*?)\n---\n/)
+      expect(frontmatter, `${skill.id} missing YAML frontmatter`).not.toBeNull()
+      expect(frontmatter![1]).toContain(`name: ${slug}`)
+      expect(frontmatter![1]).toContain(`description: ${JSON.stringify(skill.description)}`)
+      // The §21.3 body is preserved verbatim after the frontmatter.
+      expect(doc).toContain(`# Thor Skill: ${skill.title}`)
+    }
   })
 })
 

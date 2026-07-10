@@ -117,8 +117,9 @@ Relations remain explicit about loading: declare `one`/`many` edges and choose
 `join`, batched `query`, or `manual` per included edge. See the
 [relations guide](docs/relations.md). Live schema inspection and structural drift
 are available through `@gilvandovieira/thor/introspect` and the `thor` CLI; see
-[introspection](docs/introspection.md). Thor also ships 11 agent guidance files
-through `/skills` and `thor skills export`; see [LLM skills](docs/skills.md).
+[introspection](docs/introspection.md). Thor also ships 11 agent guidance files —
+install them into your agent with `npx skills add gilvandovieira/thor`, or reach
+them through `/skills` and `thor skills export`; see [LLM skills](docs/skills.md).
 
 ### 4. Run it
 

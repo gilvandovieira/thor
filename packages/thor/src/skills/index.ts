@@ -576,3 +576,35 @@ export const skillFiles = (format: SkillExportFormat = "md"): ReadonlyArray<Skil
     ...SKILLS.map((skill) => ({ path: `thor/${skill.file}`, content: skill.content }))
   ]
 }
+
+/**
+ * The `npx skills`-installable directory name and frontmatter `name` for a
+ * skill: a globally namespaced, lowercase, hyphenated slug (e.g. `thor-schema`)
+ * derived from the skill id.
+ *
+ * @param skill - Authored skill.
+ * @returns The skill's install slug.
+ */
+export const skillSlug = (skill: Skill): string => skill.id.replace(/\./g, "-")
+
+/**
+ * Render a skill as a `SKILL.md` document: the YAML frontmatter (`name`,
+ * `description`) required by the `npx skills` installer, followed by the §21.3
+ * skill body. The body is unchanged — only the discovery frontmatter is added.
+ *
+ * @param skill - Authored skill.
+ * @returns The `SKILL.md` file contents.
+ */
+export const skillDocument = (skill: Skill): string =>
+  `---\nname: ${skillSlug(skill)}\ndescription: ${JSON.stringify(skill.description)}\n---\n\n${skill.content}`
+
+/**
+ * Render the `npx skills`-installable file set: one `<slug>/SKILL.md` per skill,
+ * with paths relative to a `skills/` discovery root. Committing these to the repo
+ * (or exporting them into an agent's skills directory) lets `npx skills add`
+ * discover every skill by its frontmatter (§21, spec §20.5).
+ *
+ * @returns Path/content pairs to write under a `skills/` root.
+ */
+export const installSkillFiles = (): ReadonlyArray<SkillFile> =>
+  SKILLS.map((skill) => ({ path: `${skillSlug(skill)}/SKILL.md`, content: skillDocument(skill) }))

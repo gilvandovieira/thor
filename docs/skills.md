@@ -9,6 +9,30 @@ Skills are guidance, not an alternate execution or policy layer. Thor's query
 guards, capability checks, compilers, codecs, migration policies, and tests
 remain the source of truth at runtime.
 
+## Install with `npx skills`
+
+The repository ships the skills in the [`npx skills`](https://github.com/vercel-labs/skills)
+convention — a top-level [`skills/`](../skills) directory with one
+`<name>/SKILL.md` per skill, each carrying the `name`/`description` frontmatter
+the installer requires. Install all of them into your agent (Claude Code, Cursor,
+Codex, …) with:
+
+```sh
+npx skills add gilvandovieira/thor
+```
+
+Install only the ones you need with `--skill` (names are `thor-<id>`):
+
+```sh
+npx skills add gilvandovieira/thor --skill thor-schema --skill thor-query
+```
+
+The `skills/` directory is generated from the authored `SKILLS` catalog by
+`node scripts/generate-skills.mjs`; `pnpm docs:check` fails if it drifts, so the
+installable files never fall out of sync with the source of truth. (`npx skills`
+installs from the Git repository; to render the same files into your own project
+instead, use `thor skills export` below.)
+
 ## Included skills
 
 `SKILLS` is the ordered, read-only catalog. Each entry has a dotted `id`, export

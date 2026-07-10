@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "pnpm -r run build",
-    "docs:check": "node scripts/check-docs.mjs && node scripts/check-api-stability.mjs && node scripts/check-readme-examples.mjs && node scripts/generate-capabilities.mjs --check",
+    "docs:check": "node scripts/check-docs.mjs && node scripts/check-api-stability.mjs && node scripts/check-readme-examples.mjs && node scripts/generate-capabilities.mjs --check && node scripts/generate-skills.mjs --check",
     "docs:examples": "node scripts/check-readme-examples.mjs",
     "quality:check": "biome ci packages/thor/src/execution/transaction.ts packages/thor/src/ir/query-analysis.ts packages/thor/src/sql/raw.ts packages/thor/test/transaction.test.ts packages/thor/test/scoped-layers.test.ts scripts/test-packages.mjs && knip",
     "quality:fix": "biome check --write packages/thor/src/execution/transaction.ts packages/thor/src/ir/query-analysis.ts packages/thor/src/sql/raw.ts packages/thor/test/transaction.test.ts packages/thor/test/scoped-layers.test.ts scripts/test-packages.mjs",
