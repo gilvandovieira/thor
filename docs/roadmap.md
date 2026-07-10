@@ -5,7 +5,7 @@ delivered v0 foundation and [`thor-project-v1-spec.md`](./thor-project-v1-spec.m
 for Part II. This roadmap also tracks production-correctness work found by the
 independent repository review.
 
-**Status legend:** ✅ done · 🟡 partial · ❌ missing
+**Status legend:** ✅ done · 🟡 partial · ❌ missing · ⛔ won't-do (descoped)
 **Priority:** P0 (blocking correctness/spec-validity) · P1 (release hardening) · P2 (maintainability/beta quality)
 **Effort:** S (<½ day) · M (½–2 days) · L (>2 days)
 
@@ -70,7 +70,7 @@ independent repository review.
 
 | # | Status | Task | Evidence | Effort | Acceptance |
 |---|---|---|---|---|---|
-| P2-11 | 🟡 | Split oversized modules and add code-quality tooling | IR traversal moved to `query-analysis.ts` (reducing `query-ir.ts` to declarations); Biome incrementally gates new seams, Knip gates the workspace, and dead placeholder exports/files were removed; query-builder/features/execution splits remain | L | split along existing statement/execution/feature seams without public API churn; add formatter/linter plus dead-export/dependency checks and enforce them in CI |
+| P2-11 | ✅ (feature-suite split follow-up) | Split oversized modules and add code-quality tooling | IR traversal moved to `query-analysis.ts` (reducing `query-ir.ts` to declarations); Biome incrementally gates new seams, Knip gates the workspace, and dead placeholder exports/files were removed. The two hot-path modules were split along their statement/execution seams with **no public API churn**: `sql/query-builder.ts` (1415→707) into `query-builder-support` (shared typing + `PreparedQuery`) / `mutation-builder` / select+`db` barrel, and `execution/run.ts` (908→428) into `run-pipeline` / `prepared-plan` / `run` orchestrator. Remaining large files are authored content (`skills/index.ts`) or the SQL feature-matrix test fixture (`testing/sql-features.ts`); that feature-suite split stays a follow-up | L | split along existing statement/execution/feature seams without public API churn; add formatter/linter plus dead-export/dependency checks and enforce them in CI |
 | P2-12 | ✅ | Make documentation executable and claims generated | `pnpm docs:check` syntax-checks all README TS fences, executes the canonical cross-dialect query, and rejects stale capability summaries generated from the authoritative matrices; `docs/README.md` identifies the v1 spec as current and v0 as archived; packed Node/Bun consumers verify published examples and runtime claims | M | examples are tested or executable; feature/status tables derive from capability/schema metadata; one current spec plus clearly archived versions; README claims match live behavior |
 | P2-13 | ✅ | Enforce the narrowed milestone scope | release-work registry below names prerequisites/owner/tests/claim; Part II remains deferred; MariaDB/libSQL are explicitly unscheduled candidates | S | no new v1 surface begins before P0 is green; each resumed epic names prerequisites, owner, tests, and a release claim it closes; MariaDB/libSQL remain unscheduled candidates until dialect and transaction foundations are hardened |
 
@@ -351,7 +351,7 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J✅**, FK (Q1) | ✅ Q1–Q6 |
 | R | Routines v1 (functions/procedures, typed + guarded) | §14 | beta | routine v0✅, J✅ | ✅ R1–R6 (OUT-params follow-up) |
 | S | Observability (metadata, spans, param-redaction) | §17 | beta | annotations (§7.4 v0) | ✅ S1–S5 |
-| T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI v0; ⟵ P, U, W1 | 🟡 T1/T2/T3/T5 ✅ · T4 ⟵ W1✅ |
+| T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI v0; ⟵ P, U, W1 | ✅ T1/T2/T3/T5 · T4 ⛔ won't-do (§20.4 descoped) |
 | U | LLM skills (11 skill files + manifest + export) | §21 | beta | — | ✅ U1–U5 |
 | V | API stability levels + error model v1 | §6, §22 | beta | errors v0✅ | ✅ V1–V4 |
 | W | Benchmarks v1 + docs v1 (cold/warm/hot, Node+Bun) | §19, §23 | beta | I✅, L✅; W2 ⟵ N, W5 ⟵ Q/P/U/V | ✅ W1–W5 |
@@ -370,7 +370,7 @@ v1-beta     Observability, skills, API stability → R, S, T, U, V, W
 ## Remaining dependency tree (updated 2026-07-10)
 
 > **Done:** K, L, M, N, O, P, Q, R, S, U, V, W ✅ (v1) and J, I, F, E, D, C, B ✅ (v0).
-> The only remaining v1 epic task in this tree is T4 (`thor bench`).
+> No v1 epic tasks remain in this tree — T4 (`thor bench`) is descoped as won't-do (see Epic T).
 > `✅` = prerequisite now satisfied · `⧗ X` = still waiting on task/epic `X`.
 > **Key changes from completed work:** O6 closes **R6**; M5 largely delivers **T3**;
 > M unblocks **P**'s core; J unblocks all of **Q**; L's `bench:cache` seeds **W1**'s
@@ -384,14 +384,14 @@ Ready now (all prerequisites satisfied)
 Blocked on other undone epics
   P4/P5 ✅ ⟵ P1–P3,T1/T2   (CLI introspection + drift flow)
   T1/T2/T3 ✅ ⟵ O✅,P✅,M5✅,C✅
-  T4 ⟵ W1✅ (bench groups), I✅
+  T4 ⛔ won't-do — internal-overhead bench, out of scope for a consumer CLI (see Epic T)
   T5/U4,W2/W4/W5,V2–V4 ✅
 
 Already satisfied by completed work (close these out)
   R6 ✅ ⟵ O6                (routine DDL in migrations — done)
 ```
 
-**Suggested remaining order:** **T4** (`thor bench`, ⟵ W1✅).
+**Suggested remaining order:** none — the last open item, T4 (`thor bench`), is descoped as won't-do (see Epic T).
 
 ---
 
@@ -576,14 +576,16 @@ implemented and verified. ✅
 | T1 | ✅ | Wire DB-connected commands to the live migrator/introspector | §20.1 | configured `node:sqlite`/optional `pg`/`mysql2`; tsx loads schema and ordered migration modules; `generate` (create-table-only), `check`, `status`, `up`, `down`, `redo`, `drift`, `pull`, and `inspect` use live Migrator/Introspector services; SQLite subprocess lifecycle tests |
 | T2 | ✅ | `thor doctor` | §20.2 | checks runtime, config/schema, dialect, driver compatibility, connectivity, journal/checksums, pending migrations, drift, and capability summary; drift/failures exit non-zero; SQLite E2E test |
 | T3 | ✅ | `thor capabilities <dialect\|runtime>` | §20.3 | dialect matrix (M5) + **runtime variant**: `thor capabilities runtime` prints each `ALL_RUNTIME_CAPABILITIES` as native/unsupported for the detected host; subprocess tests |
-| T4 | ❌ | `thor bench <query\|compile\|decode\|runtime>` | §20.4 | runs the bench groups; `--node`/`--bun` (⟵ W1) |
+| T4 | ⛔ won't-do | `thor bench <query\|compile\|decode\|runtime>` | §20.4 | **Descoped — out of scope for a consumer CLI.** §20.4's groups measure Thor's *internal* overhead (build/compile/decode against a no-op driver, no DB) — a library-development metric. For a third-party app the DB round-trip dominates that overhead by ~1000×, so shipping these in the installed binary adds surface + maintenance for no consumer benefit; no mainstream ORM ships such a command. The benchmarks stay as repo scripts (`bench:*`, `bench-stages.mts`) and CI gates, where they belong. A genuinely user-facing bench would instead profile the *user's own* queries against their *own* database (the `bench:e2e`/`bench:drivers` shape) — a different command than §20.4, to be tracked separately if ever wanted |
 | T5 | ✅ | `thor skills list\|export` | §20.5, §21 | `thor skills list` prints the index; `thor skills export [--to <dir>] [--format md\|json]` writes Epic U's `skillFiles` under `<to>/thor` (default `.agents/skills`); subprocess tests cover list/export/errors |
 
 **Release-work record:** T1/T2/T3/T5 are complete within the current core planner
-boundary; T4 (`thor bench`) is intentionally deferred. Generated migrations cover
-missing tables only and are marked irreversible; column/rename/reverse-plan
-generation remains explicit follow-up work rather than being guessed in the CLI.
-🟡 (T4 pending)
+boundary; T4 (`thor bench`) is **descoped as won't-do** (see the row above — an
+internal-overhead benchmark does not belong in a consumer CLI; it lives in the
+repo's bench scripts and CI gates). Epic T's shipping-command surface is therefore
+complete. Generated migrations cover missing tables only and are marked
+irreversible; column/rename/reverse-plan generation remains explicit follow-up
+work rather than being guessed in the CLI. ✅
 
 ## Epic U — LLM skills (§21, beta)
 
@@ -672,7 +674,7 @@ and docs scope. ✅
 10. **T3** ✅ — finish the `runtime` variant (dialect shipped via M5✅)
 11. **T1, T2** ✅ — wire migrator/introspector into the CLI + `thor doctor` (⟵ P core)
 12. **P4, P5** ✅ — CLI `pull`/`introspect`/`inspect` + drift-in-doctor/flow (⟵ T1/T2)
-13. **T4** — `thor bench` (⟵ W1)
+13. **T4** ⛔ won't-do — `thor bench` descoped (internal-overhead bench, not a consumer-CLI concern; see Epic T)
 14. **U4 + T5** ✅ — `thor skills export` (⟵ U1–U3 + CLI host)
 
 **Wave 3 — Stabilize + baselines**
@@ -695,5 +697,7 @@ U1 → U2 → U3 → U4 → T5 ───────┤
 V1 → V3 → V4 ─────────────────┘
 ```
 
-**W5 is complete.** All alpha milestones and the R/U/V/W beta scopes are closed;
-T4 remains the final CLI convenience command over the shipped benchmark groups.
+**W5 is complete.** All alpha milestones and the R/U/V/W beta scopes are closed.
+T4 (`thor bench`) is descoped as won't-do: an internal-overhead benchmark belongs
+in the repo's bench scripts and CI gates, not the installed CLI — so no v1 epic
+tasks remain.
