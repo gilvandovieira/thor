@@ -302,7 +302,7 @@ typed builder → runtime IR → capability check → compile → execute → de
 | Benchmarks + CI regression gate | ✅ Done |
 | Testing helpers & cross-dialect contract suite | ✅ Done |
 | Migrations (live migrator + CLI) | ✅ Journaled programmatic migrator plus configured `generate`/`check`/`status`/`up`/`down`/`redo`/`drift`/`pull`/`doctor` commands; generation is currently create-table-only |
-| SQL feature-matrix tests | 🟡 Levels 1–5, 7, and 9 covered; Levels 6, 8, and 10 remain |
+| SQL feature-matrix tests | ✅ Implemented Levels 1–10 surfaces covered across query, codec, transaction, and migration/DDL scenarios |
 | Stored routines (functions/procedures) | 🟡 Scalar/aggregate expressions, table-function sources, procedure commands, capability guards, and return decoding done; advanced named/out arguments and routine DDL remain |
 
 The compact dialect summary below is generated from the executable capability

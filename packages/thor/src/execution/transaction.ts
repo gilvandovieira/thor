@@ -4,7 +4,9 @@
  * @module execution/transaction
  */
 import { Cause, Effect, Exit } from "effect"
-import { TransactionError } from "../errors/index.js"
+import { isSatisfied } from "../capabilities/matrix.js"
+import type { Capability } from "../capabilities/capability.js"
+import { CapabilityError, TransactionError } from "../errors/index.js"
 import { Database, type DatabaseService } from "./database.js"
 import { observeLifecycle } from "../observability/index.js"
 
@@ -120,15 +122,35 @@ export const runTransaction = <A, E, R>(
   options: TransactionOptions<E> = {}
 ) => {
   const current = (database as TransactionDatabaseService).transactionState
+  if (current && (options.isolationLevel || options.accessMode || options.sqliteMode)) {
+    return Effect.fail(
+      new TransactionError({ message: "Nested transactions cannot define outer transaction start options" })
+    )
+  }
+  const requiredCapability: Capability | undefined = current
+    ? "transaction.savepoints"
+    : options.isolationLevel ? "transaction.isolationLevel" : undefined
   if (current && options.retry) {
     return Effect.fail(
       new TransactionError({ message: "Nested transactions cannot define an independent retry policy" })
     )
   }
 
-  const once = (): Effect.Effect<A, E | TransactionError, Exclude<R, Database>> =>
+  const once = (): Effect.Effect<A, E | CapabilityError | TransactionError, Exclude<R, Database>> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
+        if (
+          requiredCapability &&
+          !isSatisfied(database.dialect.capabilities, requiredCapability, database.allowEmulation)
+        ) {
+          return yield* Effect.fail(
+            new CapabilityError({
+              capability: requiredCapability,
+              dialect: database.dialect.capabilities.dialect,
+              message: `Capability "${requiredCapability}" is not available on dialect "${database.dialect.id}"`
+            })
+          )
+        }
         if (current) {
           const name = `thor_sp_${++current.nextSavepoint.value}`
           const nestedDatabase: TransactionDatabaseService = {
@@ -186,9 +208,12 @@ export const runTransaction = <A, E, R>(
 
   const retry = options.retry
   if (!retry || retry.times <= 0) return once()
-  const attempt = (remaining: number): Effect.Effect<A, E | TransactionError, Exclude<R, Database>> =>
+  const attempt = (remaining: number): Effect.Effect<A, E | CapabilityError | TransactionError, Exclude<R, Database>> =>
     once().pipe(
-      Effect.catchAll((error) => (remaining > 0 && retry.while(error) ? attempt(remaining - 1) : Effect.fail(error)))
+      Effect.catchAll((error) =>
+        !(error instanceof CapabilityError) && remaining > 0 && retry.while(error)
+          ? attempt(remaining - 1)
+          : Effect.fail(error))
     )
   return attempt(retry.times)
 }

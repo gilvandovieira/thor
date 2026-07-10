@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit } from "effect"
 import { describe, expect, it } from "vitest"
-import { Database, DriverError, TransactionError, db } from "@gilvandovieira/thor"
+import { CapabilityError, Database, DriverError, TransactionError, db } from "@gilvandovieira/thor"
 import { MySQLDialect } from "@gilvandovieira/thor/mysql"
 import { SQLiteDialect } from "@gilvandovieira/thor/sqlite"
 import { FakeDatabaseLayer, FakeDriver } from "@gilvandovieira/thor/testing"
@@ -118,5 +118,40 @@ describe("transaction-scoped database API", () => {
       )
     )
     expect(sqlite.calls.map((call) => call.sql)).toEqual(["begin immediate", "commit"])
+  })
+
+  it("guards emulated isolation before the driver unless explicitly enabled", async () => {
+    const blocked = new FakeDriver()
+    const error = await Effect.runPromise(
+      Effect.flip(Effect.provide(
+        db.transaction(Effect.void, { isolationLevel: "serializable" }),
+        FakeDatabaseLayer(blocked, { dialect: SQLiteDialect })
+      ))
+    )
+    expect(error).toBeInstanceOf(CapabilityError)
+    expect(blocked.calls).toEqual([])
+
+    const enabled = new FakeDriver()
+    await Effect.runPromise(Effect.provide(
+      db.transaction(Effect.void, { isolationLevel: "serializable" }),
+      FakeDatabaseLayer(enabled, { dialect: SQLiteDialect, allowEmulation: true })
+    ))
+    expect(enabled.calls.map((call) => call.sql)).toEqual(["begin immediate", "commit"])
+  })
+
+  it.each([
+    { isolationLevel: "serializable" as const },
+    { accessMode: "read-only" as const },
+    { sqliteMode: "immediate" as const }
+  ])("rejects nested outer transaction options: %o", async (options) => {
+    const driver = new FakeDriver()
+    const error = await Effect.runPromise(Effect.flip(Effect.provide(
+      db.transaction(db.transaction(Effect.void, options)),
+      FakeDatabaseLayer(driver)
+    )))
+
+    expect(error).toBeInstanceOf(TransactionError)
+    expect(error.message).toContain("start options")
+    expect(driver.calls.map((call) => call.sql)).toEqual(["begin", "rollback"])
   })
 })

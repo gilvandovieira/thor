@@ -20,7 +20,7 @@ import { type AnyTable, tableMeta } from "../schema/table.js"
 import { Database, type DatabaseService } from "../execution/database.js"
 import { runTransaction } from "../execution/transaction.js"
 import { observeLifecycle } from "../observability/index.js"
-import { IrreversibleMigrationError, MigrationError, TransactionError } from "../errors/index.js"
+import { CapabilityError, IrreversibleMigrationError, MigrationError, TransactionError } from "../errors/index.js"
 import type { MigrationOperation, MigrationPlan } from "./migration-ir.js"
 import {
   type MigrationDefinition,
@@ -258,7 +258,7 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
       database: DatabaseService = db
     ): Effect.Effect<A, E | MigrationError, Exclude<R, Database>> =>
       runTransaction(database, body).pipe(Effect.mapErrorCause((cause) => Cause.map(cause, (error) =>
-        error instanceof TransactionError
+        error instanceof TransactionError || error instanceof CapabilityError
           ? new MigrationError({ message: error.message, cause: error })
           : error)))
 

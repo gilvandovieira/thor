@@ -109,7 +109,7 @@ constraint.
 | D | Precompiled static query handles (`.prepare()`) | §15.13, §15.15, M7 | ✅ D1–D6 | P1 |
 | E | Performance modes (safe/trusted/unsafe) | §15.13, §15.17 | ✅ E1–E5 | P2 |
 | F | Cache-key composition & optimization strategies | §15.14 | ✅ F1–F4 | P1 |
-| G | SQL feature matrix tests | §14.11, M6 | ✅ G1–G5,G6b · 🟡 G6a | P1 |
+| G | SQL feature matrix tests | §14.11, M6 | ✅ G1–G6 | P1 |
 | H | Property & fuzz tests | §14.12, M6 | ✅ H1–H5 | P2 |
 | I | Performance benchmarks, targets & CI gates | §15.12, §15.16, §18.8/18.9, M7 | ✅ I1–I7 | P1 |
 | J | Advanced query features (joins/agg/CTE/window/upsert) | §6, §14.11 L3–5,7 | ✅ J1–J5 | P2 |
@@ -129,8 +129,8 @@ Phase 5  J (joins/agg/CTE/window)     → unblocks G6b + H5b (the deadlock's rea
 > **G6/H5 deadlock (resolved).** G6b (feature Levels 3–5) and H5b (join fuzzing)
 > were framed as waiting on each other; both actually depend on **Epic J**
 > (join/aggregation/CTE/window IR + compiler), which no epic owned. J now owns
-> that prerequisite, so the graph is acyclic — J → {G6b, H5b} — and G6a/H5a
-> proceed immediately with today's IR.
+> that prerequisite, so the graph is acyclic — J → {G6b, H5b} — while G6a/H5a
+> were independently buildable with the existing IR.
 
 ---
 
@@ -235,12 +235,13 @@ area is labeled 🟡 with its remaining work rather than claimed complete. ✅
 | G3 | ✅ | Fake-execution level: params/cardinality/decode/typed-errors | §14.11 | Each feature runs against `FakeDriver`; unsupported capability → `CapabilityError` before the driver (driver untouched) |
 | G4 | ✅ | Integration level: run suites via Effect Layers | §14.11 | `runSqlFeatureIntegration` executes each feature against a live layer in `unsafe` mode (validity, not decode) — supported ⇒ no `DriverError`, unsupported ⇒ `CapabilityError`. SQLite in the default run (`sql-features.integration.test.ts`, 12/12); Postgres + MySQL wired in `sql-features.integration.e2e.test.ts` — verified green (`pnpm e2e`), MySQL returning ⇒ `CapabilityError` |
 | G5 | ✅ | Populate Levels 1–2 (DML + typed semantics) | §14.11 | `LEVEL_1_2_FEATURES`: 12 features (projection/where/and-or/order-limit/insert/update/delete/nullable/maybeOne + insert·update·delete returning) across 3 dialects → 96 generated cases |
-| G6a | 🟡 not started | Levels 6, 8, 10 (data types, transactions, DDL) — buildable with today's IR | §14.11 | Same `defineSqlFeatureSuite` shape; add a data-type/transaction/DDL feature array — no new query IR needed. No such array exists yet (only `LEVEL_1_2_FEATURES`, `ADVANCED_SQL_FEATURES`, `ROUTINE_SQL_FEATURES`). Level 7 (upsert) is **already done** under G6b |
+| G6a | ✅ | Levels 6, 8, 10 (data types, transactions, DDL) | §14.11 | `DATA_TYPE_FEATURES` covers the six currently implemented cross-dialect codec surfaces (UUID, boolean, bigint, real, timestamp, date). `TRANSACTION_DDL_FEATURES` adds six transaction lifecycle/capability scenarios and five DDL/migration scenarios through the same `defineSqlFeatureSuite` runner shape. SQLite isolation honors capability/emulation policy before driver access and has explicit opt-in Node/Bun lanes; dedicated migration suites retain live apply/journal coverage. Arrays, enums, decimal, binary, and cross-driver JSON parsing require schema/codec surfaces outside G6a |
 | G6b | ✅ | Levels 3–5, 7, 9 (joins, aggregation, CTE, window, upsert, routines) | §14.11 | `ADVANCED_SQL_FEATURES` (13 features) covers Levels 3–5 plus the Level 7 upserts (`insert.onConflict`, `insert.onDuplicateKey`); `ROUTINE_SQL_FEATURES` (5 features) covers scalar/aggregate/window/table/procedure behavior, capability failures, and decoding at Level 9 |
 
-**Definition of done:** G6b is complete with executable, capability-aware
-definitions for Levels 3–5, 7, and 9. G6a separately tracks the unstarted
-Levels 6, 8, and 10 (data types, transactions, DDL). 🟡
+**Definition of done:** Every currently implemented surface across Levels 1–10
+has executable, capability-aware feature definitions. Query, codec, transaction,
+and migration/DDL scenarios run through the shared matrix at unit/fake level and
+through applicable live integration or dedicated migration suites. ✅
 
 ---
 
@@ -284,7 +285,7 @@ Bun regression gates against reviewed committed baselines. ✅
 > joins/aggregation/CTE/window, and H5 was written as "awaits G6". Neither is the
 > real blocker — **both depend on query-builder features that no epic owned**.
 > Making that prerequisite explicit (Epic J) breaks the cycle: J → {G6b, H5b},
-> while **G6a and H5a proceed now** with today's IR. Joins etc. are a v0
+> while **G6a and H5a were independently buildable** with the existing IR. Joins etc. are a v0
 > *non-goal expansion* (spec §3.2 defers the relation layer), so J is scheduled
 > after the P1/P2 backbone, and G6b/H5b are explicitly gated on it — not on each
 > other.
@@ -437,9 +438,9 @@ verified. ✅
 
 | # | Status | Task | Spec | Acceptance |
 |---|---|---|---|---|
-| M1 | ✅ | Postgres passes the **full** contract + feature matrix | §11.4, alpha.2 | Both PostgreSQL drivers pass the expanded shared contract; live matrix covers complete Levels 1–5 plus 7/9 implemented surfaces, including routine decoding/table functions; Levels 6/8/10 remain separately scoped to G6a |
+| M1 | ✅ | Postgres passes the **full** contract + feature matrix | §11.4, alpha.2 | Both PostgreSQL drivers pass the expanded shared contract; the matrix covers implemented Levels 1–10 query, codec, transaction, routine, and migration/DDL scenarios |
 | M2 | ✅ | MySQL capability-aware pass or **explicitly marked partial** | §25 | Exhaustive matrix records every status; live contract/matrix prove plain mutations, right/lateral joins, sets, transactions, and duplicate-key updates while unsupported `RETURNING`, full join, conflict syntax, table routines, and transactional DDL are documented and rejected |
-| M3 | ✅ | SQLite real adapter path hardened (Node + Bun) | alpha.2 | Node and Bun run the same expanded 12-case real contract and 37-case feature fixture; unsupported features fail through capabilities on both runtimes |
+| M3 | ✅ | SQLite real adapter path hardened (Node + Bun) | alpha.2 | Node and Bun run the same expanded real contract and 55-case feature fixture, including isolation emulation opt-in; unsupported features fail through capabilities on both runtimes |
 | M4 | ✅ | Dialect-specific behavior isolated (no leakage into IR/guards) | §11.5 | Logical data type renamed `SqlDataType`; candidate-row, routine-argument, and transaction-start syntax moved behind dialect hooks; architecture tests forbid dialect imports/ID branching in shared IR, guards, compiler, and transaction execution |
 | M5 | ✅ | `thor capabilities <dialect>` reflects the matrix | §20.3 | Published CLI prints all capabilities in registry order for postgres/sqlite/mysql with native/emulated/unsupported/unknown statuses; subprocess and packed-consumer tests prevent drift |
 
@@ -534,14 +535,20 @@ parent row. ✅
 > (procedure `requiresTransaction` honoring) are done.** Follow-up only: OUT
 > parameters and idempotency-driven retry.
 
-| # | Task | Spec | Acceptance |
-|---|---|---|---|
-| R1 | Scalar function calls usable in expressions | §14.1, §12.1(v0) | `pg.fn.lower(col)` / user `defineFunction` in select/where; lowers to `FunctionCall` IR |
-| R2 | ✅ Aggregate + window function nodes (⟵ J aggregation) | §14.2 | declared aggregates already hit the aggregation-scope guard; declared functions are now **windowable** (`fn(col).over({ partitionBy, orderBy })` via the shared `windowable` path), adding `select.windowFunctions` and staying capability-gated |
-| R3 | ✅ Procedure execution through Effect | §14.5 | `procedure.call(args).run()` → typed Effect; **`requiresTransaction` honored** — a procedure needing a transaction fails with a `GuardError` before the driver unless run inside `db.transaction` (transaction detected via `isInTransaction`). Follow-up: OUT parameters and idempotency-driven retry |
-| R4 | Table-valued functions in `from` | §14.2 | `defineTableFunction` usable as a source |
-| R5 | Routine safety + capability gating | §14.6 | names never interpolated; required extensions/capabilities enforced |
-| R6 | ✅ Routine DDL in migrations (create/drop function/procedure) | §15.1 | **done via O6** — `CreateRoutine`/`DropRoutine` IR ops compile to PostgreSQL/MySQL function/procedure DDL, rejected before the driver on SQLite, phase-classified |
+| # | Status | Task | Spec | Acceptance |
+|---|---|---|---|---|
+| R1 | ✅ | Scalar function calls usable in expressions | §14.1, §12.1(v0) | `pg.fn.lower(col)` / user `defineFunction` in select/where; lowers to `FunctionCall` IR |
+| R2 | ✅ | Aggregate + window function nodes (⟵ J aggregation) | §14.2 | declared aggregates already hit the aggregation-scope guard; declared functions are now **windowable** (`fn(col).over({ partitionBy, orderBy })` via the shared `windowable` path), adding `select.windowFunctions` and staying capability-gated |
+| R3 | ✅ | Procedure execution through Effect | §14.5 | `procedure.call(args).run()` → typed Effect; **`requiresTransaction` honored** — a procedure needing a transaction fails with a `GuardError` before the driver unless run inside `db.transaction` (transaction detected via `isInTransaction`). Follow-up: OUT parameters and idempotency-driven retry |
+| R4 | ✅ | Table-valued functions in `from` | §14.2 | `defineTableFunction` usable as a source |
+| R5 | ✅ | Routine safety + capability gating | §14.6 | names never interpolated; required extensions/capabilities enforced |
+| R6 | ✅ | Routine DDL in migrations (create/drop function/procedure) | §15.1 | **done via O6** — `CreateRoutine`/`DropRoutine` IR ops compile to PostgreSQL/MySQL function/procedure DDL, rejected before the driver on SQLite, phase-classified |
+
+**Release-work record:** R1-R6 are complete. Declared routines lower through
+typed IR, preserve capability and safety metadata, decode function results through
+the normal query pipeline, and enforce procedure transaction requirements before
+execution. Procedure OUT parameters and metadata-driven retry remain explicitly
+scoped follow-up work rather than part of the v1 acceptance criteria. ✅
 
 ## Epic S — Observability (§17, beta)
 

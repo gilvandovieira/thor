@@ -13,6 +13,7 @@ import {
   DATA_TYPE_FEATURES,
   LEVEL_1_2_FEATURES,
   ROUTINE_SQL_FEATURES,
+  TRANSACTION_DDL_FEATURES,
   SQLITE_FEATURE_RESET,
   runSqlFeatureIntegration
 } from "@gilvandovieira/thor/testing"
@@ -23,8 +24,17 @@ const client = new DatabaseSync(":memory:")
 
 runSqlFeatureIntegration(api, {
   dialect: SQLiteDialect,
-  features: [...LEVEL_1_2_FEATURES, ...DATA_TYPE_FEATURES, ...ADVANCED_SQL_FEATURES, ...ROUTINE_SQL_FEATURES],
+  features: [...LEVEL_1_2_FEATURES, ...DATA_TYPE_FEATURES, ...TRANSACTION_DDL_FEATURES, ...ADVANCED_SQL_FEATURES, ...ROUTINE_SQL_FEATURES],
   layer: NodeSQLiteLayer(client),
-  reset: SQLITE_FEATURE_RESET,
-  teardown: () => client.close()
+  reset: SQLITE_FEATURE_RESET
 })
+
+runSqlFeatureIntegration(api, {
+  dialect: SQLiteDialect,
+  features: TRANSACTION_DDL_FEATURES.filter((feature) => feature.id === "transaction.isolation"),
+  layer: NodeSQLiteLayer(client, { allowEmulation: true }),
+  reset: SQLITE_FEATURE_RESET,
+  allowEmulation: true
+})
+
+afterAll(() => client.close())

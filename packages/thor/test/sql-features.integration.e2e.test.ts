@@ -12,8 +12,10 @@ import { MySQLDialect, MySQLLayer, type MySQLClient } from "@gilvandovieira/thor
 import {
   ADVANCED_SQL_FEATURES,
   type ContractTestApi,
+  DATA_TYPE_FEATURES,
   LEVEL_1_2_FEATURES,
   ROUTINE_SQL_FEATURES,
+  TRANSACTION_DDL_FEATURES,
   runSqlFeatureIntegration
 } from "@gilvandovieira/thor/testing"
 
@@ -28,6 +30,9 @@ const PG_RESET = [
   "drop table if exists posts",
   "create table posts (id uuid primary key default gen_random_uuid(), user_id uuid not null, title text not null)",
   "insert into posts (user_id, title) select id, 'Hello' from users limit 1",
+  "drop table if exists typed",
+  "create table typed (id uuid primary key, active boolean not null, score bigint not null, ratio real not null, at timestamptz not null, \"on\" date not null, meta jsonb not null)",
+  "insert into typed (id, active, score, ratio, at, \"on\", meta) values ('550e8400-e29b-41d4-a716-446655440000', true, 42, 1.5, '2026-01-01T00:00:00.000Z', '2026-07-10', '{\"role\":\"admin\"}')",
   "create schema if not exists maintenance",
   "drop procedure if exists maintenance.cleanup(text)",
   "create procedure maintenance.cleanup(\"before\" text) language sql as 'select 1'"
@@ -38,14 +43,17 @@ const MYSQL_RESET = [
   "insert into users (id, email, name, age) values ('u1', 'seed@x.c', 'Seed', 30)",
   "drop table if exists posts",
   "create table posts (id varchar(36) primary key default (uuid()), user_id varchar(36) not null, title text not null)",
-  "insert into posts (id, user_id, title) values ('p1', 'u1', 'Hello')"
+  "insert into posts (id, user_id, title) values ('p1', 'u1', 'Hello')",
+  "drop table if exists typed",
+  "create table typed (id varchar(36) primary key, active boolean not null, score bigint not null, ratio float not null, at datetime(3) not null, `on` date not null, meta json not null)",
+  "insert into typed (id, active, score, ratio, at, `on`, meta) values ('550e8400-e29b-41d4-a716-446655440000', true, 42, 1.5, '2026-01-01 00:00:00.000', '2026-07-10', '{\"role\":\"admin\"}')"
 ]
 
 describe.skipIf(!DATABASE_URL)("feature integration: postgres (e2e)", () => {
   const client = new pg.Client({ connectionString: DATABASE_URL })
   runSqlFeatureIntegration(api, {
     dialect: PostgresDialect,
-    features: [...LEVEL_1_2_FEATURES, ...ADVANCED_SQL_FEATURES, ...ROUTINE_SQL_FEATURES],
+    features: [...LEVEL_1_2_FEATURES, ...DATA_TYPE_FEATURES, ...TRANSACTION_DDL_FEATURES, ...ADVANCED_SQL_FEATURES, ...ROUTINE_SQL_FEATURES],
     layer: PostgresLayer(client),
     reset: PG_RESET,
     setup: async () => {
@@ -59,7 +67,7 @@ describe.skipIf(!MYSQL_URL)("feature integration: mysql (e2e)", () => {
   let connection: mysql2.Connection
   runSqlFeatureIntegration(api, {
     dialect: MySQLDialect,
-    features: [...LEVEL_1_2_FEATURES, ...ADVANCED_SQL_FEATURES],
+    features: [...LEVEL_1_2_FEATURES, ...DATA_TYPE_FEATURES, ...TRANSACTION_DDL_FEATURES, ...ADVANCED_SQL_FEATURES],
     layer: MySQLLayer({
       query: (sql: string, params?: ReadonlyArray<unknown>) => connection.query(sql, params as never),
       execute: (sql: string, params?: ReadonlyArray<unknown>) => connection.execute(sql, params as never)

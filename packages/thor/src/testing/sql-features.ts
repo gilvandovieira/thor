@@ -12,20 +12,24 @@
  *
  * @module testing/sql-features
  */
-import { Effect, Either, type Layer, Option, Schema } from "effect"
+import { Cause, Effect, Either, Exit, type Layer, Option, Schema } from "effect"
 import { db } from "../sql/query-builder.js"
 import { and, eq, gt, isNull, not, or } from "../sql/predicates.js"
 import { asc, desc, param } from "../sql/expressions.js"
 import { avg, count, excluded, exists, max, min, rowNumber, scalar, sum } from "../sql/advanced-expressions.js"
 import { alias, defineTable } from "../schema/table.js"
-import { bigint, boolean, integer, jsonb, real, SafeIntegerCodec, text, timestamp, uuid } from "../schema/index.js"
+import { bigint, boolean, date, integer, jsonb, real, SafeIntegerCodec, text, timestamp, uuid } from "../schema/index.js"
 import type { Capability } from "../capabilities/capability.js"
 import { isSatisfied } from "../capabilities/matrix.js"
 import type { Dialect } from "../dialect.js"
-import { CapabilityError } from "../errors/index.js"
+import { CapabilityError, TransactionError } from "../errors/index.js"
 import type { CompiledStatement, RawRow } from "../execution/driver.js"
 import { Database } from "../execution/database.js"
+import { isInTransaction } from "../execution/transaction.js"
 import type { QueryArgs } from "../execution/run.js"
+import { checksum, compileOperation, defineMigration, guardOperations, sql, tableToCreateOp } from "../migrate/index.js"
+import type { MigrationOperation } from "../migrate/index.js"
+import { detectDrift } from "../introspect/index.js"
 import {
   defineAggregateFunction,
   defineFunction,
@@ -56,6 +60,7 @@ const typed = defineTable("typed", {
   score: bigint("score").notNull(),
   ratio: real("ratio").notNull(),
   at: timestamp("at").notNull(),
+  on: date("on").notNull(),
   meta: jsonb("meta", Schema.Struct({ role: Schema.String })).notNull()
 })
 /** Shared schema fixtures passed to every SQL feature definition. */
@@ -68,7 +73,8 @@ export type SqlFeatureFixtures = typeof sqlFeatureFixtures
 export type FeatureExec = "all" | "one" | "maybeOne" | "run"
 
 /** One executable SQL feature definition (spec §14.11). */
-export interface SqlFeature {
+export interface QuerySqlFeature {
+  readonly kind?: never
   /** Stable feature identifier used in generated test names. */
   readonly id: string
   /** SQL feature-matrix level from the specification. */
@@ -89,6 +95,31 @@ export interface SqlFeature {
   readonly assertResult?: unknown
 }
 
+/** Non-query scenario executed by the same feature-matrix runner. */
+export interface ScenarioSqlFeature {
+  readonly kind: "scenario"
+  /** Stable feature identifier used in generated test names. */
+  readonly id: string
+  /** SQL feature-matrix level from the specification. */
+  readonly level: number
+  /** Capabilities that must be available before execution. */
+  readonly requires: ReadonlyArray<Capability>
+  /**
+   * @param dialect - Dialect under test.
+   * @returns A transaction, DDL compiler, migration guard, or drift scenario.
+   */
+  readonly execute: (dialect: Dialect) => Effect.Effect<unknown, unknown, Database>
+  /** Expected scenario result when it is independent of the dialect. */
+  readonly assertResult?: unknown
+  /** Expected scenario result keyed by dialect id. */
+  readonly assertResultByDialect?: Readonly<Record<string, unknown>>
+  /** Expected fake-driver SQL calls keyed by dialect id. */
+  readonly assertCalls?: Readonly<Record<string, ReadonlyArray<string>>>
+}
+
+/** One executable SQL feature definition (spec §14.11). */
+export type SqlFeature = QuerySqlFeature | ScenarioSqlFeature
+
 /**
  * Identity helper documenting a feature definition.
  *
@@ -96,6 +127,9 @@ export interface SqlFeature {
  * @returns The same feature definition with its type checked.
  */
 export const defineSqlFeatureSuite = (feature: SqlFeature): SqlFeature => feature
+
+/** @param feature - Feature to inspect. @returns Whether it uses the scenario runner. */
+const isScenarioFeature = (feature: SqlFeature): feature is ScenarioSqlFeature => feature.kind === "scenario"
 
 interface RunnableQuery {
   /**
@@ -133,6 +167,8 @@ export interface SqlFeatureMatrixOptions {
   readonly dialect: Dialect
   /** Executable feature definitions to register. */
   readonly features: ReadonlyArray<SqlFeature>
+  /** Whether emulated capabilities may satisfy feature requirements. */
+  readonly allowEmulation?: boolean
 }
 
 /**
@@ -148,40 +184,64 @@ export const runSqlFeatureMatrix = (api: ContractTestApi, options: SqlFeatureMat
 
   describe(`sql feature matrix: ${dialect.id}`, () => {
     for (const feature of options.features) {
-      const supported = feature.requires.every((capability) => isSatisfied(dialect.capabilities, capability))
-      const expectedSql = feature.assertSql[dialect.id]
-      const method: FeatureExec = feature.exec ?? "all"
+      const supported = feature.requires.every((capability) =>
+        isSatisfied(dialect.capabilities, capability, options.allowEmulation ?? false))
 
       describe(`L${feature.level} ${feature.id}`, () => {
-        if (expectedSql !== undefined) {
+        if (!isScenarioFeature(feature) && feature.assertSql[dialect.id] !== undefined) {
           it("compiles to the expected SQL", () => {
             const q = feature.build(sqlFeatureFixtures) as RunnableQuery
-            expect(q.toSql?.(dialect).sql).toBe(expectedSql)
+            expect(q.toSql?.(dialect).sql).toBe(feature.assertSql[dialect.id])
           })
         }
 
-        it("declares its required capabilities", () => {
-          const q = feature.build(sqlFeatureFixtures) as RunnableQuery
-          expect(q.requiredCapabilities?.() ?? []).toEqual(feature.requires)
-        })
+        if (!isScenarioFeature(feature)) {
+          it("declares its required capabilities", () => {
+            const q = feature.build(sqlFeatureFixtures) as RunnableQuery
+            expect(q.requiredCapabilities?.() ?? []).toEqual(feature.requires)
+          })
+        }
 
         if (supported) {
           it("executes and decodes against the fake driver", async () => {
             const driver = new FakeDriver()
-            if (feature.driverRows) driver.enqueue({ rows: feature.driverRows })
-            else driver.enqueue({ rowCount: feature.driverRowCount ?? 0 })
-            const q = feature.build(sqlFeatureFixtures) as RunnableQuery
-            const result = await Effect.runPromise(
-              Effect.provide(q[method]!(feature.args), FakeDatabaseLayer(driver, { dialect }))
-            )
-            expect(result).toEqual(feature.assertResult)
+            let effect: Effect.Effect<unknown, unknown, Database>
+            if (isScenarioFeature(feature)) {
+              effect = feature.execute(dialect)
+            } else {
+              if (feature.driverRows) driver.enqueue({ rows: feature.driverRows })
+              else driver.enqueue({ rowCount: feature.driverRowCount ?? 0 })
+              const q = feature.build(sqlFeatureFixtures) as RunnableQuery
+              const method: FeatureExec = feature.exec ?? "all"
+              effect = q[method]!(feature.args)
+            }
+            const result = await Effect.runPromise(Effect.provide(
+              effect,
+              FakeDatabaseLayer(driver, { dialect, allowEmulation: options.allowEmulation ?? false })
+            ))
+            const expected = isScenarioFeature(feature)
+              ? feature.assertResultByDialect?.[dialect.id] ?? feature.assertResult
+              : feature.assertResult
+            expect(result).toEqual(expected)
+            if (isScenarioFeature(feature) && feature.assertCalls?.[dialect.id]) {
+              expect(driver.calls.map((call) => call.sql)).toEqual(feature.assertCalls[dialect.id])
+            }
           })
         } else {
           it("fails with CapabilityError before the driver", async () => {
             const driver = new FakeDriver()
-            const q = feature.build(sqlFeatureFixtures) as RunnableQuery
+            const effect = isScenarioFeature(feature)
+              ? feature.execute(dialect)
+              : (() => {
+                  const q = feature.build(sqlFeatureFixtures) as RunnableQuery
+                  const method: FeatureExec = feature.exec ?? "all"
+                  return q[method]!(feature.args)
+                })()
             const error = await Effect.runPromise(
-              Effect.flip(Effect.provide(q[method]!(feature.args), FakeDatabaseLayer(driver, { dialect })))
+              Effect.flip(Effect.provide(
+                effect,
+                FakeDatabaseLayer(driver, { dialect, allowEmulation: options.allowEmulation ?? false })
+              ))
             )
             expect(error).toBeInstanceOf(CapabilityError)
             expect(driver.calls).toEqual([])
@@ -202,6 +262,8 @@ export interface SqlFeatureIntegrationOptions {
   readonly layer: Layer.Layer<Database>
   /** Dialect-specific statements run before each feature to (re)create + seed the `users` fixture. */
   readonly reset: ReadonlyArray<string>
+  /** Whether the supplied layer enables emulated capabilities. */
+  readonly allowEmulation?: boolean
   /** @returns Optional live-database setup completion. */
   readonly setup?: () => void | Promise<void>
   /** @returns Optional live-database teardown completion. */
@@ -245,23 +307,40 @@ export const runSqlFeatureIntegration = (api: ContractTestApi, options: SqlFeatu
     })
 
     for (const feature of options.features) {
-      const supported = feature.requires.every((capability) => isSatisfied(dialect.capabilities, capability))
-      const method: FeatureExec = feature.exec ?? "all"
+      const supported = feature.requires.every((capability) =>
+        isSatisfied(dialect.capabilities, capability, options.allowEmulation ?? false))
 
       if (supported) {
         it(`L${feature.level} ${feature.id} runs valid SQL on ${dialect.id}`, async () => {
-          const q = feature.build(sqlFeatureFixtures) as RunnableQuery
-          const result = await Effect.runPromise(Effect.either(Effect.provide(q[method]!(feature.args), layer)))
+          const effect = isScenarioFeature(feature)
+            ? feature.execute(dialect)
+            : (() => {
+                const q = feature.build(sqlFeatureFixtures) as RunnableQuery
+                const method: FeatureExec = feature.exec ?? "all"
+                return q[method]!(feature.args)
+              })()
+          const result = await Effect.runPromise(Effect.either(Effect.provide(effect, layer)))
           if (Either.isLeft(result)) {
-            // Cardinality/constraint errors mean the SQL executed; driver/decode failures are defects.
+            // Query cardinality/constraint errors mean SQL executed; scenarios must complete successfully.
             const tag = (result.left as { readonly _tag?: string })._tag
-            if (tag === "DriverError" || tag === "DecodeError") throw result.left
+            if (
+              isScenarioFeature(feature) ||
+              (tag !== "ConstraintError" && tag !== "NotFoundError" && tag !== "TooManyRowsError")
+            ) throw result.left
+          } else if (isScenarioFeature(feature)) {
+            expect(result.right).toEqual(feature.assertResultByDialect?.[dialect.id] ?? feature.assertResult)
           }
         })
       } else {
         it(`L${feature.level} ${feature.id} rejects with CapabilityError on ${dialect.id}`, async () => {
-          const q = feature.build(sqlFeatureFixtures) as RunnableQuery
-          const error = await Effect.runPromise(Effect.flip(Effect.provide(q[method]!(feature.args), layer)))
+          const effect = isScenarioFeature(feature)
+            ? feature.execute(dialect)
+            : (() => {
+                const q = feature.build(sqlFeatureFixtures) as RunnableQuery
+                const method: FeatureExec = feature.exec ?? "all"
+                return q[method]!(feature.args)
+              })()
+          const error = await Effect.runPromise(Effect.flip(Effect.provide(effect, layer)))
           expect(error).toBeInstanceOf(CapabilityError)
         })
       }
@@ -511,6 +590,20 @@ export const LEVEL_1_2_FEATURES: ReadonlyArray<SqlFeature> = [
  */
 export const DATA_TYPE_FEATURES: ReadonlyArray<SqlFeature> = [
   defineSqlFeatureSuite({
+    id: "datatype.uuid",
+    level: 6,
+    requires: [],
+    build: ({ typed }) => db.select({ id: typed.id }).from(typed),
+    assertSql: {
+      postgres: 'SELECT "typed"."id" AS "id" FROM "typed"',
+      sqlite: 'SELECT "typed"."id" AS "id" FROM "typed"',
+      mysql: "SELECT `typed`.`id` AS `id` FROM `typed`"
+    },
+    exec: "all",
+    driverRows: [{ id: "550e8400-e29b-41d4-a716-446655440000" }],
+    assertResult: [{ id: "550e8400-e29b-41d4-a716-446655440000" }]
+  }),
+  defineSqlFeatureSuite({
     id: "datatype.boolean",
     level: 6,
     requires: [],
@@ -565,11 +658,208 @@ export const DATA_TYPE_FEATURES: ReadonlyArray<SqlFeature> = [
     exec: "all",
     driverRows: [{ at: "2026-01-01T00:00:00.000Z" }], // ISO string decoded to Date
     assertResult: [{ at: new Date("2026-01-01T00:00:00.000Z") }]
+  }),
+  defineSqlFeatureSuite({
+    id: "datatype.date",
+    level: 6,
+    requires: [],
+    build: ({ typed }) => db.select({ on: typed.on }).from(typed),
+    assertSql: {
+      postgres: 'SELECT "typed"."on" AS "on" FROM "typed"',
+      sqlite: 'SELECT "typed"."on" AS "on" FROM "typed"',
+      mysql: "SELECT `typed`.`on` AS `on` FROM `typed`"
+    },
+    exec: "all",
+    driverRows: [{ on: "2026-07-10" }],
+    assertResult: [{ on: new Date("2026-07-10") }]
   })
   // NOTE: a `json`/`jsonb` feature is intentionally omitted here. PostgreSQL
   // returns JSON as a parsed value, but SQLite/MySQL return it as text and the
   // current json codec does not parse text — cross-dialect JSON decoding is a
   // tracked follow-up (its own codec change), not a feature-matrix gap.
+]
+
+/** @param postgres - PostgreSQL calls. @param sqlite - SQLite calls. @param mysql - MySQL calls. @returns Calls keyed by dialect. */
+const transactionCalls = (
+  postgres: ReadonlyArray<string>,
+  sqlite: ReadonlyArray<string> = postgres,
+  mysql: ReadonlyArray<string> = postgres
+): Readonly<Record<string, ReadonlyArray<string>>> => ({ postgres, sqlite, mysql })
+
+/** @param body - Transaction body. @returns The body inside a transaction boundary. */
+const executeInTransaction = (body: Effect.Effect<unknown, unknown, Database> = Effect.void) => db.transaction(body)
+
+const ddlParent = defineTable("feature_parents", {
+  id: uuid("id").primaryKey()
+})
+const ddlChild = defineTable(
+  "feature_children",
+  {
+    id: uuid("id").primaryKey(),
+    parentId: uuid("parent_id").notNull().references(() => ddlParent.id, { onDelete: "cascade" })
+  },
+  { indexes: [{ name: "feature_children_parent_idx", columns: ["parentId"] }] }
+)
+const safeOperation = { destructive: false, reversible: true, capabilities: [] } as const
+const addColumnOperation: MigrationOperation = {
+  _tag: "AddColumn",
+  table: "feature_children",
+  column: { name: "label", type: "text", nullable: true },
+  ...safeOperation
+}
+const dropColumnOperation: MigrationOperation = {
+  _tag: "DropColumn",
+  table: "feature_children",
+  column: "label",
+  destructive: true,
+  reversible: false,
+  capabilities: []
+}
+
+/** Levels 8 and 10: transaction lifecycle and migration/DDL scenarios. */
+export const TRANSACTION_DDL_FEATURES: ReadonlyArray<SqlFeature> = [
+  defineSqlFeatureSuite({
+    kind: "scenario",
+    id: "transaction.commit",
+    level: 8,
+    requires: [],
+    execute: () => executeInTransaction(Effect.succeed("committed")),
+    assertResult: "committed",
+    assertCalls: transactionCalls(["begin", "commit"], ["begin immediate", "commit"], ["start transaction", "commit"])
+  }),
+  defineSqlFeatureSuite({
+    kind: "scenario",
+    id: "transaction.rollback.failure",
+    level: 8,
+    requires: [],
+    execute: () => Effect.map(Effect.exit(executeInTransaction(Effect.fail("failed"))), (exit) =>
+      Exit.isFailure(exit) && !Array.from(Cause.failures(exit.cause)).some((error) => error instanceof TransactionError)),
+    assertResult: true,
+    assertCalls: transactionCalls(["begin", "rollback"], ["begin immediate", "rollback"], ["start transaction", "rollback"])
+  }),
+  defineSqlFeatureSuite({
+    kind: "scenario",
+    id: "transaction.rollback.interruption",
+    level: 8,
+    requires: [],
+    execute: () => Effect.map(Effect.exit(executeInTransaction(Effect.interrupt)), (exit) =>
+      Exit.isFailure(exit) && !Array.from(Cause.failures(exit.cause)).some((error) => error instanceof TransactionError)),
+    assertResult: true,
+    assertCalls: transactionCalls(["begin", "rollback"], ["begin immediate", "rollback"], ["start transaction", "rollback"])
+  }),
+  defineSqlFeatureSuite({
+    kind: "scenario",
+    id: "transaction.nested.savepoint",
+    level: 8,
+    requires: ["transaction.savepoints"],
+    execute: () => executeInTransaction(executeInTransaction()),
+    assertResult: undefined,
+    assertCalls: transactionCalls(
+      ["begin", "savepoint thor_sp_1", "release savepoint thor_sp_1", "commit"],
+      ["begin immediate", "savepoint thor_sp_1", "release savepoint thor_sp_1", "commit"],
+      ["start transaction", "savepoint thor_sp_1", "release savepoint thor_sp_1", "commit"]
+    )
+  }),
+  defineSqlFeatureSuite({
+    kind: "scenario",
+    id: "transaction.isolation",
+    level: 8,
+    requires: ["transaction.isolationLevel"],
+    execute: () => db.transaction(Effect.void, { isolationLevel: "serializable" }),
+    assertResult: undefined,
+    assertCalls: transactionCalls(
+      ["begin isolation level SERIALIZABLE", "commit"],
+      ["begin", "commit"],
+      ["set transaction isolation level SERIALIZABLE", "start transaction", "commit"]
+    )
+  }),
+  defineSqlFeatureSuite({
+    kind: "scenario",
+    id: "transaction.scope.restored",
+    level: 8,
+    requires: [],
+    execute: () => Effect.gen(function* () {
+      const inside = yield* db.transaction(Effect.map(Database, isInTransaction))
+      const outside = yield* Effect.map(Database, isInTransaction)
+      return { inside, outside }
+    }),
+    assertResult: { inside: true, outside: false },
+    assertCalls: transactionCalls(["begin", "commit"], ["begin immediate", "commit"], ["start transaction", "commit"])
+  }),
+  defineSqlFeatureSuite({
+    kind: "scenario",
+    id: "ddl.create.table-index-foreign-key",
+    level: 10,
+    requires: [],
+    execute: (dialect) => Effect.sync(() => {
+      const ddl = compileOperation(tableToCreateOp(ddlChild), dialect)
+      return {
+        createsTable: ddl.includes("feature_children"),
+        createsIndex: ddl.includes("feature_children_parent_idx"),
+        createsForeignKey: ddl.includes("foreign key") && ddl.includes("feature_parents")
+      }
+    }),
+    assertResult: { createsTable: true, createsIndex: true, createsForeignKey: true }
+  }),
+  defineSqlFeatureSuite({
+    kind: "scenario",
+    id: "ddl.alter.add-drop-column",
+    level: 10,
+    requires: [],
+    execute: (dialect) => Effect.sync(() => [
+      compileOperation(addColumnOperation, dialect),
+      compileOperation(dropColumnOperation, dialect)
+    ]),
+    assertResultByDialect: {
+      postgres: [
+        'alter table "feature_children" add column "label" text;',
+        'alter table "feature_children" drop column "label";'
+      ],
+      sqlite: [
+        'alter table "feature_children" add column "label" text;',
+        'alter table "feature_children" drop column "label";'
+      ],
+      mysql: [
+        "alter table `feature_children` add column `label` text;",
+        "alter table `feature_children` drop column `label`;"
+      ]
+    }
+  }),
+  defineSqlFeatureSuite({
+    kind: "scenario",
+    id: "ddl.destructive.blocking",
+    level: 10,
+    requires: [],
+    execute: () => Effect.sync(() => guardOperations([dropColumnOperation], "safe-only").map((error) => error.guard)),
+    assertResult: ["destructive-migration"]
+  }),
+  defineSqlFeatureSuite({
+    kind: "scenario",
+    id: "ddl.drift-detection",
+    level: 10,
+    requires: [],
+    execute: () => Effect.sync(() => detectDrift([ddlParent], { tables: [] }).changes.map((change) => change._tag)),
+    assertResult: ["MissingTable"]
+  }),
+  defineSqlFeatureSuite({
+    kind: "scenario",
+    id: "ddl.journal-checksum",
+    level: 10,
+    requires: [],
+    execute: () => Effect.sync(() => {
+      const migration = defineMigration({
+        id: "g6a-create-feature-table",
+        name: "create feature table",
+        up: sql`create table feature_table (id text primary key);`,
+        down: sql`drop table feature_table;`
+      })
+      const first = checksum(migration)
+      const second = checksum({ ...migration })
+      const changed = checksum({ ...migration, down: sql`drop table feature_table cascade;` })
+      return { deterministic: first === second, changesWithDefinition: first !== changed, format: /^[0-9a-f]{8}$/.test(first) }
+    }),
+    assertResult: { deterministic: true, changesWithDefinition: true, format: true }
+  })
 ]
 
 /** Levels 3–5, 7, 9: joins, subqueries, aggregation, CTEs, window functions, upserts. */

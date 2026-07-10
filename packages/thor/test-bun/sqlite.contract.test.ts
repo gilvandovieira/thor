@@ -10,8 +10,10 @@ import { Database } from "bun:sqlite"
 import { BunSQLiteDriverRuntime, BunSQLiteLayer, RuntimeSQLiteLayer, SQLiteDialect } from "@gilvandovieira/thor/sqlite"
 import {
   ADVANCED_SQL_FEATURES,
+  DATA_TYPE_FEATURES,
   LEVEL_1_2_FEATURES,
   ROUTINE_SQL_FEATURES,
+  TRANSACTION_DDL_FEATURES,
   SQLITE_CONTRACT_RESET,
   SQLITE_FEATURE_RESET,
   type ContractTestApi,
@@ -40,9 +42,17 @@ makeDialectContractSuite(api, {
 
 runSqlFeatureIntegration(api, {
   dialect: SQLiteDialect,
-  features: [...LEVEL_1_2_FEATURES, ...ADVANCED_SQL_FEATURES, ...ROUTINE_SQL_FEATURES],
+  features: [...LEVEL_1_2_FEATURES, ...DATA_TYPE_FEATURES, ...TRANSACTION_DDL_FEATURES, ...ADVANCED_SQL_FEATURES, ...ROUTINE_SQL_FEATURES],
   layer: BunSQLiteLayer(client),
   reset: SQLITE_FEATURE_RESET
+})
+
+runSqlFeatureIntegration(api, {
+  dialect: SQLiteDialect,
+  features: TRANSACTION_DDL_FEATURES.filter((feature) => feature.id === "transaction.isolation"),
+  layer: BunSQLiteLayer(client, { allowEmulation: true }),
+  reset: SQLITE_FEATURE_RESET,
+  allowEmulation: true
 })
 
 afterAll(() => client.close())
