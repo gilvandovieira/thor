@@ -16,15 +16,6 @@ Usage: thor <command> [args]
 Commands:
   init              Create config, migrations folder, and journal
   create <name>     Create an empty/manual migration
-  generate <name>   Diff current schema vs previous snapshot
-  check             Validate schema, migration order, destructive operations
-  status            Show applied/pending migrations
-  up                Apply pending migrations
-  down              Roll back the last migration
-  redo              Down then up the last migration
-  drift             Compare database state vs expected schema
-  snapshot          Write a schema snapshot without migrating
-  pull              Introspect a live DB into schema/snapshot
 `
 
 /**
@@ -46,26 +37,8 @@ const main = (): void => {
       return commands.init(cwd)
     case "create":
       return commands.create(cwd, rest[0] ?? "")
-    case "status":
-      return commands.status(cwd)
-    case "check":
-      return commands.check(cwd)
-    case "generate":
-      return commands.generate()
-    case "up":
-      return commands.up()
-    case "down":
-      return commands.down()
-    case "redo":
-      return commands.redo()
-    case "drift":
-      return commands.drift()
-    case "snapshot":
-      return commands.snapshot()
-    case "pull":
-      return commands.pull()
     default:
-      process.stderr.write(`Unknown command: ${command}\n\n${HELP}`)
+      process.stderr.write(`Unsupported command: ${command}. This release only ships "init" and "create".\n\n${HELP}`)
       process.exitCode = 1
   }
 }
