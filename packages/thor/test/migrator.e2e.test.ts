@@ -48,6 +48,7 @@ const m2 = defineMigration({
 const m3 = defineMigration({
   id: "0003_backfill_names",
   name: "backfill_names",
+  revision: "1",
   up: rawSql`update users set name = email where name is null`,
   down: rawSql`select 1`
 })

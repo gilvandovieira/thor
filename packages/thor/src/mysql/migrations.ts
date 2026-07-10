@@ -187,7 +187,12 @@ export const MySQLMigrations: MigrationDialect = {
    * @param key - Stable numeric migration-lock key.
    * @returns Named-lock release statement.
    */
-  releaseLock: (key) => ({ sql: "select release_lock(?)", params: [lockName(key)] }),
+  releaseLock: (key) => ({
+    sql: "select release_lock(?) as released",
+    params: [lockName(key)],
+    resultCheck: (rows) => Number(rows[0]?.released) === 1,
+    failureMessage: "MySQL migration named lock was lost before release"
+  }),
   transactionalDdl: false,
   beginTransaction: "start transaction",
   commitTransaction: "commit",

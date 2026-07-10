@@ -21,19 +21,28 @@ export interface SqlStatement {
  */
 export type MigrationStep = SqlStatement | Effect.Effect<void, MigrationError, Database>
 
-/** User-authored, ordered migration definition. */
-export interface MigrationDefinition {
+interface MigrationDefinitionBase {
   /** Stable, sortable migration identifier. */
   readonly id: string
   /** Human-readable migration name. */
   readonly name: string
-  /** Forward migration step. */
-  readonly up: MigrationStep
-  /** Omit or mark irreversible to signal `down` is unavailable. */
-  readonly down?: MigrationStep
   /** Explicitly marks the migration as impossible to roll back. */
   readonly irreversible?: boolean
 }
+
+/** User-authored migration; Effect steps require an explicit revision fingerprint. */
+export type MigrationDefinition =
+  | (MigrationDefinitionBase & {
+      readonly up: SqlStatement
+      readonly down?: SqlStatement
+      readonly revision?: string
+    })
+  | (MigrationDefinitionBase & {
+      readonly up: MigrationStep
+      readonly down?: MigrationStep
+      /** Changed whenever an Effect/backfill implementation changes. */
+      readonly revision: string
+    })
 
 /**
  * @param definition - Complete migration definition.
@@ -112,7 +121,10 @@ export const hashText = (material: string): string => {
  */
 export const checksum = (definition: MigrationDefinition): string =>
   hashText(
-    (isSqlStatement(definition.up) ? definition.up.sql : `effect:${definition.id}:up`) +
+    (isSqlStatement(definition.up) ? definition.up.sql : `effect:${definition.revision}:up`) +
       "|" +
-      (definition.down && isSqlStatement(definition.down) ? definition.down.sql : `effect:${definition.id}:down`)
+      (definition.down && isSqlStatement(definition.down)
+        ? definition.down.sql
+        : definition.down ? `effect:${definition.revision}:down` : "none") +
+      `|revision:${definition.revision ?? "sql"}`
   )

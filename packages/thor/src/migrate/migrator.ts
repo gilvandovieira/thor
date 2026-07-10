@@ -14,11 +14,12 @@
  *
  * @module migrate/migrator
  */
-import { Context, Effect, Exit, Layer } from "effect"
+import { Cause, Context, Effect, Exit, Layer } from "effect"
 import type { DialectStatement } from "../dialect.js"
 import { type AnyTable, tableMeta } from "../schema/table.js"
 import { Database, type DatabaseService } from "../execution/database.js"
-import { IrreversibleMigrationError, MigrationError } from "../errors/index.js"
+import { runTransaction } from "../execution/transaction.js"
+import { IrreversibleMigrationError, MigrationError, TransactionError } from "../errors/index.js"
 import type { MigrationOperation, MigrationPlan } from "./migration-ir.js"
 import {
   type MigrationDefinition,
@@ -104,6 +105,7 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
     const dialect = db.dialect.migrations
     const JOURNAL = config.journalTable ?? "_thor_migrations"
     const LOCK_KEY = parseInt(hashText(`thor:${JOURNAL}`), 16)
+    const hasAdvisoryLock = dialect.acquireLock(LOCK_KEY) !== undefined
     const migrations = () => [...(config.migrations ?? [])].sort((a, b) => a.id.localeCompare(b.id))
 
     const toErr = (msg: string) => (cause: { readonly message?: string }) =>
@@ -155,91 +157,156 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
     const runStep = (step: MigrationStep): Effect.Effect<void, MigrationError> =>
       isSqlStatement(step) ? execScript(step.sql).pipe(Effect.asVoid) : Effect.provideService(step, Database, db)
 
+    const replay = <A, E>(exit: Exit.Exit<A, E>): Effect.Effect<A, E> =>
+      Exit.isSuccess(exit) ? Effect.succeed(exit.value) : Effect.failCause(exit.cause)
+
     /** Run `body` holding the advisory lock, releasing it no matter what. */
     const withLock = <A, E>(body: Effect.Effect<A, E>): Effect.Effect<A, E | MigrationError> => {
       const acquire = dialect.acquireLock(LOCK_KEY)
       const release = dialect.releaseLock(LOCK_KEY)
       if (!acquire) return body
-      return Effect.acquireUseRelease(
-        runDialectStatement(acquire),
-        () => body,
-        () => (release ? runDialectStatement(release).pipe(Effect.ignore) : Effect.void)
-      )
+      return Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
+        yield* runDialectStatement(acquire)
+        const bodyExit = yield* Effect.exit(restore(body))
+        const releaseExit = yield* Effect.exit(release ? runDialectStatement(release) : Effect.void)
+        if (Exit.isFailure(releaseExit)) {
+          return yield* Exit.isFailure(bodyExit)
+            ? Effect.failCause(Cause.sequential(bodyExit.cause, releaseExit.cause))
+            : Effect.failCause(releaseExit.cause)
+        }
+        return yield* replay(bodyExit)
+      }))
     }
 
     /** Run `body` inside a transaction, committing on success and rolling back on any exit failure. */
-    const withTx = <A, E>(body: Effect.Effect<A, E>): Effect.Effect<A, E | MigrationError> => {
-      const { beginTransaction, commitTransaction, rollbackTransaction } = dialect
-      if (!beginTransaction || !commitTransaction || !rollbackTransaction) return body
-      return Effect.acquireUseRelease(
-        exec(beginTransaction),
-        () => body,
-        (_, exit) => exec(Exit.isSuccess(exit) ? commitTransaction : rollbackTransaction).pipe(Effect.ignore)
-      )
-    }
+    const withTx = <A, E>(body: Effect.Effect<A, E>): Effect.Effect<A, E | MigrationError> =>
+      runTransaction(db, body).pipe(Effect.mapErrorCause((cause) => Cause.map(cause, (error) =>
+        error instanceof TransactionError
+          ? new MigrationError({ message: error.message, cause: error })
+          : error)))
+
+    const validateDefinitions = (defs: ReadonlyArray<MigrationDefinition>): Effect.Effect<void, MigrationError> =>
+      Effect.gen(function* () {
+        const seen = new Set<string>()
+        for (const migration of defs) {
+          if (seen.has(migration.id)) {
+            return yield* Effect.fail(new MigrationError({ message: `duplicate migration id: ${migration.id}` }))
+          }
+          seen.add(migration.id)
+        }
+      })
+
+    const validateApplied = (
+      defs: ReadonlyArray<MigrationDefinition>,
+      applied: ReadonlyArray<JournalEntry>
+    ): Effect.Effect<void, MigrationError> => Effect.gen(function* () {
+      const byId = new Map(defs.map((migration) => [migration.id, migration]))
+      for (let index = 0; index < applied.length; index++) {
+        const entry = applied[index]!
+        const def = byId.get(entry.id)
+        if (!def) {
+          return yield* Effect.fail(new MigrationError({
+            message: `unknown applied migration "${entry.id}" has no current definition`,
+            migrationId: entry.id
+          }))
+        }
+        const expected = defs[index]
+        if (!expected || expected.id !== entry.id) {
+          return yield* Effect.fail(new MigrationError({
+            message: `migration journal is out of order at "${entry.id}"; expected "${expected?.id ?? "end of journal"}"`,
+            migrationId: entry.id
+          }))
+        }
+        const expectedChecksum = checksum(def)
+        if (expectedChecksum !== entry.checksum) {
+          return yield* Effect.fail(new MigrationError({
+            message: `checksum mismatch for "${entry.id}": journal ${entry.checksum} ≠ code ${expectedChecksum}`,
+            migrationId: entry.id
+          }))
+        }
+      }
+    })
 
     const status: MigratorService["status"] = () => Effect.zipRight(ensureJournal, readApplied)
 
-    const check: MigratorService["check"] = () =>
-      Effect.gen(function* () {
-        const defs = migrations()
-        const seen = new Set<string>()
-        for (const m of defs) {
-          if (seen.has(m.id)) return yield* Effect.fail(new MigrationError({ message: `duplicate migration id: ${m.id}` }))
-          seen.add(m.id)
-        }
+    const check: MigratorService["check"] = () => {
+      const defs = migrations()
+      return withLock(Effect.gen(function* () {
+        yield* validateDefinitions(defs)
         yield* ensureJournal
         const applied = yield* readApplied
-        const byId = new Map(defs.map((m) => [m.id, m]))
-        for (const entry of applied) {
-          const def = byId.get(entry.id)
-          if (def && checksum(def) !== entry.checksum) {
-            return yield* Effect.fail(
-              new MigrationError({
-                message: `checksum mismatch for "${entry.id}": journal ${entry.checksum} ≠ code ${checksum(def)}`,
-                migrationId: entry.id
-              })
-            )
-          }
-        }
-      })
+        yield* validateApplied(defs, applied)
+      }))
+    }
 
-    const up: MigratorService["up"] = () =>
-      Effect.gen(function* () {
-        yield* ensureJournal
-        const applied = new Set((yield* readApplied).map((e) => e.id))
-        const pending = migrations().filter((m) => !applied.has(m.id))
-        if (pending.length === 0) return []
+    const up: MigratorService["up"] = () => {
+      const defs = migrations()
+      const applyOne = (migration: MigrationDefinition): Effect.Effect<JournalEntry, MigrationError> =>
+        Effect.gen(function* () {
+          const start = Date.now()
+          yield* runStep(migration.up)
+          const entry: JournalEntry = {
+            id: migration.id,
+            name: migration.name,
+            checksum: checksum(migration),
+            appliedAt: new Date(),
+            executionTimeMs: Math.max(0, Math.round(Date.now() - start))
+          }
+          yield* insertJournal(entry)
+          return entry
+        })
+
+      if (hasAdvisoryLock) {
+        return withLock(Effect.gen(function* () {
+          yield* validateDefinitions(defs)
+          yield* ensureJournal
+          const appliedEntries = yield* readApplied
+          yield* validateApplied(defs, appliedEntries)
+          const applied = new Set(appliedEntries.map((entry) => entry.id))
+          const pending = defs.filter((migration) => !applied.has(migration.id))
+          const entries: JournalEntry[] = []
+          for (const migration of pending) {
+            entries.push(yield* (dialect.transactionalDdl ? withTx(applyOne(migration)) : applyOne(migration)))
+          }
+          return entries
+        }))
+      }
+
+      if (!dialect.transactionalDdl) {
+        return Effect.fail(new MigrationError({ message: "Dialect has neither a migration lock nor transactional DDL" }))
+      }
+
+      // SQLite's BEGIN IMMEDIATE is the lock: plan and apply exactly one step
+      // inside each transaction, then repeat and re-read before the next step.
+      return Effect.gen(function* () {
+        yield* validateDefinitions(defs)
         const entries: JournalEntry[] = []
-        yield* withLock(
-          withTx(
-            Effect.gen(function* () {
-              for (const m of pending) {
-                const start = Date.now()
-                yield* runStep(m.up)
-                const entry: JournalEntry = {
-                  id: m.id,
-                  name: m.name,
-                  checksum: checksum(m),
-                  appliedAt: new Date(),
-                  executionTimeMs: Math.max(0, Math.round(Date.now() - start))
-                }
-                yield* insertJournal(entry)
-                entries.push(entry)
-              }
-            })
-          )
-        )
+        while (true) {
+          const entry = yield* withTx(Effect.gen(function* () {
+            yield* ensureJournal
+            const appliedEntries = yield* readApplied
+            yield* validateApplied(defs, appliedEntries)
+            const applied = new Set(appliedEntries.map((item) => item.id))
+            const next = defs.find((migration) => !applied.has(migration.id))
+            return next ? yield* applyOne(next) : null
+          }))
+          if (!entry) break
+          entries.push(entry)
+        }
         return entries
       })
+    }
 
-    const down: MigratorService["down"] = () =>
-      Effect.gen(function* () {
+    const down: MigratorService["down"] = () => {
+      const downBody = (transactionalStep: boolean) => Effect.gen(function* () {
         yield* ensureJournal
         const applied = yield* readApplied
+        const defs = migrations()
+        yield* validateDefinitions(defs)
+        yield* validateApplied(defs, applied)
         const last = applied[applied.length - 1]
         if (!last) return
-        const def = migrations().find((m) => m.id === last.id)
+        const def = defs.find((m) => m.id === last.id)
         if (!def) {
           return yield* Effect.fail(
             new MigrationError({ message: `no migration definition for applied id "${last.id}"`, migrationId: last.id })
@@ -251,19 +318,22 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
           )
         }
         const downStep = def.down
-        yield* withLock(
-          withTx(
-            Effect.gen(function* () {
+        const rollbackOne = Effect.gen(function* () {
               yield* runStep(downStep)
               yield* deleteJournal(def.id)
-            })
-          )
-        )
+        })
+        yield* (transactionalStep ? withTx(rollbackOne) : rollbackOne)
       })
+      if (hasAdvisoryLock) return withLock(downBody(dialect.transactionalDdl))
+      return dialect.transactionalDdl ? withTx(downBody(false)) : downBody(false)
+    }
 
     const generate: MigratorService["generate"] = (name, previousTables) =>
       Effect.gen(function* () {
-        const operations = diffSchema(config.schema ?? [], previousTables ?? [])
+        const operations = yield* Effect.try({
+          try: () => diffSchema(config.schema ?? [], previousTables ?? []),
+          catch: (cause) => new MigrationError({ message: `schema cannot be represented as migration DDL: ${String(cause)}`, cause })
+        })
         const violations = guardOperations(operations, config.policy ?? "safe-only")
         if (violations.length > 0) {
           return yield* Effect.fail(new MigrationError({ message: violations[0]!.message }))
@@ -271,11 +341,27 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
         return { id: `${timestamp()}_${name}`, name, operations } satisfies MigrationPlan
       })
 
-    const apply: MigratorService["apply"] = (plan) =>
-      Effect.gen(function* () {
+    const apply: MigratorService["apply"] = (plan) => {
+      const applyLocked = (transactionalStep: boolean) => Effect.gen(function* () {
         yield* ensureJournal
-        const ddl = compilePlan(plan, db.dialect)
-        const statements = plan.operations.map(dialect.compileOperation)
+        const applied = yield* readApplied
+        if (applied.some((entry) => entry.id === plan.id)) {
+          return yield* Effect.fail(new MigrationError({
+            message: `migration plan "${plan.id}" is already applied`,
+            migrationId: plan.id
+          }))
+        }
+        const { ddl, statements } = yield* Effect.try({
+          try: () => ({
+            ddl: compilePlan(plan, db.dialect),
+            statements: plan.operations.map(dialect.compileOperation)
+          }),
+          catch: (cause) => new MigrationError({
+            message: `migration plan "${plan.id}" contains unsupported DDL: ${String(cause)}`,
+            migrationId: plan.id,
+            cause
+          })
+        })
         const start = Date.now()
         const entry: JournalEntry = {
           id: plan.id,
@@ -290,15 +376,21 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
           }
           yield* insertJournal({ ...entry, executionTimeMs: Math.max(0, Math.round(Date.now() - start)) })
         })
-        yield* withLock(dialect.transactionalDdl ? withTx(applyBody) : applyBody)
+        yield* (transactionalStep ? withTx(applyBody) : applyBody)
         return { ...entry, executionTimeMs: Math.max(0, Math.round(Date.now() - start)) }
       })
+      if (hasAdvisoryLock) return withLock(applyLocked(dialect.transactionalDdl))
+      return dialect.transactionalDdl ? withTx(applyLocked(false)) : applyLocked(false)
+    }
 
     const drift: MigratorService["drift"] = () =>
       Effect.gen(function* () {
         const rows = yield* queryRows(dialect.listTables)
         const existing = new Set(rows.map((r) => String(r.table_name)))
-        return (config.schema ?? []).filter((t) => !existing.has(tableMeta(t).name)).map(tableToCreateOp)
+        return yield* Effect.try({
+          try: () => (config.schema ?? []).filter((t) => !existing.has(tableMeta(t).name)).map(tableToCreateOp),
+          catch: (cause) => new MigrationError({ message: `schema cannot be represented as migration DDL: ${String(cause)}`, cause })
+        })
       })
 
     return { status, check, up, down, generate, apply, drift }

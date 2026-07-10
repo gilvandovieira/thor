@@ -133,7 +133,12 @@ export const PostgresMigrations: MigrationDialect = {
    * @param key - Stable numeric migration-lock key.
    * @returns Advisory-lock release statement.
    */
-  releaseLock: (key) => ({ sql: "select pg_advisory_unlock($1)", params: [key] }),
+  releaseLock: (key) => ({
+    sql: "select pg_advisory_unlock($1) as released",
+    params: [key],
+    resultCheck: (rows) => rows[0]?.released === true,
+    failureMessage: "PostgreSQL migration advisory lock was lost before release"
+  }),
   transactionalDdl: true,
   beginTransaction: "begin",
   commitTransaction: "commit",
