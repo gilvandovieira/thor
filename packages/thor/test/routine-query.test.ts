@@ -127,3 +127,56 @@ describe("Level 9 routine query integration", () => {
     }
   })
 })
+
+describe("Epic R2 — declared functions as window functions (§14.2)", () => {
+  it("applies a declared aggregate over a window, capability-gated", () => {
+    const total = defineAggregateFunction("total_score", { args: [integerArg], returns: integerArg })
+    const query = db
+      .select({ id: users.id, running: total(users.score).over({ partitionBy: [users.id] }) })
+      .from(users)
+
+    expect(query.toSql(PostgresDialect).sql.toLowerCase()).toContain('over (partition by "users"."id")')
+    // Windowing adds select.windowFunctions on top of the routine capability.
+    expect(query.requiredCapabilities()).toEqual(
+      expect.arrayContaining(["routine.functionCall", "select.windowFunctions"])
+    )
+  })
+
+  it("a windowed aggregate does not trigger the aggregation-scope guard", async () => {
+    const total = defineAggregateFunction("total_score", { args: [integerArg], returns: integerArg })
+    const driver = new FakeDriver().enqueue({ rows: [{ id: "u1", running: 3 }] })
+    const rows = await Effect.runPromise(
+      Effect.provide(
+        db.select({ id: users.id, running: total(users.score).over() }).from(users).all(),
+        FakeDatabaseLayer(driver, { dialect: PostgresDialect })
+      )
+    )
+    expect(rows).toEqual([{ id: "u1", running: 3 }])
+  })
+})
+
+describe("Epic R3 — procedure transaction metadata (§14.5, §14.6)", () => {
+  const migrate = defineProcedure("do_migrate", {
+    args: {},
+    effects: { mutates: ["ledger"], idempotency: "non-idempotent", requiresTransaction: true }
+  })
+
+  it("fails before the driver when a required transaction is absent", async () => {
+    const driver = new FakeDriver().enqueue({ rowCount: 1 })
+    const error = await Effect.runPromise(
+      Effect.flip(Effect.provide(migrate.call({}).run(), FakeDatabaseLayer(driver, { dialect: PostgresDialect })))
+    )
+    expect(error).toBeInstanceOf(GuardError)
+    expect((error as GuardError).guard).toBe("procedure-requires-transaction")
+    expect(driver.calls).toEqual([])
+  })
+
+  it("runs when called inside db.transaction", async () => {
+    const driver = new FakeDriver().enqueue({ rowCount: 0 }, { rowCount: 1 }, { rowCount: 0 })
+    const result = await Effect.runPromise(
+      Effect.provide(db.transaction(migrate.call({}).run()), FakeDatabaseLayer(driver, { dialect: PostgresDialect }))
+    )
+    expect(result).toEqual({ rowCount: 1 })
+    expect(driver.calls.some((call) => call.sql.includes("CALL"))).toBe(true)
+  })
+})

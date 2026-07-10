@@ -41,14 +41,16 @@ export interface WindowableExpr<A> extends Expr<A> {
 }
 
 /**
- * Wraps a function node with an `.over()` constructor.
+ * Wraps a function node with an `.over()` constructor, making it usable as a
+ * window function. Exported so declared routine functions (Epic R2) share the
+ * same windowing path as built-in aggregates.
  *
  * @typeParam A - Decoded expression type.
  * @param node - Function call representation.
  * @param codec - Selected-value decoder.
  * @returns Typed function expression with window support.
  */
-const windowable = <A>(node: FunctionCallNode, codec: Schema.Schema<A, any>): WindowableExpr<A> => ({
+export const windowable = <A>(node: FunctionCallNode, codec: Schema.Schema<A, any>): WindowableExpr<A> => ({
   node,
   codec,
   over: (spec = {}) => ({

@@ -349,7 +349,7 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | O | Migration hardening v1 (dry-run, expand/contract, policies) | §15 | alpha.4 | migrator (§13 v0) | ✅ O1–O6 |
 | P | Introspection & drift detection | §16 | alpha.4 | migrator✅, **M✅** | 🟡 P1/P2/P3 ✅ · P4/P5 ❌ (⟵ T) |
 | Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J✅**, FK (Q1) | 🟡 Q1 ✅ |
-| R | Routines v1 (functions/procedures, typed + guarded) | §14 | beta | routine v0✅, J✅; **R6 ⟵ O6✅** | 🟡 (R6 done; R2/R3 left) |
+| R | Routines v1 (functions/procedures, typed + guarded) | §14 | beta | routine v0✅, J✅ | ✅ R1–R6 (OUT-params follow-up) |
 | S | Observability (metadata, spans, param-redaction) | §17 | beta | annotations (§7.4 v0) | ✅ S1–S5 |
 | T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI v0; ⟵ P, U, W1 (T3 ⟵ M5✅) | ❌ |
 | U | LLM skills (11 skill files + manifest + export) | §21 | beta | — (U4 ⟵ T) | ❌ (unblocked) |
@@ -540,15 +540,15 @@ verified. ✅
 > wiring already landed in v0 (Level 9 matrix, G6b). Implemented and tested in
 > `routine-query.test.ts`: scalar calls in expressions (R1), table-valued functions
 > in `from` (R4), procedure `.run()` execution (R3 core), and capability + return-decode
-> safety (R5). **R6 (routine DDL in migrations) landed with O6.** Remaining v1 work:
-> advanced named/out arguments and full procedure effect/idempotency/tx-metadata
-> honoring (R3), and confirming aggregate/window nodes against J (R2).
+> safety (R5). **R6 landed with O6; R2 (windowable declared functions) and R3
+> (procedure `requiresTransaction` honoring) are done.** Follow-up only: OUT
+> parameters and idempotency-driven retry.
 
 | # | Task | Spec | Acceptance |
 |---|---|---|---|
 | R1 | Scalar function calls usable in expressions | §14.1, §12.1(v0) | `pg.fn.lower(col)` / user `defineFunction` in select/where; lowers to `FunctionCall` IR |
-| R2 | Aggregate + window function nodes (⟵ J aggregation) | §14.2 | group/window guards; capability-gated |
-| R3 | Procedure execution through Effect | §14.5 | `db.procedure(p).call(args)` → typed Effect; effects/idempotency/tx metadata honored |
+| R2 | ✅ Aggregate + window function nodes (⟵ J aggregation) | §14.2 | declared aggregates already hit the aggregation-scope guard; declared functions are now **windowable** (`fn(col).over({ partitionBy, orderBy })` via the shared `windowable` path), adding `select.windowFunctions` and staying capability-gated |
+| R3 | ✅ Procedure execution through Effect | §14.5 | `procedure.call(args).run()` → typed Effect; **`requiresTransaction` honored** — a procedure needing a transaction fails with a `GuardError` before the driver unless run inside `db.transaction` (transaction detected via `isInTransaction`). Follow-up: OUT parameters and idempotency-driven retry |
 | R4 | Table-valued functions in `from` | §14.2 | `defineTableFunction` usable as a source |
 | R5 | Routine safety + capability gating | §14.6 | names never interpolated; required extensions/capabilities enforced |
 | R6 | ✅ Routine DDL in migrations (create/drop function/procedure) | §15.1 | **done via O6** — `CreateRoutine`/`DropRoutine` IR ops compile to PostgreSQL/MySQL function/procedure DDL, rejected before the driver on SQLite, phase-classified |

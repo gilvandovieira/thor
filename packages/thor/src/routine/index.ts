@@ -19,12 +19,14 @@ import type { Dialect } from "../dialect.js"
 import { Database } from "../execution/database.js"
 import type { CommandResult, CompiledStatement } from "../execution/driver.js"
 import { executeCommand, type QueryArgs } from "../execution/run.js"
-import type { QueryError } from "../errors/index.js"
+import { isInTransaction } from "../execution/transaction.js"
+import { GuardError, type QueryError } from "../errors/index.js"
 import { internIdentifier } from "../ir/identifiers.js"
 import { nextId, queryCapabilityBits, type CallIR, type SelectionField } from "../ir/query-ir.js"
 import { PostgresDialect } from "../postgres/dialect.js"
 import type { SqlDataType } from "../schema/column.js"
-import { type Expr, toValueNode } from "../sql/expressions.js"
+import { windowable, type WindowableExpr } from "../sql/advanced-expressions.js"
+import { toValueNode } from "../sql/expressions.js"
 import { QueryReference } from "../sql/query-builder.js"
 
 /** Volatility class (spec §12.2). Affects optimization and retry behavior. */
@@ -63,9 +65,9 @@ export interface FunctionDescriptor extends RoutineMetadata {
 export interface FunctionRoutine<A = unknown> extends FunctionDescriptor {
   /**
    * @param args - Column, expression, parameter, or inline function arguments.
-   * @returns A typed routine-call expression.
+   * @returns A typed routine-call expression, applicable over a window with `.over()`.
    */
-  (...args: ReadonlyArray<unknown>): Expr<A>
+  (...args: ReadonlyArray<unknown>): WindowableExpr<A>
 }
 
 /** Stored-procedure descriptor. */
@@ -161,20 +163,17 @@ const makeFunction = <A>(
   const name = parseName(qualifiedName)
   const volatility = spec.volatility ?? "volatile"
   const capabilities = routineCapabilities("routine.functionCall", spec.capabilities)
-  const call = ((...args: ReadonlyArray<unknown>): Expr<A> => ({
-    node: {
-      _tag: "FunctionCall",
-      ...(name.schema ? { schema: name.schema } : {}),
-      name: name.name,
-      args: args.map((arg) => toValueNode(arg)),
-      aggregate,
-      star: false,
-      declared: true,
-      volatility,
-      capabilities
-    },
-    codec: spec.returns.codec
-  })) as FunctionRoutine<A>
+  const call = ((...args: ReadonlyArray<unknown>): WindowableExpr<A> => windowable<A>({
+    _tag: "FunctionCall",
+    ...(name.schema ? { schema: name.schema } : {}),
+    name: name.name,
+    args: args.map((arg) => toValueNode(arg)),
+    aggregate,
+    star: false,
+    declared: true,
+    volatility,
+    capabilities
+  }, spec.returns.codec)) as FunctionRoutine<A>
   Object.assign(call, {
     kind: "function" as const,
     aggregate,
@@ -254,11 +253,24 @@ export class ProcedureCall {
   }
 
   /**
+   * Execute the procedure, honoring its declared transaction requirement: a
+   * procedure marked `requiresTransaction` fails before the driver when it is not
+   * running inside a `db.transaction` scope (spec §14.5, §14.6).
+   *
    * @param args - Values for named `param()` nodes embedded in call arguments.
    * @returns An Effect yielding the affected-row count.
+   * @throws {GuardError} Through the Effect error channel when a required transaction is absent.
    */
   run(args: QueryArgs = {}): Effect.Effect<CommandResult, QueryError, Database> {
-    return Effect.flatMap(Database, (database) => executeCommand(this.ir, database, args))
+    return Effect.flatMap(Database, (database) => {
+      if (this.ir.annotations.requiresTransaction && !isInTransaction(database)) {
+        return Effect.fail(new GuardError({
+          guard: "procedure-requires-transaction",
+          message: `Procedure "${this.ir.schema ? `${this.ir.schema}.` : ""}${this.ir.procedure}" must be called inside a transaction (db.transaction)`
+        }))
+      }
+      return executeCommand(this.ir, database, args)
+    })
   }
 }
 
@@ -301,7 +313,8 @@ export const defineProcedure = (
       cardinality: "zero",
       annotations: {
         tableNames: [...spec.effects.mutates],
-        idempotency: spec.effects.idempotency
+        idempotency: spec.effects.idempotency,
+        requiresTransaction: spec.effects.requiresTransaction
       }
     })
   })

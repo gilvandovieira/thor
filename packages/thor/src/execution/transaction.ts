@@ -44,6 +44,16 @@ type TransactionDatabaseService = DatabaseService & {
   readonly transactionState?: TransactionState
 }
 
+/**
+ * Whether the active service is executing inside a transaction (outer or nested
+ * savepoint). Used to honor a procedure's `requiresTransaction` metadata (§14.5).
+ *
+ * @param database - Active database service.
+ * @returns `true` when a transaction scope is present.
+ */
+export const isInTransaction = (database: DatabaseService): boolean =>
+  (database as TransactionDatabaseService).transactionState !== undefined
+
 /** @param phase - Lifecycle phase. @returns A native-error mapper for that phase. */
 const transactionError =
   (phase: string) =>

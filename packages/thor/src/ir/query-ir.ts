@@ -20,6 +20,8 @@ export interface QueryAnnotations {
   readonly tableNames: ReadonlyArray<string>
   readonly estimatedCardinality?: Cardinality
   readonly idempotency?: "idempotent" | "non-idempotent" | "unknown"
+  /** Whether a procedure call must run inside a transaction (spec §14.5). */
+  readonly requiresTransaction?: boolean
   readonly cacheKey?: string
   readonly tracing?: {
     readonly spanName: string
