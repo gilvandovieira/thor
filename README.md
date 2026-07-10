@@ -28,6 +28,9 @@ Your tables  →  a query you build  →  checked against the database's abiliti
 pnpm add @gilvandovieira/thor effect
 ```
 
+Thor supports maintained Node.js releases starting at Node 22. The SQLite
+adapter also has a Bun contract-test lane.
+
 Everything ships from one package. The common things (`db`, `pg`, `eq`, `param`,
 …) come from the top level; deeper surfaces live under subpaths like
 `@gilvandovieira/thor/postgres`, `/sqlite`, `/mysql`, `/migrate`, and `/testing`.
@@ -92,13 +95,21 @@ typed result; `.all()` returns every match; `.run()` is for writes.
 ```ts
 import { Effect } from "effect"
 import { Client } from "pg"
-import { PostgresLayer } from "@gilvandovieira/thor/postgres"
+import { PostgresScopedLayer } from "@gilvandovieira/thor/postgres"
 
 const program = postsByAuthor.all({ authorId: "ada-id" })
 //    Effect<ReadonlyArray<{ id: string; title: string }>, DbError, Database>
 
-const client = new Client({ connectionString: process.env.DATABASE_URL })
-Effect.runPromise(program.pipe(Effect.provide(PostgresLayer(client))))
+const DatabaseLive = PostgresScopedLayer({
+  acquire: async () => {
+    const client = new Client({ connectionString: process.env.DATABASE_URL })
+    await client.connect()
+    return client
+  },
+  release: (client) => (client as Client).end()
+})
+
+Effect.runPromise(program.pipe(Effect.provide(DatabaseLive)))
 ```
 
 ### 4. Ask a real question — a join and a count
@@ -115,7 +126,7 @@ const leaderboard = db
   .innerJoin(authors, eq(posts.authorId, authors.id))
   .groupBy(authors.name)
 
-await Effect.runPromise(leaderboard.all().pipe(Effect.provide(PostgresLayer(client))))
+await Effect.runPromise(leaderboard.all().pipe(Effect.provide(DatabaseLive)))
 // → [{ author: "Ada", posts: 12 }, { author: "Grace", posts: 7 }, …]
 ```
 
@@ -124,6 +135,18 @@ subqueries (correlated too), `count`/`sum`/`avg`/`min`/`max`, `groupBy` +
 `having`, window functions, CTEs (including recursive), set operations
 (`union`/`intersect`/`except`), and upserts. See
 [`docs/advanced-queries.md`](docs/advanced-queries.md) for the full menu.
+
+Related writes can share one affinity-safe transaction. Nested transactions use
+savepoints; retries happen only when you provide an explicit retry policy.
+
+```ts
+const publish = db.transaction(Effect.gen(function* () {
+  yield* db.insert(posts).values({ authorId: "ada-id", title: "Thor" }).run()
+  yield* db.update(authors).set({ name: "Ada Lovelace" }).where(eq(authors.id, "ada-id")).run()
+}))
+
+await Effect.runPromise(publish.pipe(Effect.provide(DatabaseLive)))
+```
 
 ## Same query, other databases
 
@@ -183,9 +206,11 @@ so all three databases behave consistently.
 
 ## Migrations
 
-Thor has a live migrator and a `thor` CLI. Migrations are transactional and
-journaled with checksums; Thor picks the right locking strategy per database
-(advisory lock on Postgres, `begin immediate` on SQLite, a named lock on MySQL).
+Thor has a live programmatic migrator and a deliberately narrow `thor` CLI.
+Migrations are journaled with checksums and applied one at a time under the
+database's locking strategy. PostgreSQL and SQLite DDL migrations use
+per-migration transactions; MySQL DDL is non-transactional and a failure can
+leave already-executed DDL in place even though the failed step is not journaled.
 
 ```ts
 import { Migrator, MigratorLive, defineMigration, sql } from "@gilvandovieira/thor/migrate"
@@ -201,20 +226,22 @@ const migrations = [
 
 const program = Effect.gen(function* () {
   const m = yield* Migrator
-  yield* m.up()      // apply everything pending, transactionally
+  yield* m.up()      // apply each pending migration under the dialect policy
   yield* m.check()   // verify order + checksums
   yield* m.drift()   // what would it take to match your schema to the DB?
 })
 ```
 
+Migration templates and query `sql` expressions reject ordinary dynamic
+interpolation. Bind query values with `param(...)`; if application-controlled
+dynamic SQL text is genuinely required, mark that trust boundary visibly with
+`unsafeSql(...)` and never pass request data to it.
+
 ```sh
 thor init          # scaffold config + migrations/ + journal
 thor create <name> # new migration file
-thor status        # applied vs pending
-thor check         # validate order + flag destructive ops
-# up · down · generate · drift · snapshot · pull  — stubs today;
-#   live-DB wiring to the migrator is tracked as Epic T. The live migrator
-#   itself already works programmatically (see above).
+# Other commands are not published yet and exit non-zero.
+# Use the programmatic Migrator service for status/check/up/down/generate/drift.
 ```
 
 ## Where things stand
@@ -233,9 +260,20 @@ typed builder → runtime IR → capability check → compile → execute → de
 | Prepared handles & performance modes | ✅ Done |
 | Benchmarks + CI regression gate | ✅ Done |
 | Testing helpers & cross-dialect contract suite | ✅ Done |
-| Migrations (live migrator + CLI) | 🟡 Live migrator fully works programmatically; the DB-connected CLI commands (`up`/`down`/`generate`/`drift`/`pull`) are still stubs (Epic T) |
+| Migrations (live migrator + CLI) | 🟡 Live migrator works programmatically; the DB-connected CLI commands (`up`/`down`/`generate`/`drift`/`pull`) are not shipped yet (Epic T) |
 | SQL feature-matrix tests | 🟡 Levels 1–5, 7, and 9 covered; Levels 6, 8, and 10 remain |
 | Stored routines (functions/procedures) | 🟡 Scalar/aggregate expressions, table-function sources, procedure commands, capability guards, and return decoding done; advanced named/out arguments and routine DDL remain |
+
+The compact dialect summary below is generated from the executable capability
+matrices (36 declared capabilities), rather than maintained by hand.
+
+<!-- capabilities:generated:start -->
+| Dialect | Native | Emulated | Unsupported | Unknown |
+|---|---:|---:|---:|---:|
+| PostgreSQL | 34 | 1 | 1 | 0 |
+| SQLite | 15 | 5 | 15 | 1 |
+| MySQL 8 | 20 | 1 | 14 | 1 |
+<!-- capabilities:generated:end -->
 
 Task-level detail lives in [`docs/roadmap.md`](docs/roadmap.md); the design of
 record is [`docs/thor-project-v1-spec.md`](docs/thor-project-v1-spec.md).
@@ -248,6 +286,8 @@ pnpm build        # tsc -b across packages (project references)
 pnpm test         # vitest — but build first (tests import the built package, not src)
 pnpm typecheck
 pnpm docs:check   # JSDoc completeness — required before submitting src changes
+pnpm quality:check
+pnpm test:packages
 ```
 
 > **Gotcha:** tests import the package by name, which resolves to `dist`, not
@@ -267,7 +307,7 @@ pnpm db:up        # or start postgres@5433 + mysql@3307 yourself
 
 - [`docs/advanced-queries.md`](docs/advanced-queries.md) — joins, subqueries, aggregation, CTEs, upserts
 - [`docs/routines.md`](docs/routines.md) — declared functions, table-valued sources, procedures, and capability behavior
-- [`docs/driver-benchmarks.md`](docs/driver-benchmarks.md) — the two Postgres drivers, prepared vs unprepared, hot-path cost
+- [`docs/driver-benchmarks.md`](docs/driver-benchmarks.md) — plain-language benchmark guide, prepared vs unprepared drivers, and hot-path cost
 - [`docs/query-builder-benchmarks.md`](docs/query-builder-benchmarks.md) — Thor versus Drizzle and Prisma query construction, method, results, and caveats
 - [`docs/optimization-strategies.md`](docs/optimization-strategies.md) — cache keys and the hot path
 - [`docs/api-documentation.md`](docs/api-documentation.md) — JSDoc conventions

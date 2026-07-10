@@ -1,14 +1,105 @@
-# Thor roadmap — closing the drift to spec v0
+# Thor roadmap
 
-Source of truth: [`thor-project-spec-v0.md`](./thor-project-spec-v0.md).
-This roadmap breaks every item flagged in the drift review into concrete tasks so
-the implementation matches the specification.
+Sources of truth: [`thor-project-spec-v0.md`](./thor-project-spec-v0.md) for the
+delivered v0 foundation and [`thor-project-v1-spec.md`](./thor-project-v1-spec.md)
+for Part II. This roadmap also tracks production-correctness work found by the
+independent repository review.
 
 **Status legend:** ✅ done · 🟡 partial · ❌ missing
-**Priority:** P0 (blocking correctness/spec-validity) · P1 (core v0) · P2 (hardening/nice-to-have)
+**Priority:** P0 (blocking correctness/spec-validity) · P1 (release hardening) · P2 (maintainability/beta quality)
 **Effort:** S (<½ day) · M (½–2 days) · L (>2 days)
 
-## Epic overview
+> **Current priority (2026-07): Part 0 below.** An independent repository review
+> ([`thor-repository-review.md`](./thor-repository-review.md), commit `fe92138`)
+> found production-correctness gaps behind the v0 surface. **Part 0 (P0) now takes
+> priority over the remaining Part II (v1) expansion** and is sequenced first.
+> Part I's main v0 foundation is delivered, with residual work explicitly marked;
+> Part II is deferred until the P0 correctness work lands, and publication is
+> additionally gated by the P1 release-hardening work below. P0/P1/P2 ids match
+> the review's numbering. Verified findings carry `file:line` evidence.
+
+---
+
+# Part 0 — Production-correctness and release hardening (current priority)
+
+> Turn the v0 promises into enforced invariants before widening the surface.
+> Each item was confirmed against the working tree at the cited lines. MySQL stays
+> **explicitly partial** until non-transactional migration behavior, numeric
+> decoding, and its full live suite are hardened.
+
+### PR 1 — Correct the trust boundary (query core)
+
+| # | Status | Task | Evidence | Effort | Acceptance |
+|---|---|---|---|---|---|
+| P0-3 | ✅ | Typed & validated named parameters | `ParameterPlan` compiles schema encoders once; builder terminals carry literal-name maps; `parameters.types.ts` covers negative cases | L | Param map threaded through builder generics so `param("id", Schema.String)` requires `{ id: string }`; compile the validator once per plan and validate/encode values once per execution; missing/extra/mistyped/duplicate/conflicting names → tagged `ParameterError` (not `undefined` to the driver); compile-time negative tests |
+| P0-4a | ✅ | Dialect/driver-aware decoding (bigint, numeric aggregates, date, bool, json) | driver-representation codecs accept safe numeric strings/bigints; advanced live matrix runs on PostgreSQL/MySQL in safe mode | M | pg `count/sum/avg`/bigint decode correctly in **safe** mode; counts are safe `number` and reject overflow; per-driver representations are normalized by codecs |
+| P0-4b | ✅ | Join nullability in type state + decoder plan | outer joins rewrite both row type and selection codecs (columns **and** non-column expressions on the null-extended side); compile-time + runtime tests cover left/right/full | L | left/right/full-join columns become nullable in TS **and** use a nullable codec; runtime + type tests |
+| P0-4c | ✅ | Run the feature-integration matrix in **safe** decode mode | SQLite and live PostgreSQL/MySQL feature matrices use the default safe layer | S | representative outputs decoded in safe mode; aggregate decoder defects fail the suite |
+
+### PR 2 — Make migrations honest and safe
+
+| # | Status | Task | Evidence | Effort | Acceptance |
+|---|---|---|---|---|---|
+| P0-1a | ✅ | Acquire the lock **before** reading pending; re-read under lock | advisory-lock dialects plan under the lock; SQLite re-reads inside each `begin immediate` transaction | M | journal-create/read/checksum/pending all move inside the lock; two racing migrators cannot double-apply the same migration |
+| P0-1b | ✅ | Propagate commit/rollback failures | transaction and lock finalizers replay/compose `Exit` causes instead of ignoring them | S | failed commit surfaces; body+rollback and body+unlock failures retain both causes |
+| P0-1c | ✅ | Choose & document one transaction policy | one transaction per migration on transactional-DDL dialects; MySQL partial progress is documented and tested | M | per-migration transactions; README no longer claims unconditional transactionality |
+| P0-1d | ✅ | `check()` rejects unknown / out-of-order journal entries | journal validation requires an exact known definition prefix before checksum validation | S | unknown applied entries, gaps/order drift, and checksum drift fail |
+| P0-1e | ✅ | Explicit checksum/revision for Effect migration steps | Effect steps require `revision`; checksum material includes it | S | changing a backfill revision changes its checksum; omission fails compile-time testing |
+| P0-1f | ✅ | Concurrency & failure migration tests | `migrator.test.ts` covers races, commit/rollback, lock loss, unknown state, non-transactional partial progress, interruption | M | required concurrency and failure paths are executable tests |
+| P0-2 | ✅ | Lossless schema → migration DDL IR | typed defaults, generated columns, unique/check/FK constraints and indexes survive schema→IR→all dialect compilers; SQLite live introspection test; SQLite `ADD COLUMN` rejects in-place-illegal shapes (unique, stored-generated, non-constant/absent default) as tagged failures | L | non-round-trippable defaults are rejected; unsupported dialect alterations become tagged migration failures |
+
+### PR 3 — Ship what users actually install
+
+| # | Status | Task | Evidence | Effort | Acceptance |
+|---|---|---|---|---|---|
+| P0-5 | ✅ | Stop advertising placeholder CLI commands as working | published help/dispatcher expose only `init`/`create`; every other command exits non-zero; names are path-safe; subprocess tests | M | truthful minimal CLI surface with validated migration names |
+| P0-6 | ✅ | Repair the performance regression gate | reviewed `hotpath-baselines/<runtime>-<platform>-<arch>.json`; missing/invalid baselines fail; docs label the threshold catastrophic-only | S | clean CI compares against a committed reviewed baseline and never self-baselines |
+
+### Release gate — Harden the public package and Effect integration (P1)
+
+| # | Status | Task | Evidence | Effort | Acceptance |
+|---|---|---|---|---|---|
+| P1-7a | ✅ | Scoped, resource-safe client layers | `PostgresScopedLayer`/`PostgresPoolLayer`, `MySQLScopedLayer`/`MySQLPoolLayer`, and `SQLiteScopedLayer`; `scoped-layers.test.ts` covers cleanup and failure causes | L | retain low-level bring-your-own-client constructors; add documented `Layer.scoped` paths that acquire/connect and release/end; acquire dedicated pooled connections where affinity is required; test acquisition/release failure, interruption, cancellation where supported, and pool exhaustion |
+| P1-7b | ✅ | Transaction-scoped driver/database API | `execution/transaction.ts` backs `db.transaction` and the migrator; `transaction.test.ts` covers savepoints, isolation, retry boundaries, interruption, and combined causes | L | explicit scoped transaction driver used by `db.transaction` and the migrator; savepoints/isolation levels and retry boundaries; commit/rollback/release failures preserved; affinity tests across supported drivers (also unblocks a correct future libSQL adapter) |
+| P1-8a | ✅ | Publication metadata and clean tarballs | package metadata/READMEs/LICENSE, SECURITY, CHANGELOG, `prepack`, peer-only published Effect policy, and `test-packages.mjs` Node+Bun consumers | M | ship LICENSE in each package, add SECURITY policy, changelog/release notes, package READMEs/metadata/engines, `files`, and build-before-pack; resolve the `effect` dependency policy; packed tarballs contain only intended artifacts; every export and the `thor` binary work from clean Node and Bun consumer projects |
+| P1-8b | ✅ | Align and test the runtime support policy | root/packages/README declare Node ≥22; CI tests oldest supported Node 22 and current Node 26; declarations compile with `@types/node` 22 | M | either raise the baseline or test the oldest declared Node plus current; package engines and docs agree; type surface does not exceed the supported baseline |
+| P1-9 | ✅ | Make CI enforce documented invariants | separate static, Node 22/26 coverage, packed Node, Bun, PostgreSQL/MySQL, and performance jobs; immutable action SHAs, deterministic fast-check seed, minimal permissions/concurrency | M | static, unit/property, safe integration, runtime, package/CLI, and performance lanes; deterministic seeds/failure replay; minimal permissions and concurrency cancellation; actions pinned to immutable SHAs |
+| P1-10 | ✅ | Tighten raw SQL and migration trust boundaries | `RawExpr` retains structural params/columns; dialect compiler quotes/binds; `unsafeSql` is required for dynamic text in queries and migrations; dialect/type/injection tests | M | parameters and identifiers remain structural nodes quoted by the active dialect; ordinary value interpolation rejected; arbitrary text requires an explicit `unsafeSql` brand; the same explicit unsafe boundary applies to migrations; cross-dialect and injection tests |
+
+### Maintenance follow-up (P2)
+
+| # | Status | Task | Evidence | Effort | Acceptance |
+|---|---|---|---|---|---|
+| P2-11 | 🟡 | Split oversized modules and add code-quality tooling | IR traversal moved to `query-analysis.ts` (reducing `query-ir.ts` to declarations); Biome incrementally gates new seams, Knip gates the workspace, and dead placeholder exports/files were removed; query-builder/features/execution splits remain | L | split along existing statement/execution/feature seams without public API churn; add formatter/linter plus dead-export/dependency checks and enforce them in CI |
+| P2-12 | 🟡 | Make documentation executable and claims generated | README lifecycle/CLI/runtime claims corrected; all TS fences syntax-check, a canonical query executes, and the dialect summary is generated from capability matrices; spec archival remains | M | examples are tested or executable; feature/status tables derive from capability/schema metadata; one current spec plus clearly archived versions; README claims match live behavior |
+| P2-13 | ✅ | Enforce the narrowed milestone scope | release-work registry below names prerequisites/owner/tests/claim; Part II remains deferred; MariaDB/libSQL are explicitly unscheduled candidates | S | no new v1 surface begins before P0 is green; each resumed epic names prerequisites, owner, tests, and a release claim it closes; MariaDB/libSQL remain unscheduled candidates until dialect and transaction foundations are hardened |
+
+### Release-work registry
+
+| Work | Prerequisites | Owner | Required tests | Release claim closed |
+|---|---|---|---|---|
+| P1-7 lifecycle + transactions | P0 migration failure invariants | Thor maintainers | `transaction.test.ts`, `scoped-layers.test.ts`, migrator unit/e2e suites | Effect resources and transaction affinity are production-safe |
+| P1-8/P1-9 package + CI | P1-7 public lifecycle shape | Thor maintainers | Node/Bun packed consumers, Node 22/26 coverage, dialect e2e, performance gate | Published artifacts match the documented runtime and command surface |
+| P1-10 trust boundary | P0 typed parameter plan | Thor maintainers | dialect raw-SQL tests, migration trust tests, compile-time negatives | Ordinary input cannot silently become SQL syntax |
+| P2-11 maintainability | P1 public API stabilized | Thor maintainers | Biome, Knip, build/type/docs/full tests after each seam split | Beta source is mechanically maintainable without public churn |
+| P2-12 executable docs | P1 package/runtime policy | Thor maintainers | README example runner, generated capability check, package consumers | Beta documentation cannot drift from executable metadata |
+
+No MariaDB or libSQL epic is scheduled. They may be reconsidered only after the
+P2-11 seam splits and live affinity tests provide a stable adapter foundation.
+
+**P0 definition of done:** typed/validated params and safe-mode decoding across
+dialects; migrations correct under concurrency and failure with lossless DDL; the
+CLI tells the truth about what it can do; and CI actually gates performance. Then
+Part II implementation may resume.
+
+**Public-release gate:** P0 plus P1-7–P1-10 are green, packed-consumer tests pass,
+and README/package claims match the supported runtime, dialect, CLI, and migration
+surface. P2-11/P2-12 must land before beta; P2-13 remains an ongoing planning
+constraint.
+
+---
+
+## Part I — v0 drift epic overview (foundation delivered; residuals tracked)
 
 | Epic | Theme | Spec | Current | Priority |
 |---|---|---|---|---|
@@ -20,7 +111,7 @@ the implementation matches the specification.
 | F | Cache-key composition & optimization strategies | §15.14 | ✅ F1–F4 | P1 |
 | G | SQL feature matrix tests | §14.11, M6 | ✅ G1–G5,G6b · 🟡 G6a | P1 |
 | H | Property & fuzz tests | §14.12, M6 | ✅ H1–H5 | P2 |
-| I | Performance benchmarks, targets & CI gates | §15.12, §15.16, §18.8/18.9, M7 | ✅ I1–I7 | P1 |
+| I | Performance benchmarks, targets & CI gates | §15.12, §15.16, §18.8/18.9, M7 | ✅ I1–I5,I7 · 🟡 I6 (gate self-baselines — see P0-6) | P1 |
 | J | Advanced query features (joins/agg/CTE/window/upsert) | §6, §14.11 L3–5,7 | ✅ J1–J5 | P2 |
 
 ## Sequencing (phases)
@@ -177,12 +268,13 @@ Levels 6, 8, and 10 (data types, transactions, DDL). 🟡
 | I3 | ✅ | Prepared-handle benchmark | M7 | `point.warm` vs `point.prepared` → **~1.5–1.6× faster**; `point.prepared` lands at **~2.06 µs**, essentially at the 1–2 µs target |
 | I4 | ✅ | Node **and** Bun benchmark lanes | M7 | `bench:hotpath` + `bench:hotpath:bun` (also `:overhead`/`:sqlite`); the no-op driver needs no runtime-specific client |
 | I5 | ✅ | 1–2 µs hot-path overhead **tracking** | §15.12/18.8 | The script prints `point.prepared ≤ 2 µs — MET/over` each run; recorded in `driver-benchmarks.md` |
-| I6 | ✅ | CI performance **gates** (staged) | §15.16 | `bench:baseline` records `hotpath-baseline.json`; `bench:gate` fails on a **>2.5× catastrophic regression**, auto-records the first baseline, and runs in the Node CI job |
+| I6 | ✅ | CI performance **gates** (staged) | §15.16 | `bench:gate` requires a reviewed runtime/platform/architecture baseline, fails when it is absent/invalid, and guards catastrophic >2.5× regressions without self-baselining |
 | I7 | ✅ | Per-feature benchmark requirement | §18.9 | Checklist in `driver-benchmarks.md` (“Performance contribution checklist”): new query features add build/IR/compile/cap-check/exec benchmarks + a `bench:gate` run |
 
 **Definition of done:** hot-path overhead is measured per runtime, cache-hit ≫
 cold, unsupported caps fail before the driver, and CI runs the catastrophic
-regression gate. ✅
+regression gate against a reviewed, committed baseline. 🟡 I6 remains open via
+P0-6.
 
 ---
 
@@ -220,16 +312,20 @@ exactly what unblocks **G6b** (Levels 3–5, 9) and **H5b** (join/subquery fuzzi
 - **§18.8 Hot-path performance:** measurable, memoized, precompilable, 1–2 µs target → Epics D, F, I.
 - **§18.9 Benchmark:** every new query feature ships benchmarks → Epic I7.
 
-## Suggested first cut
+## Historical v0 first cut
 
 1. **Phase 0 (A1–A5)** — a few small doc edits; removes all doc drift today.
 2. **F1–F2 + D1–D5** — cache key + `.prepare()` handles; the biggest functional gap and the backbone of the perf story.
 3. **B1–B3** — make SQLite/MySQL spec-valid by passing the shared suite.
 
 ---
----
 
 # Part II — v1 milestone
+
+> **Deferred until Part 0 (P0 production-correctness) lands.** Widening the surface
+> before the query core, migrations, CLI, and CI gate are demonstrably correct is
+> the main project risk flagged by the independent review. No public release may
+> occur until the P1 release gate is also green.
 
 Source of truth: [`thor-project-v1-spec.md`](./thor-project-v1-spec.md) (the
 production-readiness release). v1 keeps the v0 foundation (typed/runtime IR,
