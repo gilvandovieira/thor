@@ -1,6 +1,15 @@
 # Thor Project Specification
 
-**Status:** Draft v0
+> **⚠️ Archived — superseded by [`thor-project-v1-spec.md`](./thor-project-v1-spec.md).**
+> This is the **v0** specification describing the *delivered foundation* (Epics
+> A–J: typed/runtime IR, guards, capabilities, Effect execution, dialects,
+> tests, benchmarks). It is retained only as the acceptance reference for that
+> foundation and for the historical `spec §…` section numbers cited in the code.
+> For all current and ongoing work — Part II / v1 — the
+> [v1 specification](./thor-project-v1-spec.md) is authoritative. See
+> [`README.md`](./README.md) for the full docs index.
+
+**Status:** Archived (superseded by the v1 specification)
 **Project placeholder name:** Thor Project
 **Package scope placeholder:** `@gilvandovieira`
 **Primary package:** `@gilvandovieira/thor`

@@ -1,6 +1,11 @@
 # Thor Project v1 Specification
 
-**Status:** Draft v1
+> **✅ Current — authoritative specification.** This v1 spec supersedes the
+> archived [v0 specification](./thor-project-spec-v0.md), which is retained only
+> as the acceptance reference for the delivered Epics A–J foundation. See
+> [`README.md`](./README.md) for the full docs index.
+
+**Status:** Current — authoritative specification (supersedes the v0 spec)
 **Project placeholder name:** Thor Project
 **Package scope placeholder:** `@gilvandovieira`
 **Primary package:** `@gilvandovieira/thor`
