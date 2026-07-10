@@ -12,14 +12,14 @@ import type { Capability } from "../capabilities/capability.js"
 import type { DialectId } from "../capabilities/matrix.js"
 import type { RuntimeCapability, RuntimeId } from "../capabilities/runtime.js"
 
-/** A capability required by an operation is not `native` (and no emulation was enabled). */
+/** @stable A capability required by an operation is not `native` (and no emulation was enabled). */
 export class CapabilityError extends Data.TaggedError("CapabilityError")<{
   readonly capability: Capability
   readonly dialect: DialectId
   readonly message: string
 }> {}
 
-/** A driver adapter cannot run with the host's available runtime capabilities. */
+/** @stable A driver adapter cannot run with the host's available runtime capabilities. */
 export class RuntimeCapabilityError extends Data.TaggedError("RuntimeCapabilityError")<{
   readonly adapter: string
   readonly runtime: RuntimeId
@@ -28,19 +28,19 @@ export class RuntimeCapabilityError extends Data.TaggedError("RuntimeCapabilityE
   readonly message: string
 }> {}
 
-/** The runtime IR could not be lowered to dialect SQL. */
+/** @stable The runtime IR could not be lowered to dialect SQL. */
 export class CompileError extends Data.TaggedError("CompileError")<{
   readonly message: string
   readonly detail?: unknown
 }> {}
 
-/** The underlying driver rejected the statement (connection, syntax, protocol...). */
+/** @stable The underlying driver rejected the statement (connection, syntax, protocol...). */
 export class DriverError extends Data.TaggedError("DriverError")<{
   readonly message: string
   readonly cause?: unknown
 }> {}
 
-/** A database constraint (unique, fk, check, not-null) was violated. */
+/** @stable A database constraint (unique, fk, check, not-null) was violated. */
 export class ConstraintError extends Data.TaggedError("ConstraintError")<{
   readonly constraint: string
   readonly kind: "unique" | "foreignKey" | "check" | "notNull" | "unknown"
@@ -48,13 +48,13 @@ export class ConstraintError extends Data.TaggedError("ConstraintError")<{
   readonly cause?: unknown
 }> {}
 
-/** A row failed to decode through its declared codec. */
+/** @stable A row failed to decode through its declared codec. */
 export class DecodeError extends Data.TaggedError("DecodeError")<{
   readonly message: string
   readonly cause?: unknown
 }> {}
 
-/** Named query arguments failed shape validation or schema encoding. */
+/** @stable Named query arguments failed shape validation or schema encoding. */
 export class ParameterError extends Data.TaggedError("ParameterError")<{
   readonly parameter?: string
   readonly reason: "missing" | "extra" | "invalid" | "duplicate" | "conflict"
@@ -62,55 +62,55 @@ export class ParameterError extends Data.TaggedError("ParameterError")<{
   readonly cause?: unknown
 }> {}
 
-/** `.one()` found zero rows. */
+/** @stable `.one()` found zero rows. */
 export class NotFoundError extends Data.TaggedError("NotFoundError")<{
   readonly message: string
 }> {}
 
-/** `.one()` / `.maybeOne()` found more than one row. */
+/** @stable `.one()` / `.maybeOne()` found more than one row. */
 export class TooManyRowsError extends Data.TaggedError("TooManyRowsError")<{
   readonly count: number
   readonly message: string
 }> {}
 
-/** A guard rejected an operation during construction or before execution. */
+/** @stable A guard rejected an operation during construction or before execution. */
 export class GuardError extends Data.TaggedError("GuardError")<{
   readonly guard: string
   readonly message: string
 }> {}
 
-/** Migration planning or execution failed. */
+/** @stable Migration planning or execution failed. */
 export class MigrationError extends Data.TaggedError("MigrationError")<{
   readonly message: string
   readonly migrationId?: string
   readonly cause?: unknown
 }> {}
 
-/** An irreversible migration's `down` was requested. */
+/** @stable An irreversible migration's `down` was requested. */
 export class IrreversibleMigrationError extends Data.TaggedError("IrreversibleMigrationError")<{
   readonly message: string
   readonly migrationId?: string
 }> {}
 
-/** Transaction lifecycle problem (nested without savepoints, escaped scope...). */
+/** @stable Transaction lifecycle problem (nested without savepoints, escaped scope...). */
 export class TransactionError extends Data.TaggedError("TransactionError")<{
   readonly message: string
   readonly cause?: unknown
 }> {}
 
-/** A statement exceeded its deadline / was interrupted. */
+/** @stable A statement exceeded its deadline / was interrupted. */
 export class TimeoutError extends Data.TaggedError("TimeoutError")<{
   readonly message: string
 }> {}
 
-/** A routine (function/procedure) call failed. */
+/** @stable A routine (function/procedure) call failed. */
 export class RoutineError extends Data.TaggedError("RoutineError")<{
   readonly routine: string
   readonly message: string
   readonly cause?: unknown
 }> {}
 
-/** Union of every Thor error. */
+/** @stable Union of every Thor error. */
 export type ThorError =
   | CapabilityError
   | RuntimeCapabilityError
@@ -128,7 +128,7 @@ export type ThorError =
   | TimeoutError
   | RoutineError
 
-/** Errors that can surface from executing a query (before cardinality refinement). */
+/** @stable Errors that can surface from executing a query (before cardinality refinement). */
 export type QueryError =
   | GuardError
   | CapabilityError

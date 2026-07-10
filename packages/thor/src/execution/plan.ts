@@ -91,6 +91,7 @@ export const resolveDecodeMode = (mode: ExecutionMode, decodeMode?: DecodeMode):
  * const Untyped = withMode(PostgresLayer(client), "unsafe-hot") // skips decode — opt-in
  * ```
  *
+ * @experimental Execution modes include the explicitly unstable unsafe-hot boundary.
  * @param layer - Base layer providing `Database`.
  * @param mode - Execution mode to apply.
  * @param decodeMode - Optional explicit decode override (defaults to `mode`'s implied mode).
@@ -123,6 +124,7 @@ export const withMode = (
  * const Bounded = withQueryCache(PostgresLayer(client), { maxSize: 10_000, strategy: "lru" })
  * ```
  *
+ * @stable
  * @param layer - Base layer providing `Database`.
  * @param options - Cache options; omit `maxSize` for an unbounded dedicated registry.
  * @returns A layer providing `Database` with the cache installed.

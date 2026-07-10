@@ -187,7 +187,11 @@ export type MigrationOperation =
   | CreateRoutineOp
   | DropRoutineOp
 
-/** A planned, guarded sequence of operations for one migration. */
+/**
+ * A planned, guarded sequence of operations for one migration.
+ *
+ * @stable
+ */
 export interface MigrationPlan {
   readonly id: string
   readonly name: string

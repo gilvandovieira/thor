@@ -86,6 +86,7 @@ const log = (msg: string): void => {
 // --- commands ----------------------------------------------------------------
 
 /**
+ * @stable
  * @param cwd - Project root to initialize.
  * @returns Nothing.
  */
@@ -100,6 +101,7 @@ export const init = (cwd: string): void => {
 }
 
 /**
+ * @stable
  * @param cwd - Project root.
  * @param name - Migration name appended to the timestamp identifier.
  * @returns Nothing.
@@ -127,6 +129,7 @@ const DIALECT_CAPABILITIES: Readonly<Record<string, CapabilityMatrix>> = {
 /**
  * Prints every declared capability status for a built-in SQL dialect.
  *
+ * @stable
  * @param args - Exactly one dialect name: postgres, sqlite, or mysql.
  * @returns Nothing.
  * @throws {Error} When the dialect argument is missing, extra, or unknown.

@@ -294,6 +294,8 @@ export type DecoderValue = unknown
  *
  * Construct with {@link makeQueryCaches}; the process-wide default is
  * {@link defaultQueryCaches}.
+ *
+ * @internal Cache representation is not a compatibility surface.
  */
 export class QueryCaches {
   /** Shape layer: raw IR identity → normalized IR. */

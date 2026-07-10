@@ -99,6 +99,7 @@ const PHANTOM: unique symbol = Symbol.for("thor/column-config")
 /**
  * Immutable schema column descriptor and query expression.
  *
+ * @stable
  * @typeParam C - Phantom configuration used for row-shape inference.
  */
 export class Column<C = ColumnConfig> {

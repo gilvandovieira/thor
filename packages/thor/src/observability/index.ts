@@ -102,7 +102,7 @@ export interface LifecycleObservabilityEvent {
 /** Every structured event produced by Thor observability. */
 export type ObservabilityEvent = QueryObservabilityEvent | LifecycleObservabilityEvent
 
-/** Opt-in observability configuration installed with {@link withObservability}. */
+/** @stable Opt-in observability configuration installed with {@link withObservability}. */
 export interface ObservabilityOptions {
   /** Create Effect spans named `thor.*`. Defaults to `false`. */
   readonly tracing?: boolean
@@ -370,6 +370,7 @@ export const observeLifecycle = <A, E, R>(
 /**
  * Wrap a `Database` layer with opt-in tracing, metrics, and safe logging.
  *
+ * @stable
  * @param layer - Base layer providing `Database`.
  * @param options - Observability options; raw SQL and parameters require explicit `unsafe-full` modes.
  * @returns A layer providing the observability-enabled database service.

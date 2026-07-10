@@ -30,7 +30,7 @@ export type RuntimeId = "node" | "bun" | "unknown"
 /** Union of every runtime capability Thor can validate. */
 export type RuntimeCapability = (typeof ALL_RUNTIME_CAPABILITIES)[number]
 
-/** Detected or explicitly supplied runtime capability profile. */
+/** @experimental Advanced runtime capability APIs may grow with runtime lanes. */
 export interface RuntimeCapabilityProfile {
   /** Host runtime identity. */
   readonly runtime: RuntimeId
@@ -94,6 +94,7 @@ export const defineRuntimeRequirements = (
  * module is considered available from Node 22.5, where `node:sqlite` shipped.
  * The injectable probe keeps detection deterministic in unit tests and hosts.
  *
+ * @experimental Advanced runtime capability APIs may grow with runtime lanes.
  * @param probe - Global-like object to inspect; defaults to `globalThis`.
  * @returns The detected runtime identity and capability set.
  */

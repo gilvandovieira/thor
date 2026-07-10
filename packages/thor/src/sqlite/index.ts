@@ -27,7 +27,11 @@ import { Schema } from "effect"
 const json = <N extends string, A = unknown>(name: N, schema?: Schema.Schema<A, any>) =>
   makeColumn<N, A>(name, "json", Schema.parseJson(schema ?? Schema.Unknown))
 
-/** SQLite-flavored schema authoring namespace. */
+/**
+ * SQLite-flavored schema authoring namespace.
+ *
+ * @stable
+ */
 export const sqlite = {
   table: defineTable,
   uuid,

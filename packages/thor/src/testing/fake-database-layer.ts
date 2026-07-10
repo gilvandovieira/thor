@@ -41,6 +41,7 @@ export const makeFakeDatabase = (
 }
 
 /**
+ * @stable
  * @param driver - Existing fake driver to expose through `Database`.
  * @param options - Dialect, emulation, and prepared-statement options.
  * @returns An Effect layer providing `Database`.

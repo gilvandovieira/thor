@@ -20,7 +20,11 @@ import {
   varchar
 } from "../schema/index.js"
 
-/** PostgreSQL-flavored schema authoring namespace. */
+/**
+ * PostgreSQL-flavored schema authoring namespace.
+ *
+ * @stable
+ */
 export const pg = {
   table: defineTable,
   uuid,

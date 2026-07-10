@@ -27,7 +27,11 @@ import { defineTable } from "../schema/table.js"
 const json = <N extends string, A = unknown>(name: N, schema?: Schema.Schema<A, any>) =>
   makeColumn<N, A>(name, "json", schema ?? Schema.Unknown)
 
-/** MySQL-flavored schema authoring namespace. */
+/**
+ * MySQL-flavored schema authoring namespace.
+ *
+ * @stable
+ */
 export const mysql = {
   table: defineTable,
   uuid,

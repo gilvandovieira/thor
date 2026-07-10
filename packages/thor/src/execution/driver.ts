@@ -41,6 +41,8 @@ export interface CompiledStatement {
  * server-side prepared statement so identical shapes skip re-parsing (spec §16).
  * When absent, adapters run the statement without preparing it (used for
  * param-free, possibly multi-statement DDL).
+ *
+ * @stable
  */
 export interface Driver {
   /** Runtime capabilities required by this adapter implementation. */

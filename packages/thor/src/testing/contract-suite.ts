@@ -126,6 +126,7 @@ const users = defineTable("contract_users", {
  * fixture DDL (`options.reset`) and capability-gated `RETURNING` expectations
  * differ per dialect.
  *
+ * @experimental Advanced contract-suite registration may evolve with the feature matrix.
  * @param api - Test-runner registration and assertion functions.
  * @param options - Driver name, dialect, layer, reset DDL, and lifecycle hooks.
  * @returns Nothing; tests are registered synchronously.

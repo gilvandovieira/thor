@@ -27,7 +27,7 @@ export interface FakeResult {
   readonly error?: DriverError | ConstraintError
 }
 
-/** Queue-driven in-memory driver for deterministic query tests. */
+/** @stable Queue-driven in-memory driver for deterministic query tests. */
 export class FakeDriver {
   /** Every statement the driver has been asked to run, in order. */
   readonly calls: DriverCall[] = []

@@ -245,7 +245,11 @@ const fieldsForJoin = (
 const starSelection = (table: AnyTable): SelectionField[] =>
   Object.entries(tableMeta(table).columns).map(([alias, column]) => toSelectionField(alias, column))
 
-/** Query-local named relation backed by a select query. */
+/**
+ * Query-local named relation backed by a select query.
+ *
+ * @stable
+ */
 export class QueryReference<A> {
   /**
    * @param source - Relation source embedded in `FROM` or `JOIN`.
@@ -361,6 +365,8 @@ const inspectIr = (ir: QueryIR) => ({
  *
  * yield* FindUserByEmail.one({ email })
  * ```
+ *
+ * @experimental Prefer the v1 `CompiledQuery` API for new hot paths.
  */
 export class PreparedQuery<A, P extends NamedParams = {}> {
   private readonly plan: PreparedExecutionPlan
@@ -388,7 +394,7 @@ export class PreparedQuery<A, P extends NamedParams = {}> {
     }, fields)
   }
 
-  /** @returns Stable query-shape metadata without compiling or executing. */
+  /** @experimental Debugging shape only. @returns Stable query-shape metadata without compiling or executing. */
   inspect() {
     return { ...inspectIr(this.plan.ir), prepared: { name: this.name, ...this.plan.inspect() } }
   }
@@ -407,6 +413,7 @@ export class PreparedQuery<A, P extends NamedParams = {}> {
   }
 
   /**
+   * @stable
    * @param args - Values for named query parameters.
    * @returns An Effect yielding every decoded row.
    */
@@ -415,6 +422,7 @@ export class PreparedQuery<A, P extends NamedParams = {}> {
   }
 
   /**
+   * @stable
    * @param args - Values for named query parameters.
    * @returns An Effect yielding exactly one decoded row.
    * @throws {NotFoundError} Through the Effect error channel when no row exists.
@@ -425,6 +433,7 @@ export class PreparedQuery<A, P extends NamedParams = {}> {
   }
 
   /**
+   * @stable
    * @param args - Values for named query parameters.
    * @returns An Effect yielding zero or one decoded row.
    * @throws {TooManyRowsError} Through the Effect error channel when multiple rows exist.
@@ -436,6 +445,7 @@ export class PreparedQuery<A, P extends NamedParams = {}> {
   /**
    * Execute as a command (for prepared mutations), returning the affected count.
    *
+   * @stable
    * @param args - Values for named query parameters.
    * @returns An Effect yielding the affected-row count.
    */
@@ -446,7 +456,11 @@ export class PreparedQuery<A, P extends NamedParams = {}> {
 
 // --- SELECT ------------------------------------------------------------------
 
-/** Immutable selectable query with terminal Effect-based execution methods. */
+/**
+ * Immutable selectable query with terminal Effect-based execution methods.
+ *
+ * @stable
+ */
 class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = SelectFields> {
   /**
    * @param ir - Immutable select representation.
@@ -703,6 +717,7 @@ class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = Select
   }
 
   /**
+   * @experimental Debugging shape only.
    * @returns Stable query-shape metadata without compiling or executing.
    */
   inspect() {
@@ -729,6 +744,7 @@ class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = Select
   /**
    * Executes the query and returns every decoded row.
    *
+   * @stable
    * @typeParam Args - Omitted for compilation or no-param execution; otherwise named values.
    * @param args - Values for named query parameters.
    * @returns An Effect requiring `Database` and yielding decoded rows.
@@ -741,6 +757,7 @@ class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = Select
   /**
    * Executes the query and requires exactly one row.
    *
+   * @stable
    * @typeParam Args - Omitted for compilation or no-param execution; otherwise named values.
    * @param args - Values for named query parameters.
    * @returns An Effect yielding the decoded row.
@@ -760,6 +777,7 @@ class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = Select
   /**
    * Executes the query and accepts zero or one row.
    *
+   * @stable
    * @typeParam Args - Omitted for compilation or no-param execution; otherwise named values.
    * @param args - Values for named query parameters.
    * @returns An Effect yielding `Option.none()` or `Option.some(row)`.
@@ -778,6 +796,7 @@ class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = Select
   /**
    * Freeze this query into a reusable precompiled handle (spec §15.15).
    *
+   * @experimental Prefer terminal `.compile()` for the v1 stable API.
    * @param name - Stable handle name for diagnostics/tracing (defaults to a generated id).
    * @returns A `PreparedQuery` that binds values per call and reuses compile/guard/decoder work.
    */
@@ -897,7 +916,7 @@ const assignmentsFrom = (
   })
 }
 
-/** Insert, update, or delete query with a decoded `RETURNING` selection. */
+/** @stable Insert, update, or delete query with a decoded `RETURNING` selection. */
 class ReturningQuery<A, P extends NamedParams = {}> {
   /**
    * @param ir - Data-modification representation containing `RETURNING`.
@@ -909,6 +928,7 @@ class ReturningQuery<A, P extends NamedParams = {}> {
   ) {}
 
   /**
+   * @experimental Debugging shape only.
    * @returns Stable query-shape metadata without compiling or executing.
    */
   inspect() {
@@ -931,6 +951,7 @@ class ReturningQuery<A, P extends NamedParams = {}> {
   }
 
   /**
+   * @stable
    * @typeParam Args - Omitted for compilation or no-param execution; otherwise named values.
    * @param args - Named parameter values.
    * @returns An Effect yielding every returned row.
@@ -941,6 +962,7 @@ class ReturningQuery<A, P extends NamedParams = {}> {
   }
 
   /**
+   * @stable
    * @typeParam Args - Omitted for compilation or no-param execution; otherwise named values.
    * @param args - Named parameter values.
    * @returns An Effect yielding exactly one returned row.
@@ -959,6 +981,7 @@ class ReturningQuery<A, P extends NamedParams = {}> {
   }
 
   /**
+   * @stable
    * @typeParam Args - Omitted for compilation or no-param execution; otherwise named values.
    * @param args - Named parameter values.
    * @returns An Effect yielding zero or one returned row.
@@ -976,6 +999,7 @@ class ReturningQuery<A, P extends NamedParams = {}> {
   }
 
   /**
+   * @stable
    * @typeParam Args - Omitted for compilation or no-param execution; otherwise named values.
    * @param args - Named parameter values.
    * @returns An Effect yielding the affected-row count.
@@ -988,6 +1012,7 @@ class ReturningQuery<A, P extends NamedParams = {}> {
   /**
    * Freeze this returning mutation into a reusable precompiled handle (spec §15.15).
    *
+   * @experimental Prefer terminal `.compile()` for the v1 stable API.
    * @param name - Stable handle name (defaults to a generated id).
    * @returns A `PreparedQuery` exposing `all`/`one`/`maybeOne`/`run`.
    */
@@ -1065,7 +1090,7 @@ class InsertValues<T extends AnyTable, P extends NamedParams = {}> {
     }
   }
 
-  /** @returns Stable insert-shape metadata without executing. */
+  /** @experimental Debugging shape only. @returns Stable insert-shape metadata without executing. */
   inspect() {
     return inspectIr(this.ir())
   }
@@ -1142,6 +1167,7 @@ class InsertValues<T extends AnyTable, P extends NamedParams = {}> {
   }
 
   /**
+   * @stable
    * @typeParam Args - Omitted for compilation or no-param execution; otherwise named values.
    * @param args - Named parameter values.
    * @returns An Effect yielding the affected-row count.
@@ -1213,7 +1239,7 @@ class UpdateValues<T extends AnyTable, P extends NamedParams = {}> {
     }
   }
 
-  /** @returns Stable update-shape metadata without executing. */
+  /** @experimental Debugging shape only. @returns Stable update-shape metadata without executing. */
   inspect() {
     return inspectIr(this.ir())
   }
@@ -1241,6 +1267,7 @@ class UpdateValues<T extends AnyTable, P extends NamedParams = {}> {
   }
 
   /**
+   * @stable
    * @typeParam Args - Omitted for compilation or no-param execution; otherwise named values.
    * @param args - Named parameter values.
    * @returns An Effect yielding the affected-row count.
@@ -1291,7 +1318,7 @@ class DeleteBuilder<T extends AnyTable, P extends NamedParams = {}> {
     }
   }
 
-  /** @returns Stable delete-shape metadata without executing. */
+  /** @experimental Debugging shape only. @returns Stable delete-shape metadata without executing. */
   inspect() {
     return inspectIr(this.ir())
   }
@@ -1319,6 +1346,7 @@ class DeleteBuilder<T extends AnyTable, P extends NamedParams = {}> {
   }
 
   /**
+   * @stable
    * @typeParam Args - Omitted for compilation or no-param execution; otherwise named values.
    * @param args - Named parameter values.
    * @returns An Effect yielding the affected-row count.
@@ -1332,7 +1360,7 @@ class DeleteBuilder<T extends AnyTable, P extends NamedParams = {}> {
 
 // --- entrypoint --------------------------------------------------------------
 
-/** Pure query-builder entry point. No method touches a database until a terminal Effect is run. */
+/** @stable Pure query-builder entry point. No method touches a database until a terminal Effect is run. */
 export const db = {
   /** Runs an Effect in a transaction; nested calls use savepoints. */
   transaction,

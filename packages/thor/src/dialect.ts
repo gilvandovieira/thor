@@ -109,7 +109,11 @@ export interface MigrationDialect {
   readonly listTables: string
 }
 
-/** Complete query and migration behavior for one database backend. */
+/**
+ * Complete query and migration behavior for one database backend.
+ *
+ * @stable
+ */
 export interface Dialect {
   /** Stable dialect identifier used in errors and compiled-query cache keys. */
   readonly id: DialectId

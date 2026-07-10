@@ -31,7 +31,11 @@ interface MigrationDefinitionBase {
   readonly irreversible?: boolean
 }
 
-/** User-authored migration; Effect steps require an explicit revision fingerprint. */
+/**
+ * User-authored migration; Effect steps require an explicit revision fingerprint.
+ *
+ * @stable
+ */
 export type MigrationDefinition =
   | (MigrationDefinitionBase & {
       readonly up: SqlStatement
@@ -46,6 +50,7 @@ export type MigrationDefinition =
     })
 
 /**
+ * @stable
  * @param definition - Complete migration definition.
  * @returns The same definition with preserved inference.
  */

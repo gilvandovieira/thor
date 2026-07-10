@@ -348,12 +348,12 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | N | Runtime lanes v1 (Node + Bun) | §12 | alpha.3 | C | 🟡 (caps + Bun harness) |
 | O | Migration hardening v1 (dry-run, expand/contract, policies) | §15 | alpha.4 | migrator (§13 v0) | ✅ O1–O6 |
 | P | Introspection & drift detection | §16 | alpha.4 | migrator✅, **M✅** | 🟡 P2/P3 ✅ · P1 🟡 · P4/P5 ❌ |
-| Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J✅**, FK (Q1) | ❌ (unblocked) |
+| Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J✅**, FK (Q1) | 🟡 Q1 ✅ |
 | R | Routines v1 (functions/procedures, typed + guarded) | §14 | beta | routine v0✅, J✅; **R6 ⟵ O6✅** | 🟡 (R6 done; R2/R3 left) |
 | S | Observability (metadata, spans, param-redaction) | §17 | beta | annotations (§7.4 v0) | ✅ S1–S5 |
 | T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI v0; ⟵ P, U, W1 (T3 ⟵ M5✅) | ❌ |
 | U | LLM skills (11 skill files + manifest + export) | §21 | beta | — (U4 ⟵ T) | ❌ (unblocked) |
-| V | API stability levels + error model v1 | §6, §22 | beta | errors v0✅; ⟵ Q | ❌ |
+| V | API stability levels + error model v1 | §6, §22 | beta | errors v0✅; ⟵ Q | 🟡 (V1 done) |
 | W | Benchmarks v1 + docs v1 (cold/warm/hot, Node+Bun) | §19, §23 | beta | I✅, L✅; W2 ⟵ N, W5 ⟵ Q/P/U/V | 🟡 |
 
 ## v1 milestone → epic map
@@ -378,10 +378,10 @@ v1-beta     Observability, skills, API stability → R, S, T, U, V, W
 
 ```txt
 Ready now (all prerequisites satisfied)
-  Q1 ⟵ schema DSL✅                     (FK metadata; also feeds P1/P3)
+  Q1 ✅ ⟵ schema DSL✅                  (FK metadata; also feeds P1/P3)
   Q2 ⟵ Q1                               │ Q3 ⟵ Q2, IR✅ │ Q4 ⟵ Q3, J✅
   Q5 ⟵ Q3,Q4 │ Q6 ⟵ Q5, V1
-  P1 ⟵ M✅, schema IR✅ │ P3 ⟵ M✅ (co-req of P1) │ P2 ⟵ P1
+  P1 🟡 ⟵ M✅, schema IR✅ │ P3 ✅ ⟵ M✅ │ P2 ✅ ⟵ P1 core,Q1✅
   N1 ⟵ B✅,C✅,M✅ │ N2 ⟵ C✅ │ N3 ⟵ C✅,M3✅ │ N5 ⟵ N1
   U1 ⟵ — │ U2 ⟵ U1 (all 11 subjects exist: schema/query/exec/testing✅,
                      capabilities M✅, migrations O✅, routines R✅, dialects M✅,
@@ -389,7 +389,7 @@ Ready now (all prerequisites satisfied)
   U3 ⟵ U2 │ U5 ⟵ U2
   R2 ⟵ J✅ (aggregation/window — verify vs J3/J4) │ R3 ⟵ routine v0✅, tx meta✅
   W1 ⟵ I✅, L✅ (cache group) │ W3 ⟵ I5✅
-  V1 ⟵ K✅,M✅,O✅ stable surface (⧗ Q for @experimental tags) │ V3 ⟵ errors✅,M,O,S
+  V1 ✅ ⟵ K✅,M✅,O✅ stable surface (Q relation tags remain owned by Q6) │ V3 ⟵ errors✅,M,O,S
 
 Blocked on other undone epics
   P4 ⟵ P1–P3, ⧗ T1        (CLI-facing pull/introspect/inspect)
@@ -401,14 +401,14 @@ Blocked on other undone epics
   T5 ⟵ ⧗ U4 │ U4 ⟵ U1–U3, ⧗ T (CLI host)
   W2 ⟵ W1, ⧗ N (Bun lane) │ W4 ⟵ W2
   W5 ⟵ K✅,L✅,S✅ + ⧗ Q, ⧗ P, ⧗ U, ⧗ V   (final docs pass)
-  V2 ⟵ V1 │ V4 ⟵ V3 + all error-producing epics (⧗ Q)
+  V2 ⟵ V1✅ │ V4 ⟵ V3 + all error-producing epics (⧗ Q)
 
 Already satisfied by completed work (close these out)
   R6 ✅ ⟵ O6                (routine DDL in migrations — done)
 ```
 
-**Suggested remaining order:** **Q** (fully unblocked by J) and **P1–P3** (unblocked
-by M) in parallel → **T1/T2** (⟵ P) with **T3** already mostly shipped → **P4/P5**
+**Suggested remaining order:** **Q2–Q6** (unblocked by J/Q1/V1) and the remaining
+**P1** introspection breadth in parallel → **T1/T2** (⟵ P) with **T3** already mostly shipped → **P4/P5**
 (⟵ T) → **U1–U3/U5** any time → **U4 + T5** (CLI export) → **N1–N3/N5** any time →
 **W1/W3** any time, **W2** after N, **V1/V3** early then **V2/V4** after Q → **W5**
 last (docs over the whole surface).
@@ -523,14 +523,14 @@ verified. ✅
 > Sits **on top of** the IR (never bypasses it): relation query → planner → IR →
 > guards → caps → compiler → executor. Needs join support (J) + FK metadata.
 
-| # | Task | Spec | Acceptance |
-|---|---|---|---|
-| Q1 | `column.references(() => other)` foreign-key metadata | §13.2 | FK captured in schema IR (also feeds P) |
-| Q2 | `defineRelations({...})` with `one()` / `many()` | §13.2 | typed relation graph keyed by table |
-| Q3 | `db.relation(t).findMany({ with: { rel: { strategy } } })` | §13.2 | relation planner lowers to Query IR |
-| Q4 | Loading strategies: `join` (⟵ J), `query` (batched by keys), `manual` | §13.3 | explicit per relation; no default magic |
-| Q5 | **No hidden N+1** guard | §13.4 | a would-be N+1 is rejected, batched, or requires explicit opt-in |
-| Q6 | Relation planner tests + `@experimental` marking | §6.2, alpha.5 | planner unit tests; API marked experimental |
+| # | Status | Task | Spec | Acceptance |
+|---|---|---|---|---|
+| Q1 | ✅ | `column.references(() => other)` foreign-key metadata | §13.2 | FK captured in schema IR (also feeds P) |
+| Q2 | ❌ | `defineRelations({...})` with `one()` / `many()` | §13.2 | typed relation graph keyed by table |
+| Q3 | ❌ | `db.relation(t).findMany({ with: { rel: { strategy } } })` | §13.2 | relation planner lowers to Query IR |
+| Q4 | ❌ | Loading strategies: `join` (⟵ J), `query` (batched by keys), `manual` | §13.3 | explicit per relation; no default magic |
+| Q5 | ❌ | **No hidden N+1** guard | §13.4 | a would-be N+1 is rejected, batched, or requires explicit opt-in |
+| Q6 | ❌ | Relation planner tests + `@experimental` marking | §6.2, alpha.5 | planner unit tests; API marked experimental |
 
 ## Epic R — Routines v1 (§14, beta)
 
@@ -592,12 +592,19 @@ implemented and verified. ✅
 
 ## Epic V — API stability + error model v1 (§6, §22, beta)
 
-| # | Task | Spec | Acceptance |
-|---|---|---|---|
-| V1 | Tag APIs `@stable` / `@experimental` / `@internal` | §6 | stable: schema DSL, builder, exec methods, compiled query, migration format, tagged errors, capability names, dialect interface, testing helpers, CLI migration cmds |
-| V2 | Document the boundaries | §6, §23 | stability doc; `inspect()` stable-for-debug only |
-| V3 | Freeze + document the public tagged error set | §22 | every public error tag listed with fields + `catchTag` guidance |
-| V4 | Error model completeness pass | §22 | no generic exceptions where a tagged error should exist |
+| # | Status | Task | Spec | Acceptance |
+|---|---|---|---|---|
+| V1 | ✅ | Tag APIs `@stable` / `@experimental` / `@internal` | §6 | settled schema/query/compiled/migration/error/capability/dialect/testing/CLI anchors carry source tags; all current query terminals are stable, inspect/legacy prepare/unsafe-hot/runtime capabilities are experimental, IR/cache anchors are internal; compiler-API audit prevents drift |
+| V2 | ❌ | Document the boundaries | §6, §23 | stability doc; `inspect()` stable-for-debug only |
+| V3 | ❌ | Freeze + document the public tagged error set | §22 | every public error tag listed with fields + `catchTag` guidance |
+| V4 | ❌ | Error model completeness pass | §22 | no generic exceptions where a tagged error should exist |
+
+**Release-work record:** prerequisites K/M/O/S and the settled current public
+surface ✅; owner Thor maintainers; required checks `check-api-stability.mjs`,
+declaration build, docs, quality, and full tests. V1 establishes source-level
+compatibility tags and an executable gate without prematurely implementing T's
+future CLI commands or V3/V4's final error contract. Relation APIs remain
+explicitly owned by Q6 and must be `@experimental` when introduced. ✅
 
 ## Epic W — Benchmarks v1 + docs v1 (§19, §23, beta)
 
@@ -631,10 +638,10 @@ implemented and verified. ✅
 
 **Wave 0 — Unblockers (start now, parallel)**
 
-1. **Q1** — `column.references()` FK metadata (feeds P2 drift **and** Q2)
-2. **P1 + P3** — `Introspector.currentSchema()` + per-dialect introspection queries (⟵ M✅)
-3. **P2** — `Introspector.drift(expectedSchema)` (⟵ P1, Q1)
-4. **V1** — tag `@stable`/`@experimental`/`@internal` + convention (stable surface settled: K/M/O/S✅)
+1. **Q1** ✅ — `column.references()` FK metadata (feeds P2 drift **and** Q2)
+2. **P1** 🟡 + **P3** ✅ — core `Introspector.currentSchema()` + per-dialect introspection queries landed; indexes/views/enums/routines/extensions remain
+3. **P2** ✅ — `Introspector.drift(expectedSchema)` (⟵ P1 core, Q1)
+4. **V1** ✅ — tag `@stable`/`@experimental`/`@internal` + convention (stable surface settled: K/M/O/S✅)
 
 **Wave 1 — Feature completion (parallel; each ⟵ Wave 0 or v0)**
 

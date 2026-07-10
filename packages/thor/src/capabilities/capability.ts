@@ -8,7 +8,7 @@
  * @module capabilities/capability
  */
 
-/** Every capability Thor can reason about. Add new capabilities here only. */
+/** @stable Every capability Thor can reason about. Add new capabilities here only. */
 export const ALL_CAPABILITIES = [
   "insert.returning",
   "update.returning",
@@ -54,7 +54,7 @@ export const ALL_CAPABILITIES = [
   "migration.rollbackDdl"
 ] as const
 
-/** Union of every capability identifier understood by Thor. */
+/** @stable Union of every capability identifier understood by Thor. */
 export type Capability = (typeof ALL_CAPABILITIES)[number]
 
 /** Compact bitset of capabilities. One `bigint` bit per capability index. */

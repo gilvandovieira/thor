@@ -67,7 +67,11 @@ export interface DryRunReport {
   readonly pending: ReadonlyArray<DryRunStep>
 }
 
-/** Programmatic migration API (spec §13.7). */
+/**
+ * Programmatic migration API (spec §13.7).
+ *
+ * @stable
+ */
 export interface MigratorService {
   /**
    * @returns Applied migrations recorded in the journal, oldest first.
@@ -127,7 +131,11 @@ export interface MigratorService {
   readonly drift: () => Effect.Effect<ReadonlyArray<MigrationOperation>, MigrationError>
 }
 
-/** Effect context tag for the programmatic migration service. */
+/**
+ * Effect context tag for the programmatic migration service.
+ *
+ * @stable
+ */
 export class Migrator extends Context.Tag("thor/Migrator")<Migrator, MigratorService>() {}
 
 /**

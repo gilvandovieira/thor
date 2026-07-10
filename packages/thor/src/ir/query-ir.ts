@@ -339,7 +339,7 @@ export interface CallIR extends BaseIR {
   readonly args: ReadonlyArray<ExprNode>
 }
 
-/** Discriminated union accepted by guards, dialects, and execution. */
+/** @internal Low-level query IR is inspectable but not a v1 compatibility surface. */
 export type QueryIR = SelectIR | InsertIR | UpdateIR | DeleteIR | CallIR
 
 // --- ids --------------------------------------------------------------------

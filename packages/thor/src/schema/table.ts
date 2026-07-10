@@ -118,7 +118,11 @@ type ColsOf<T> = T extends { readonly [TableMeta]: { readonly columns: infer C }
 
 // --- Select -----------------------------------------------------------------
 
-/** The row shape returned when selecting every column of a table. */
+/**
+ * The row shape returned when selecting every column of a table.
+ *
+ * @stable
+ */
 export type Select<T extends AnyTable> = Simplify<{
   readonly [K in keyof ColsOf<T>]: ColSelect<ColsOf<T>[K]>
 }>
@@ -173,6 +177,7 @@ export type Update<T extends AnyTable> = Simplify<{
  *
  * @typeParam Name - Literal SQL table name.
  * @typeParam Cols - Named column record.
+ * @stable
  * @param name - SQL table name.
  * @param columns - Column definitions keyed by application property name.
  * @param options - Optional indexes and table-level constraints.

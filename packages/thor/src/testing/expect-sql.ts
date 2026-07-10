@@ -26,6 +26,7 @@ export interface SqlSnapshot {
 }
 
 /**
+ * @stable
  * @param query - Query builder result supporting `toSql()`.
  * @param dialect - Compilation dialect; defaults to PostgreSQL.
  * @returns Stable SQL, parameter metadata, and cache key.

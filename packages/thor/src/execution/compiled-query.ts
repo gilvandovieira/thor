@@ -32,6 +32,8 @@ export type CompiledCardinality = "all" | "one" | "maybeOne" | "run"
  * A compiled handle owns its validated shape, SQL, parameter plan and decoder, so
  * it is already the fully-cached hot path. These options tune the two remaining
  * knobs at execution time without changing the query API shape.
+ *
+ * @stable
  */
 export interface CompileOptions {
   /**
@@ -50,6 +52,8 @@ export interface CompileOptions {
    * Override the execution mode for this handle (spec §10). `unsafe-hot` skips
    * row decoding and must be opted into explicitly (spec §10.3); capability
    * guards are always retained. Defaults to inheriting the active mode.
+   *
+   * @experimental Modes containing unsafe-hot are outside the stable safety boundary.
    */
   readonly mode?: CanonicalExecutionMode
 }
@@ -85,6 +89,7 @@ export interface CompiledQuery<
   /**
    * Binds per-call values and executes the retained query plan.
    *
+   * @stable
    * @param args - Named values for this execution only.
    * @returns An Effect yielding the terminal query result.
    */
@@ -101,6 +106,7 @@ export type CompilableEffect<
   /**
    * Validates and compiles this query shape for one dialect (spec §9.4).
    *
+   * @stable
    * @typeParam D - Selected dialect type.
    * @param dialect - Target dialect; defaults to PostgreSQL.
    * @param options - Per-compile precompilation options.
@@ -114,6 +120,7 @@ export type CompilableEffect<
    * Compiles and forces server-side prepared-statement reuse where the driver
    * supports it (spec §9.4 `compilePrepared`).
    *
+   * @stable
    * @typeParam D - Selected dialect type.
    * @param dialect - Target dialect; defaults to PostgreSQL.
    * @returns A reusable executable handle that prepares.
@@ -126,6 +133,7 @@ export type CompilableEffect<
    * opt-in for already validated queries (spec §9.4 `compileUnsafeHot`, §10.3).
    * Capability guards are still enforced.
    *
+   * @experimental Unsafe-hot behavior is explicitly outside the stable safety boundary.
    * @typeParam D - Selected dialect type.
    * @param dialect - Target dialect; defaults to PostgreSQL.
    * @returns A reusable executable handle running in `unsafe-hot` mode.
@@ -145,6 +153,7 @@ export interface CompilableTerminal<
   /**
    * Validates and compiles this query shape for one dialect (spec §9.4).
    *
+   * @stable
    * @typeParam D - Selected dialect type.
    * @param dialect - Target dialect; defaults to PostgreSQL.
    * @param options - Per-compile precompilation options.
@@ -158,6 +167,7 @@ export interface CompilableTerminal<
    * Compiles and forces server-side prepared-statement reuse where the driver
    * supports it (spec §9.4 `compilePrepared`).
    *
+   * @stable
    * @typeParam D - Selected dialect type.
    * @param dialect - Target dialect; defaults to PostgreSQL.
    * @returns A reusable executable handle that prepares.
@@ -170,6 +180,7 @@ export interface CompilableTerminal<
    * opt-in for already validated queries (spec §9.4 `compileUnsafeHot`, §10.3).
    * Capability guards are still enforced.
    *
+   * @experimental Unsafe-hot behavior is explicitly outside the stable safety boundary.
    * @typeParam D - Selected dialect type.
    * @param dialect - Target dialect; defaults to PostgreSQL.
    * @returns A reusable executable handle running in `unsafe-hot` mode.
@@ -252,6 +263,7 @@ class CompiledQueryImpl<
   }
 
   /**
+   * @stable
    * @param args - Named values for this execution only.
    * @returns An Effect yielding the terminal query result.
    */
