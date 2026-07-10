@@ -26,6 +26,28 @@ export interface TimingOptions {
   readonly samples?: number
 }
 
+/** Structured verdict for an aspirational benchmark target. */
+export interface BenchmarkTargetAssessment {
+  readonly valueNs: number
+  readonly targetNs: number
+  readonly status: "met" | "over"
+  readonly ratio: number
+  readonly excessNs: number
+}
+
+/** Classifies one measured value against an inclusive upper target. */
+export const assessBenchmarkTarget = (valueNs: number, targetNs: number): BenchmarkTargetAssessment => {
+  if (!Number.isFinite(valueNs) || valueNs < 0) throw new Error(`valueNs must be finite and non-negative; received ${valueNs}`)
+  if (!Number.isFinite(targetNs) || targetNs <= 0) throw new Error(`targetNs must be finite and positive; received ${targetNs}`)
+  return {
+    valueNs,
+    targetNs,
+    status: valueNs <= targetNs ? "met" : "over",
+    ratio: valueNs / targetNs,
+    excessNs: Math.max(0, valueNs - targetNs)
+  }
+}
+
 const sampleCount = (requested?: number): number => {
   const fromEnv = Number(process.env.BENCH_SAMPLES)
   const value = requested ?? (Number.isInteger(fromEnv) && fromEnv > 0 ? fromEnv : DEFAULT_SAMPLES)

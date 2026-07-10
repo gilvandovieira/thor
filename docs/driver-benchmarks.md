@@ -263,6 +263,18 @@ Bun is a bit faster on the decode loop and SQLite (JavaScriptCore + its native
 SQLite), but the shape is identical: Thor's own code is a few µs, dominated by
 the Effect runtime, and ~85% of a microsecond-fast query on both runtimes.
 
+### Independent v1 stage matrix (`bench:stages`)
+
+W1 separates the in-memory pipeline instead of presenting one "ORM benchmark"
+number. `pnpm bench:build`, `bench:ir`, `bench:compile`, `bench:decode`, and
+`bench:effect` each time one boundary. `pnpm bench:cache` retains the dedicated
+cold/warm/prepared cache report. `pnpm bench:runtime-node` and
+`bench:runtime-bun` execute the identical stage matrix under each runtime.
+
+Every stage command prints median/range/throughput plus a final structured
+`JSON:` line. These measurements exclude database, disk, network, and native
+driver time.
+
 ## Hot-path axes & staged regression gate (`bench:hotpath`)
 
 `scripts/bench-hotpath.mts` isolates the wins from the optimization work (cache
@@ -283,7 +295,11 @@ Derived (× faster, bigger = better):
 - **cold → warm: ~10–11× faster** — "compile cache hit must be much faster than cold compile" (§15.16). ✅
 - **warm → prepared: ~1.4× faster** — the handle shaves the last µs off the hot path.
 - **bulk safe → unsafe: ~14–16× faster** — the decode-skip lever, opt-in only.
-- `point.prepared` ≈ **2.3 µs** (Node), **~2.05 µs** (Bun) — at/just over the **1–2 µs target** (§15.12); the residual is the Effect runtime floor.
+- `point.warm` ≈ **3.3 µs** currently reports **OVER** against the ≤2 µs warm
+  cached target (§19.3). This is tracked honestly as a target, not a release promise.
+- `point.prepared` ≈ **2.3 µs** (Node), **~2.05 µs** (Bun) is reported separately
+  against a ≤1 µs boundary for the aspirational sub-microsecond smallest-path
+  ideal; the residual is largely the Effect runtime floor.
 - The join + aggregate handle (`advanced.prepared` ~2.4 µs) stays in the **same
   envelope** as the simple prepared point query — Epic J added no measurable hot-path cost.
 - Declared routine execution (`routine.prepared` ~1.63 µs) also stays inside the
@@ -305,7 +321,8 @@ performance-sensitive change:
 
 - [ ] Add/extend a `bench:*` scenario covering **build, IR, compile, capability-check, and execute** cost where applicable.
 - [ ] Confirm the compile/guard **cache hit** stays ≫ cold (`bench:hotpath`).
-- [ ] Keep `point.prepared` within the **1–2 µs** target (or justify the regression).
+- [ ] Track `point.warm` against the **≤2 µs** target and explain movement; do not
+  substitute the faster prepared path for the warm-cache metric.
 - [ ] Run `pnpm bench:gate` locally; update the baseline (`pnpm bench:baseline`) only with a deliberate, reviewed change.
 - [ ] Record notable numbers here.
 

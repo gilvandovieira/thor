@@ -1,10 +1,10 @@
 /**
- * Hot-path overhead benchmark + staged CI gate (spec §15.12, §15.16, Epics I2/I3).
+ * Hot-path overhead benchmark + staged CI gate (spec §19.3, Epics I2/I3, W3).
  *
  * Measures Thor's own overhead (no I/O — a constant driver + shared runtime)
  * across the axes that the perf work targets:
  *   - cold      : query rebuilt every call (compile + guard run each time)
- *   - warm      : stable IR reused → compile/guard memoized (cache hit, I2)
+ *   - warm      : stable IR reused → compile/guard memoized (W3 target path)
  *   - prepared  : `.prepare()` handle → precompiled decoder + per-dialect compile (I3)
  *   - decode    : bulk read in `safe` vs `unsafe` mode → decode-skip win (Epic E)
  *
@@ -24,6 +24,7 @@ import {
   formatRange,
   formatThroughput,
   measureSync,
+  assessBenchmarkTarget,
   noiseLabel,
   percentFaster,
   runtimeName,
@@ -118,6 +119,10 @@ const samples: Sample[] = [
 const by = Object.fromEntries(samples.map((s) => [s.label, s.nsPerOp]))
 const repeatedSavingsNs = (slowerNs: number, fasterNs: number, operations = 100_000) =>
   (slowerNs - fasterNs) * operations
+const targets = {
+  "point.warm": assessBenchmarkTarget(by["point.warm"]!, 2_000),
+  "point.prepared": assessBenchmarkTarget(by["point.prepared"]!, 1_000)
+} as const
 
 console.log("\nThor hot-path overhead — Thor's cost only, with no database or network\n" + "-".repeat(100))
 console.log(timingLegend(samples[0]!.sampleCount))
@@ -142,9 +147,12 @@ console.log(
   `  • Checking 100 returned rows costs ${formatDuration(by["bulk.safe"]! - by["bulk.unsafe"]!)} here; unsafe mode skips those checks and is opt-in.`
 )
 console.log(
-  `  • Prepared point target (≤ 2 µs): ${by["point.prepared"]! <= 2000 ? "MET" : "OVER"} at ${formatDuration(by["point.prepared"]!)}.`
+  `  • Warm cached target (≤ 2 µs): ${targets["point.warm"].status.toUpperCase()} at ${formatDuration(targets["point.warm"].valueNs)} (${targets["point.warm"].ratio.toFixed(2)}× target).`
 )
-console.log(`\nJSON:${JSON.stringify(by)}`)
+console.log(
+  `  • Smallest prepared-path ideal boundary (≤ 1 µs): ${targets["point.prepared"].status.toUpperCase()} at ${formatDuration(targets["point.prepared"].valueNs)}.`
+)
+console.log(`\nJSON:${JSON.stringify({ runtime: runtimeName(), metrics: by, targets })}`)
 
 await pointRt.dispose()
 await bulkRt.dispose()

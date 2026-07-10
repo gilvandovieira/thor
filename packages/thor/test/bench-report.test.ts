@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  assessBenchmarkTarget,
   formatDuration,
   formatRange,
   formatTimeChange,
@@ -39,5 +40,24 @@ describe("benchmark reporting", () => {
     expect(formatTimeChange(10_000, 12_000)).toBe("20% more")
     expect(timingLegend(5)).toContain("median of 5 samples")
     expect(timingLegend(5)).toContain("one millionth of a second")
+  })
+
+  it("classifies inclusive hot-path targets with structured excess", () => {
+    expect(assessBenchmarkTarget(2_000, 2_000)).toEqual({
+      valueNs: 2_000,
+      targetNs: 2_000,
+      status: "met",
+      ratio: 1,
+      excessNs: 0
+    })
+    expect(assessBenchmarkTarget(3_200, 2_000)).toEqual({
+      valueNs: 3_200,
+      targetNs: 2_000,
+      status: "over",
+      ratio: 1.6,
+      excessNs: 1_200
+    })
+    expect(() => assessBenchmarkTarget(Number.NaN, 2_000)).toThrow(/valueNs/)
+    expect(() => assessBenchmarkTarget(1_000, 0)).toThrow(/targetNs/)
   })
 })
