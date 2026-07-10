@@ -77,6 +77,10 @@
     "./introspect": {
       "types": "./dist/introspect/index.d.ts",
       "default": "./dist/introspect/index.js"
+    },
+    "./skills": {
+      "types": "./dist/skills/index.d.ts",
+      "default": "./dist/skills/index.js"
     }
   },
   "scripts": {

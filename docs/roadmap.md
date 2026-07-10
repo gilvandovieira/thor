@@ -352,7 +352,7 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | R | Routines v1 (functions/procedures, typed + guarded) | §14 | beta | routine v0✅, J✅ | ✅ R1–R6 (OUT-params follow-up) |
 | S | Observability (metadata, spans, param-redaction) | §17 | beta | annotations (§7.4 v0) | ✅ S1–S5 |
 | T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI v0; ⟵ P, U, W1 (T3 ⟵ M5✅) | ❌ |
-| U | LLM skills (11 skill files + manifest + export) | §21 | beta | — (U4 ⟵ T) | ❌ (unblocked) |
+| U | LLM skills (11 skill files + manifest + export) | §21 | beta | — (U4 ⟵ T) | 🟡 U1–U3/U5 ✅ · U4 ⟵ T |
 | V | API stability levels + error model v1 | §6, §22 | beta | errors v0✅; ⟵ Q | 🟡 (V1 done) |
 | W | Benchmarks v1 + docs v1 (cold/warm/hot, Node+Bun) | §19, §23 | beta | I✅, L✅; W2 ⟵ N, W5 ⟵ Q/P/U/V | 🟡 |
 
@@ -592,13 +592,18 @@ implemented and verified. ✅
 
 ## Epic U — LLM skills (§21, beta)
 
-| # | Task | Spec | Acceptance |
-|---|---|---|---|
-| U1 | Skill file format (goal/use-when/checks/safe+unsafe patterns/examples/verification) | §21.3 | one canonical shape |
-| U2 | Author the 11 required skills | §21.4 | `schema`, `query`, `effect-execution`, `migrations`, `capabilities`, `routines`, `testing`, `benchmarks`, `dialects`, `debugging`, `safety` |
-| U3 | Skill manifest | §21.5 | machine-readable index of skills |
-| U4 | `thor skills export` (md + json, `--to`) | §20.5, §21 | writes skills into `./.agents/skills/thor` |
-| U5 | LLM usage invariant | §21.6 | skills encode capability-checking + no-raw-interpolation safety rules |
+| # | Status | Task | Spec | Acceptance |
+|---|---|---|---|---|
+| U1 | ✅ | Skill file format (goal/use-when/checks/safe+unsafe patterns/examples/verification) | §21.3 | `skillMarkdown` renders the canonical §21.3 shape; asserted per skill |
+| U2 | ✅ | Author the 11 required skills | §21.4 | `SKILLS` authors all 11 (`schema`/`query`/`effect-execution`/`migrations`/`capabilities`/`routines`/`testing`/`benchmarks`/`dialects`/`debugging`/`safety`) against Thor's real API, each with its spec hard rule |
+| U3 | ✅ | Skill manifest | §21.5 | `skillManifest()` → machine-readable index matching the authored set |
+| U4 | 🟡 | `thor skills export` (md + json, `--to`) | §20.5, §21 | **export logic done** — `skillFiles("md"\|"json")` renders the fs-free file set (per-skill `.skill.md` + README + manifest.json, or a single `skills.json`); the CLI wiring is deferred to Epic T (T5) |
+| U5 | ✅ | LLM usage invariant | §21.6 | skills encode capability-checking, prefer-declared-APIs, and no-raw-interpolation/`unsafeSql` rules; `skills.test.ts` asserts the invariant |
+
+> **U1–U3, U5 ✅.** The 11 skills, the §21.3 shape, the manifest, and the LLM
+> usage invariant ship in `packages/thor/src/skills` (subpath `/skills`). **U4 is
+> 🟡:** the export *rendering* (`skillFiles`) is complete and tested; only the
+> `thor skills export` CLI command remains, landing with Epic T (T5).
 
 ## Epic V — API stability + error model v1 (§6, §22, beta)
 
