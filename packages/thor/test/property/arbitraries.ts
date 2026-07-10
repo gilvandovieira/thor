@@ -118,7 +118,7 @@ const buildLeaf = (leaf: PredicateLeaf): ExprNode => {
     case "null":
       return isNull(fuzzRows.score)
     case "volatile":
-      return { _tag: "RawExpr", sql: `volatile_${leaf.id}()`, params: [] }
+      return { _tag: "RawExpr", strings: [`volatile_${leaf.id}()`], values: [] }
   }
 }
 
@@ -166,7 +166,7 @@ export const selectIrArbitrary: fc.Arbitrary<SelectIR> = selectRecipeArbitrary.m
   const selection: ReadonlyArray<SelectionField> = recipe.aggregate
     ? [{
         alias: "total",
-        expr: { _tag: "RawExpr", sql: "count(*)", params: [] },
+        expr: { _tag: "RawExpr", strings: ["count(*)"], values: [] },
         codec: Schema.Number
       }]
     : [

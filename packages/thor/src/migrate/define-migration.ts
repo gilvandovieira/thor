@@ -8,6 +8,7 @@
 import { Effect } from "effect"
 import { MigrationError } from "../errors/index.js"
 import { Database } from "../execution/database.js"
+import type { UnsafeSqlNode } from "../ir/query-ir.js"
 
 /** A raw SQL statement (from the `sql` tagged template). */
 export interface SqlStatement {
@@ -61,36 +62,48 @@ export const isSqlStatement = (step: MigrationStep): step is SqlStatement =>
  * Authors a trusted SQL migration step.
  *
  * @param strings - Static template chunks.
- * @param values - Values converted directly to text without parameter binding.
+ * @param values - Dynamic text explicitly marked with `unsafeSql`.
  * @returns A trimmed tagged SQL statement.
- * @remarks Only interpolate trusted values; migration templates are not parameterized.
+ * @remarks Migration templates are not parameterized; ordinary interpolation is rejected.
  */
-export const sql = (strings: TemplateStringsArray, ...values: ReadonlyArray<unknown>): SqlStatement => {
+export const sql = (strings: TemplateStringsArray, ...values: ReadonlyArray<UnsafeSqlNode>): SqlStatement => {
   let out = ""
   strings.forEach((chunk, i) => {
     out += chunk
-    if (i < values.length) out += String(values[i])
+    if (i < values.length) {
+      const value = values[i]
+      if (value?._tag !== "UnsafeSql") {
+        throw new TypeError("Migration SQL interpolation requires unsafeSql(...)")
+      }
+      out += value.sql
+    }
   })
   return { _tag: "SqlStatement", sql: out.trim() }
 }
 
 /**
  * Effect migration step that runs a raw SQL statement inside the migration
- * transaction (spec §13.4). Values are inlined as text — migrations take no
- * bound params.
+ * transaction (spec §13.4). Dynamic text requires `unsafeSql` — migrations
+ * take no bound params.
  *
  * @param strings - Static template chunks.
- * @param values - Values converted directly to text without parameter binding.
+ * @param values - Dynamic text explicitly marked with `unsafeSql`.
  * @returns An Effect executing the script through the active `Database` driver.
  */
 export const rawSql = (
   strings: TemplateStringsArray,
-  ...values: ReadonlyArray<unknown>
+  ...values: ReadonlyArray<UnsafeSqlNode>
 ): Effect.Effect<void, MigrationError, Database> => {
   let text = ""
   strings.forEach((chunk, i) => {
     text += chunk
-    if (i < values.length) text += String(values[i])
+    if (i < values.length) {
+      const value = values[i]
+      if (value?._tag !== "UnsafeSql") {
+        throw new TypeError("Migration rawSql interpolation requires unsafeSql(...)")
+      }
+      text += value.sql
+    }
   })
   const statement = text.trim()
   return Effect.flatMap(Database, (db) =>

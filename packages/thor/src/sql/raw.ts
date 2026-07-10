@@ -1,11 +1,12 @@
 /**
- * Raw SQL expression escape hatch. Values interpolated as `${param(...)}` stay
- * parameterized; everything else is treated as trusted SQL text.
+ * Raw SQL expression escape hatch. Parameters and identifiers stay structural
+ * until dialect compilation; dynamic text requires an explicit unsafe brand.
  *
  * @module sql/raw
  */
-import type { ExprNode, ParamNode, RawExprNode } from "../ir/query-ir.js"
-import { isColumn } from "./expressions.js"
+import type { AnyColumn } from "../schema/column.js"
+import type { ParamNode, RawExprInterpolation, RawExprNode, UnsafeSqlNode } from "../ir/query-ir.js"
+import { columnRef, isColumn } from "./expressions.js"
 
 /**
  * @param value - Unknown runtime value.
@@ -14,9 +15,26 @@ import { isColumn } from "./expressions.js"
 const isParam = (value: unknown): value is ParamNode =>
   typeof value === "object" && value !== null && (value as { _tag?: string })._tag === "Param"
 
+/** @param value - Unknown runtime value. @returns Whether it is explicitly unsafe SQL text. */
+const isUnsafeSql = (value: unknown): value is UnsafeSqlNode =>
+  typeof value === "object" && value !== null && (value as { _tag?: string })._tag === "UnsafeSql"
+
 /**
- * Tagged template producing a raw expression node. Interpolated params/columns
- * become placeholders; strings/numbers are inlined as trusted text.
+ * Marks dynamic text for deliberate, unescaped inclusion in SQL.
+ *
+ * @param sql - Trusted SQL syntax or identifier text controlled by the application.
+ * @returns An explicitly unsafe structural SQL fragment.
+ * @remarks Never pass request data or other untrusted input to this function.
+ */
+export const unsafeSql = (sql: string): UnsafeSqlNode => ({ _tag: "UnsafeSql", sql })
+
+/** Values accepted inside a raw SQL tagged template. */
+export type RawInterpolation = ParamNode | AnyColumn | UnsafeSqlNode
+
+/**
+ * Tagged template producing a raw expression node. Interpolated parameters and
+ * columns are compiled by the active dialect; dynamic SQL text must be wrapped
+ * with `unsafeSql`.
  *
  * @param strings - Static template chunks supplied by the tag call.
  * @param values - Interpolated parameters, columns, or trusted SQL values.
@@ -26,25 +44,13 @@ const isParam = (value: unknown): value is ParamNode =>
  * sql`lower(${users.email}) = lower(${param("email", Schema.String)})`
  * ```
  */
-export const rawExpr = (strings: TemplateStringsArray, ...values: ReadonlyArray<unknown>): RawExprNode => {
-  const params: ParamNode[] = []
-  let sql = ""
-  strings.forEach((chunk, i) => {
-    sql += chunk
-    if (i < values.length) {
-      const value = values[i]
-      if (isParam(value)) {
-        params.push(value)
-        sql += `$${params.length}`
-      } else if (isColumn(value)) {
-        sql += `"${value.def.table}"."${value.def.name}"`
-      } else {
-        sql += String(value)
-      }
-    }
+export const rawExpr = (strings: TemplateStringsArray, ...values: ReadonlyArray<RawInterpolation>): RawExprNode => ({
+  _tag: "RawExpr",
+  strings: [...strings],
+  values: values.map((value): RawExprInterpolation => {
+    if (isParam(value)) return value
+    if (isColumn(value)) return columnRef(value)
+    if (isUnsafeSql(value)) return value
+    throw new TypeError("Raw SQL interpolation accepts only param(...), columns, or unsafeSql(...)")
   })
-  return { _tag: "RawExpr", sql, params }
-}
-
-/** Re-export for symmetry with predicate helpers. */
-export type { ExprNode }
+})

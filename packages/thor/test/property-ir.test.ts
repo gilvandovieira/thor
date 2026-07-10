@@ -114,8 +114,10 @@ const rewriteExpressionValues = (node: ExprNode, salt: number): ExprNode => {
     case "RawExpr":
       return {
         ...node,
-        params: node.params.map((parameter) =>
-          rewriteExpressionValues(parameter, salt) as ParamNode
+        values: node.values.map((value) =>
+          value._tag === "Param"
+            ? rewriteExpressionValues(value, salt) as ParamNode
+            : value
         )
       }
     case "ScalarSubquery":
@@ -363,12 +365,12 @@ describe("Epic H property and fuzz invariants", () => {
         fc.uniqueArray(fc.nat({ max: 1_000_000 }), { minLength: 2, maxLength: 12 }),
         fc.array(fc.constantFrom("and" as const, "or" as const), { minLength: 1, maxLength: 12 }),
         (ids, connectors) => {
-          let predicate: ExprNode = { _tag: "RawExpr", sql: `volatile_${ids[0]}()`, params: [] }
+          let predicate: ExprNode = { _tag: "RawExpr", strings: [`volatile_${ids[0]}()`], values: [] }
           for (let index = 1; index < ids.length; index++) {
             const next: ExprNode = {
               _tag: "RawExpr",
-              sql: `volatile_${ids[index]}()`,
-              params: []
+              strings: [`volatile_${ids[index]}()`],
+              values: []
             }
             predicate = connectors[(index - 1) % connectors.length] === "and"
               ? and(predicate, next)

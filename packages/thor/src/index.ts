@@ -85,7 +85,7 @@ export {
   type WindowSpec,
   type WindowableExpr
 } from "./sql/advanced-expressions.js"
-export { rawExpr as sql } from "./sql/raw.js"
+export { rawExpr as sql, unsafeSql } from "./sql/raw.js"
 
 // Schema types
 export {

@@ -38,7 +38,13 @@ const expressionShape = (node: ExprNode): unknown => {
     case "IsNull":
       return [node._tag, expressionShape(node.expr), node.negated]
     case "RawExpr":
-      return [node._tag, node.sql, node.params.map(expressionShape)]
+      return [
+        node._tag,
+        node.strings,
+        node.values.map((value) => value._tag === "UnsafeSql"
+          ? [value._tag, value.sql]
+          : expressionShape(value))
+      ]
     case "ScalarSubquery":
       return [node._tag, queryShape(node.query)]
     case "Exists":

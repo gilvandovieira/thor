@@ -10,7 +10,9 @@ import {
   defineMigration,
   diffSchema,
   guardOperations,
+  rawSql,
   sql,
+  unsafeSql,
   tableToCreateOp,
   type AutoMigrationPolicy,
   type MigrationOperation
@@ -206,9 +208,23 @@ describe("manual migration checksums", () => {
     expect(checksum(changedDown)).not.toBe(checksum(migration))
   })
 
-  it("trims and interpolates authored SQL before checksumming", () => {
+  it("requires and fingerprints an explicit revision for Effect migration steps", () => {
+    const effectMigration = defineMigration({
+      id: "202607091500_backfill",
+      name: "backfill",
+      revision: "backfill-v1",
+      up: rawSql`update users set display_name = email`
+    })
+    expect(checksum({ ...effectMigration, revision: "backfill-v2" })).not.toBe(checksum(effectMigration))
+  })
+
+  it("requires an explicit unsafe boundary for dynamic migration SQL", () => {
     const table = "users"
 
-    expect(sql`  drop table ${table};  `).toStrictEqual({ _tag: "SqlStatement", sql: "drop table users;" })
+    expect(() => sql`drop table ${table as never}`).toThrow("Migration SQL interpolation requires unsafeSql(...)")
+    expect(sql`  drop table ${unsafeSql(table)};  `).toStrictEqual({
+      _tag: "SqlStatement",
+      sql: "drop table users;"
+    })
   })
 })

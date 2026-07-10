@@ -57,18 +57,34 @@ const compileSource = (context: CompileContext, source: QuerySource): string => 
 }
 
 /**
- * Appends raw-expression parameters and rebases its local placeholders.
+ * Compiles structural raw-expression fragments for the active dialect.
  *
  * @param context - Active compiler state.
  * @param node - Trusted raw expression node.
- * @returns Raw SQL with dialect placeholders.
+ * @returns Raw SQL with dialect placeholders and identifier quoting.
  */
 const compileRaw = (context: CompileContext, node: Extract<ExprNode, { readonly _tag: "RawExpr" }>): string => {
-  const offset = context.params.length
-  context.params.push(...node.params)
-  return node.sql.replace(/\$(\d+)/g, (_, localIndex: string) =>
-    context.dialect.placeholder(offset + Number(localIndex))
-  )
+  let sql = ""
+  for (let index = 0; index < node.strings.length; index++) {
+    sql += node.strings[index]
+    const value = node.values[index]
+    if (!value) continue
+    switch (value._tag) {
+      case "Param":
+        context.params.push(value)
+        sql += context.dialect.placeholder(context.params.length)
+        break
+      case "ColumnRef":
+        sql += value.table
+          ? `${context.dialect.quoteIdent(value.table)}.${context.dialect.quoteIdent(value.column)}`
+          : context.dialect.quoteIdent(value.column)
+        break
+      case "UnsafeSql":
+        sql += value.sql
+        break
+    }
+  }
+  return sql
 }
 
 /**
