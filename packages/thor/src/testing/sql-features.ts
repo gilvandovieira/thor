@@ -14,11 +14,11 @@
  */
 import { Effect, Either, type Layer, Option, Schema } from "effect"
 import { db } from "../sql/query-builder.js"
-import { and, eq, gt, isNull, or } from "../sql/predicates.js"
+import { and, eq, gt, isNull, not, or } from "../sql/predicates.js"
 import { asc, desc, param } from "../sql/expressions.js"
 import { avg, count, excluded, exists, max, min, rowNumber, scalar, sum } from "../sql/advanced-expressions.js"
 import { alias, defineTable } from "../schema/table.js"
-import { integer, text, timestamp, uuid } from "../schema/index.js"
+import { integer, SafeIntegerCodec, text, timestamp, uuid } from "../schema/index.js"
 import type { Capability } from "../capabilities/capability.js"
 import { isSatisfied } from "../capabilities/matrix.js"
 import type { Dialect } from "../dialect.js"
@@ -246,7 +246,7 @@ export const runSqlFeatureIntegration = (api: ContractTestApi, options: SqlFeatu
           if (Either.isLeft(result)) {
             // Cardinality/constraint errors mean the SQL executed; driver/decode failures are defects.
             const tag = (result.left as { readonly _tag?: string })._tag
-            expect(tag !== "DriverError" && tag !== "DecodeError").toBe(true)
+            if (tag === "DriverError" || tag === "DecodeError") throw result.left
           }
         })
       } else {
@@ -262,7 +262,7 @@ export const runSqlFeatureIntegration = (api: ContractTestApi, options: SqlFeatu
 
 const emailParam = param("email", Schema.String)
 const textArg = { dataType: "text" as const, codec: Schema.String }
-const integerArg = { dataType: "integer" as const, codec: Schema.Number }
+const integerArg = { dataType: "integer" as const, codec: SafeIntegerCodec }
 const lowerRoutine = defineFunction("lower", {
   args: [textArg],
   returns: textArg,
@@ -335,6 +335,20 @@ export const LEVEL_1_2_FEATURES: ReadonlyArray<SqlFeature> = [
     assertResult: [{ id: "u1" }]
   }),
   defineSqlFeatureSuite({
+    id: "select.where.not",
+    level: 1,
+    requires: [],
+    build: ({ users }) => db.select({ id: users.id }).from(users).where(not(eq(users.email, emailParam))),
+    assertSql: {
+      postgres: 'SELECT "users"."id" AS "id" FROM "users" WHERE NOT ("users"."email" = $1)',
+      sqlite: 'SELECT "users"."id" AS "id" FROM "users" WHERE NOT ("users"."email" = ?)',
+      mysql: "SELECT `users`.`id` AS `id` FROM `users` WHERE NOT (`users`.`email` = ?)"
+    },
+    args: { email: "blocked@x.c" },
+    driverRows: [{ id: "u1" }],
+    assertResult: [{ id: "u1" }]
+  }),
+  defineSqlFeatureSuite({
     id: "select.orderLimitOffset",
     level: 1,
     requires: [],
@@ -353,17 +367,42 @@ export const LEVEL_1_2_FEATURES: ReadonlyArray<SqlFeature> = [
     level: 1,
     requires: [],
     build: ({ users }) => db.insert(users).values({ email: "a@b.c", name: "A" }),
-    assertSql: {},
+    assertSql: {
+      postgres: 'INSERT INTO "users" ("email", "name") VALUES ($1, $2)',
+      sqlite: 'INSERT INTO "users" ("email", "name") VALUES (?, ?)',
+      mysql: "INSERT INTO `users` (`email`, `name`) VALUES (?, ?)"
+    },
     exec: "run",
     driverRowCount: 1,
     assertResult: { rowCount: 1 }
+  }),
+  defineSqlFeatureSuite({
+    id: "insert.many",
+    level: 1,
+    requires: [],
+    build: ({ users }) => db.insert(users).values([
+      { email: "a@b.c", name: "A" },
+      { email: "b@b.c", name: "B" }
+    ]),
+    assertSql: {
+      postgres: 'INSERT INTO "users" ("email", "name") VALUES ($1, $2), ($3, $4)',
+      sqlite: 'INSERT INTO "users" ("email", "name") VALUES (?, ?), (?, ?)',
+      mysql: "INSERT INTO `users` (`email`, `name`) VALUES (?, ?), (?, ?)"
+    },
+    exec: "run",
+    driverRowCount: 2,
+    assertResult: { rowCount: 2 }
   }),
   defineSqlFeatureSuite({
     id: "update.where",
     level: 1,
     requires: [],
     build: ({ users }) => db.update(users).set({ name: "N" }).where(eq(users.email, emailParam)),
-    assertSql: {},
+    assertSql: {
+      postgres: 'UPDATE "users" SET "name" = $1 WHERE "users"."email" = $2',
+      sqlite: 'UPDATE "users" SET "name" = ? WHERE "users"."email" = ?',
+      mysql: "UPDATE `users` SET `name` = ? WHERE `users`.`email` = ?"
+    },
     exec: "run",
     args: { email: "a@b.c" },
     driverRowCount: 1,
@@ -374,7 +413,11 @@ export const LEVEL_1_2_FEATURES: ReadonlyArray<SqlFeature> = [
     level: 1,
     requires: [],
     build: ({ users }) => db.delete(users).where(eq(users.email, emailParam)),
-    assertSql: {},
+    assertSql: {
+      postgres: 'DELETE FROM "users" WHERE "users"."email" = $1',
+      sqlite: 'DELETE FROM "users" WHERE "users"."email" = ?',
+      mysql: "DELETE FROM `users` WHERE `users`.`email` = ?"
+    },
     exec: "run",
     args: { email: "a@b.c" },
     driverRowCount: 2,
@@ -468,6 +511,38 @@ export const ADVANCED_SQL_FEATURES: ReadonlyArray<SqlFeature> = [
     },
     driverRows: [{ email: "a@b.c", title: "Hello" }],
     assertResult: [{ email: "a@b.c", title: "Hello" }]
+  }),
+  defineSqlFeatureSuite({
+    id: "join.left",
+    level: 3,
+    requires: [],
+    build: ({ users, posts }) => db
+      .select({ email: users.email, title: posts.title })
+      .from(users)
+      .leftJoin(posts, eq(users.id, posts.userId)),
+    assertSql: {
+      postgres: 'SELECT "users"."email" AS "email", "posts"."title" AS "title" FROM "users" LEFT JOIN "posts" ON "users"."id" = "posts"."user_id"',
+      sqlite: 'SELECT "users"."email" AS "email", "posts"."title" AS "title" FROM "users" LEFT JOIN "posts" ON "users"."id" = "posts"."user_id"',
+      mysql: "SELECT `users`.`email` AS `email`, `posts`.`title` AS `title` FROM `users` LEFT JOIN `posts` ON `users`.`id` = `posts`.`user_id`"
+    },
+    driverRows: [{ email: "a@b.c", title: null }],
+    assertResult: [{ email: "a@b.c", title: null }]
+  }),
+  defineSqlFeatureSuite({
+    id: "join.right",
+    level: 3,
+    requires: ["select.rightJoin"],
+    build: ({ users, posts }) => db
+      .select({ email: users.email, title: posts.title })
+      .from(users)
+      .rightJoin(posts, eq(users.id, posts.userId)),
+    assertSql: {
+      postgres: 'SELECT "users"."email" AS "email", "posts"."title" AS "title" FROM "users" RIGHT JOIN "posts" ON "users"."id" = "posts"."user_id"',
+      sqlite: 'SELECT "users"."email" AS "email", "posts"."title" AS "title" FROM "users" RIGHT JOIN "posts" ON "users"."id" = "posts"."user_id"',
+      mysql: "SELECT `users`.`email` AS `email`, `posts`.`title` AS `title` FROM `users` RIGHT JOIN `posts` ON `users`.`id` = `posts`.`user_id`"
+    },
+    driverRows: [{ email: null, title: "Hello" }],
+    assertResult: [{ email: null, title: "Hello" }]
   }),
   defineSqlFeatureSuite({
     id: "subquery.exists.correlated",
@@ -600,6 +675,19 @@ export const ADVANCED_SQL_FEATURES: ReadonlyArray<SqlFeature> = [
     assertResult: [{ count: 1, sum: 30, avg: 30, min: 30, max: 30 }]
   }),
   defineSqlFeatureSuite({
+    id: "select.distinct",
+    level: 4,
+    requires: [],
+    build: ({ users }) => db.select({ name: users.name }).from(users).distinct(),
+    assertSql: {
+      postgres: 'SELECT DISTINCT "users"."name" AS "name" FROM "users"',
+      sqlite: 'SELECT DISTINCT "users"."name" AS "name" FROM "users"',
+      mysql: "SELECT DISTINCT `users`.`name` AS `name` FROM `users`"
+    },
+    driverRows: [{ name: "A" }],
+    assertResult: [{ name: "A" }]
+  }),
+  defineSqlFeatureSuite({
     id: "select.recursiveCte",
     level: 5,
     requires: ["select.recursiveCte"],
@@ -629,6 +717,34 @@ export const ADVANCED_SQL_FEATURES: ReadonlyArray<SqlFeature> = [
     },
     driverRows: [{ email: "a@b.c", title: "Hello" }],
     assertResult: [{ email: "a@b.c", title: "Hello" }]
+  }),
+  defineSqlFeatureSuite({
+    id: "select.set.intersect",
+    level: 5,
+    requires: ["select.setOperations"],
+    build: ({ users }) => db.select({ id: users.id }).from(users)
+      .intersect(db.select({ id: users.id }).from(users).where(isNull(users.name))),
+    assertSql: {
+      postgres: 'SELECT "users"."id" AS "id" FROM "users" INTERSECT SELECT "users"."id" AS "id" FROM "users" WHERE "users"."name" IS NULL',
+      sqlite: 'SELECT "users"."id" AS "id" FROM "users" INTERSECT SELECT "users"."id" AS "id" FROM "users" WHERE "users"."name" IS NULL',
+      mysql: "SELECT `users`.`id` AS `id` FROM `users` INTERSECT SELECT `users`.`id` AS `id` FROM `users` WHERE `users`.`name` IS NULL"
+    },
+    driverRows: [{ id: "u1" }],
+    assertResult: [{ id: "u1" }]
+  }),
+  defineSqlFeatureSuite({
+    id: "select.set.except",
+    level: 5,
+    requires: ["select.setOperations"],
+    build: ({ users }) => db.select({ id: users.id }).from(users)
+      .except(db.select({ id: users.id }).from(users).where(isNull(users.name))),
+    assertSql: {
+      postgres: 'SELECT "users"."id" AS "id" FROM "users" EXCEPT SELECT "users"."id" AS "id" FROM "users" WHERE "users"."name" IS NULL',
+      sqlite: 'SELECT "users"."id" AS "id" FROM "users" EXCEPT SELECT "users"."id" AS "id" FROM "users" WHERE "users"."name" IS NULL',
+      mysql: "SELECT `users`.`id` AS `id` FROM `users` EXCEPT SELECT `users`.`id` AS `id` FROM `users` WHERE `users`.`name` IS NULL"
+    },
+    driverRows: [{ id: "u1" }],
+    assertResult: [{ id: "u1" }]
   }),
   defineSqlFeatureSuite({
     id: "insert.onConflict",
@@ -709,7 +825,7 @@ export const ROUTINE_SQL_FEATURES: ReadonlyArray<SqlFeature> = [
       return db.select({ value: series.field("value") }).from(series)
     },
     assertSql: {
-      postgres: 'SELECT "series"."value" AS "value" FROM "generate_series"($1, $2) "series"("value")'
+      postgres: 'SELECT "series"."value" AS "value" FROM "generate_series"($1::integer, $2::integer) "series"("value")'
     },
     driverRows: [{ value: 1 }],
     assertResult: [{ value: 1 }]

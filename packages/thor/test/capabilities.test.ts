@@ -58,6 +58,13 @@ describe("capability matrices", () => {
     expect(statusOf(partial, "select.recursiveCte")).toBe("unknown")
   })
 
+  it("requires built-in matrices to declare every capability explicitly", () => {
+    for (const matrix of [PostgresCapabilities, SQLiteCapabilities, MySQLCapabilities]) {
+      expect(Object.keys(matrix.capabilities).sort()).toEqual([...ALL_CAPABILITIES].sort())
+      expect(ALL_CAPABILITIES.every((capability) => matrix.capabilities[capability] !== undefined)).toBe(true)
+    }
+  })
+
   it("captures backend-specific returning and DDL behavior", () => {
     expect(statusOf(SQLiteCapabilities, "insert.returning")).toBe("native")
     expect(statusOf(MySQLCapabilities, "insert.returning")).toBe("unsupported")

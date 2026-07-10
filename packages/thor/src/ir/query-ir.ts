@@ -9,7 +9,7 @@
  */
 import type { Schema } from "effect"
 import type { CapabilityBits } from "../capabilities/capability.js"
-import type { PgDataType } from "../schema/column.js"
+import type { SqlDataType } from "../schema/column.js"
 
 /** Estimated row count of an operation. */
 export type Cardinality = "zero" | "one" | "many"
@@ -37,7 +37,7 @@ export interface ColumnRefNode {
   readonly _tag: "ColumnRef"
   readonly table: string
   readonly column: string
-  readonly dataType: PgDataType
+  readonly dataType: SqlDataType
 }
 
 /** Named or inline-bound parameter carried through compilation. */
@@ -210,6 +210,8 @@ export interface TableFunctionSource {
   readonly schema?: string
   readonly name: string
   readonly args: ReadonlyArray<ExprNode>
+  /** Declared argument types retained for dialect overload resolution. */
+  readonly argTypes: ReadonlyArray<SqlDataType>
   readonly alias: string
   readonly columns: ReadonlyArray<string>
   readonly capabilities: CapabilityBits

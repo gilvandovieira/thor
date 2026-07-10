@@ -96,6 +96,11 @@ type ExecutionArguments<P extends NamedParams> = keyof P extends never
   ? [args?: Record<string, never>]
   : [args: { [K in keyof P]: P[K] }]
 type TerminalArguments<P extends NamedParams> = ExecutionArguments<P> | []
+type ExactTerminalArguments<P extends NamedParams, Args extends TerminalArguments<P>> = Args extends []
+  ? Args
+  : Args extends [infer Input]
+    ? Exclude<keyof Input, keyof P> extends never ? Args : never
+    : never
 type TerminalCallResult<
   P extends NamedParams,
   Output,
@@ -726,7 +731,7 @@ class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = Select
    * @param args - Values for named query parameters.
    * @returns An Effect requiring `Database` and yielding decoded rows.
    */
-  all<Args extends TerminalArguments<P>>(...args: Args): TerminalCallResult<P, ReadonlyArray<A>, QueryError, "all", Args> {
+  all<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, ReadonlyArray<A>, QueryError, "all", Args> {
     const effect = Effect.flatMap(Database, (db) => executeRows<A>(this.ir, this.fields, db, argsFrom(args)))
     return compilableEffect(effect, this.ir, this.fields, "all", executeCompiledRows<A>) as TerminalCallResult<P, ReadonlyArray<A>, QueryError, "all", Args>
   }
@@ -740,7 +745,7 @@ class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = Select
    * @throws {NotFoundError} Through the Effect error channel when no row exists.
    * @throws {TooManyRowsError} Through the Effect error channel when multiple rows exist.
    */
-  one<Args extends TerminalArguments<P>>(...args: Args): TerminalCallResult<P, A, QueryError | NotFoundError | TooManyRowsError, "one", Args> {
+  one<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, A, QueryError | NotFoundError | TooManyRowsError, "one", Args> {
     const effect = Effect.flatMap(
       Effect.flatMap(Database, (db) => executeRows<A>(this.ir, this.fields, db, argsFrom(args))),
       (rows) => exactlyOne(rows, "select.one")
@@ -758,7 +763,7 @@ class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = Select
    * @returns An Effect yielding `Option.none()` or `Option.some(row)`.
    * @throws {TooManyRowsError} Through the Effect error channel when multiple rows exist.
    */
-  maybeOne<Args extends TerminalArguments<P>>(...args: Args): TerminalCallResult<P, Option.Option<A>, QueryError | TooManyRowsError, "maybeOne", Args> {
+  maybeOne<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, Option.Option<A>, QueryError | TooManyRowsError, "maybeOne", Args> {
     const effect = Effect.flatMap(
       Effect.flatMap(Database, (db) => executeRows<A>(this.ir, this.fields, db, argsFrom(args))),
       (rows) => atMostOne(rows, "select.maybeOne")
@@ -928,7 +933,7 @@ class ReturningQuery<A, P extends NamedParams = {}> {
    * @param args - Named parameter values.
    * @returns An Effect yielding every returned row.
    */
-  all<Args extends TerminalArguments<P>>(...args: Args): TerminalCallResult<P, ReadonlyArray<A>, QueryError, "all", Args> {
+  all<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, ReadonlyArray<A>, QueryError, "all", Args> {
     const effect = Effect.flatMap(Database, (db) => executeRows<A>(this.ir, this.fields, db, argsFrom(args)))
     return compilableEffect(effect, this.ir, this.fields, "all", executeCompiledRows<A>) as TerminalCallResult<P, ReadonlyArray<A>, QueryError, "all", Args>
   }
@@ -940,7 +945,7 @@ class ReturningQuery<A, P extends NamedParams = {}> {
    * @throws {NotFoundError} Through the Effect error channel when no row is returned.
    * @throws {TooManyRowsError} Through the Effect error channel when multiple rows are returned.
    */
-  one<Args extends TerminalArguments<P>>(...args: Args): TerminalCallResult<P, A, QueryError | NotFoundError | TooManyRowsError, "one", Args> {
+  one<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, A, QueryError | NotFoundError | TooManyRowsError, "one", Args> {
     const operation = `${this.ir._tag}.one`
     const effect = Effect.flatMap(
       Effect.flatMap(Database, (db) => executeRows<A>(this.ir, this.fields, db, argsFrom(args))),
@@ -957,7 +962,7 @@ class ReturningQuery<A, P extends NamedParams = {}> {
    * @returns An Effect yielding zero or one returned row.
    * @throws {TooManyRowsError} Through the Effect error channel when multiple rows are returned.
    */
-  maybeOne<Args extends TerminalArguments<P>>(...args: Args): TerminalCallResult<P, Option.Option<A>, QueryError | TooManyRowsError, "maybeOne", Args> {
+  maybeOne<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, Option.Option<A>, QueryError | TooManyRowsError, "maybeOne", Args> {
     const operation = `${this.ir._tag}.maybeOne`
     const effect = Effect.flatMap(
       Effect.flatMap(Database, (db) => executeRows<A>(this.ir, this.fields, db, argsFrom(args))),
@@ -973,7 +978,7 @@ class ReturningQuery<A, P extends NamedParams = {}> {
    * @param args - Named parameter values.
    * @returns An Effect yielding the affected-row count.
    */
-  run<Args extends TerminalArguments<P>>(...args: Args): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
+  run<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
     const effect = Effect.flatMap(Database, (db) => executeCommand(this.ir, db, argsFrom(args)))
     return compilableEffect(effect, this.ir, this.fields, "run", executeCompiledCommand) as TerminalCallResult<P, CommandResult, QueryError, "run", Args>
   }
@@ -1139,7 +1144,7 @@ class InsertValues<T extends AnyTable, P extends NamedParams = {}> {
    * @param args - Named parameter values.
    * @returns An Effect yielding the affected-row count.
    */
-  run<Args extends TerminalArguments<P>>(...args: Args): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
+  run<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
     const ir = this.ir()
     const effect = Effect.flatMap(Database, (db) => executeCommand(ir, db, argsFrom(args)))
     return compilableEffect(effect, ir, NO_SELECTION, "run", executeCompiledCommand) as TerminalCallResult<P, CommandResult, QueryError, "run", Args>
@@ -1206,6 +1211,24 @@ class UpdateValues<T extends AnyTable, P extends NamedParams = {}> {
     }
   }
 
+  /** @returns Stable update-shape metadata without executing. */
+  inspect() {
+    return inspectIr(this.ir())
+  }
+
+  /**
+   * @param dialect - Target SQL dialect; defaults to PostgreSQL.
+   * @returns Compiled update SQL and parameter metadata.
+   */
+  toSql(dialect: Dialect = PostgresDialect): CompiledStatement {
+    return dialect.compileQuery(this.ir())
+  }
+
+  /** @returns Capabilities required by this update. */
+  requiredCapabilities(): ReadonlyArray<Capability> {
+    return bitsToCapabilities(queryCapabilityBits(this.ir()))
+  }
+
   /**
    * @param fields - Optional fields to return; omit for all columns.
    * @returns A row-returning update query.
@@ -1220,7 +1243,7 @@ class UpdateValues<T extends AnyTable, P extends NamedParams = {}> {
    * @param args - Named parameter values.
    * @returns An Effect yielding the affected-row count.
    */
-  run<Args extends TerminalArguments<P>>(...args: Args): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
+  run<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
     const ir = this.ir()
     const effect = Effect.flatMap(Database, (db) => executeCommand(ir, db, argsFrom(args)))
     return compilableEffect(effect, ir, NO_SELECTION, "run", executeCompiledCommand) as TerminalCallResult<P, CommandResult, QueryError, "run", Args>
@@ -1266,6 +1289,24 @@ class DeleteBuilder<T extends AnyTable, P extends NamedParams = {}> {
     }
   }
 
+  /** @returns Stable delete-shape metadata without executing. */
+  inspect() {
+    return inspectIr(this.ir())
+  }
+
+  /**
+   * @param dialect - Target SQL dialect; defaults to PostgreSQL.
+   * @returns Compiled delete SQL and parameter metadata.
+   */
+  toSql(dialect: Dialect = PostgresDialect): CompiledStatement {
+    return dialect.compileQuery(this.ir())
+  }
+
+  /** @returns Capabilities required by this delete. */
+  requiredCapabilities(): ReadonlyArray<Capability> {
+    return bitsToCapabilities(queryCapabilityBits(this.ir()))
+  }
+
   /**
    * @param fields - Optional fields to return; omit for all columns.
    * @returns A row-returning delete query.
@@ -1280,7 +1321,7 @@ class DeleteBuilder<T extends AnyTable, P extends NamedParams = {}> {
    * @param args - Named parameter values.
    * @returns An Effect yielding the affected-row count.
    */
-  run<Args extends TerminalArguments<P>>(...args: Args): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
+  run<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
     const ir = this.ir()
     const effect = Effect.flatMap(Database, (db) => executeCommand(ir, db, argsFrom(args)))
     return compilableEffect(effect, ir, NO_SELECTION, "run", executeCompiledCommand) as TerminalCallResult<P, CommandResult, QueryError, "run", Args>

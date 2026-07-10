@@ -10,6 +10,8 @@ import { PostgresMigrations } from "./migrations.js"
 import { dialectProfileHash } from "../capabilities/profile.js"
 
 const version = "3"
+/** @param level - Public isolation level. @returns PostgreSQL SQL spelling. */
+const isolationSql = (level: string): string => level.replace(/-/g, " ").toUpperCase()
 
 /** Complete PostgreSQL dialect consumed by builders, execution, and migrations. */
 export const PostgresDialect: Dialect = {
@@ -35,11 +37,25 @@ export const PostgresDialect: Dialect = {
    */
   comparison: (left, operator, right) =>
     `${left} ${operator === "like" ? "LIKE" : operator === "ilike" ? "ILIKE" : operator} ${right}`,
+  /** @param column - Candidate-row column. @returns PostgreSQL excluded-row syntax. */
+  excluded: (column) => `EXCLUDED.${PostgresDialect.quoteIdent(column)}`,
+  /** @param expression - Argument SQL. @param dataType - Declared type. @returns Explicitly typed PostgreSQL argument. */
+  routineArgument: (expression, dataType) => `${expression}::${dataType}`,
   /**
    * @param ir - Runtime query representation.
    * @returns Compiled PostgreSQL query data.
    */
   compileQuery: (ir) => compileQuery(ir, PostgresDialect),
+  transactions: {
+    /** @param options - Transaction options. @returns PostgreSQL begin statement. */
+    begin: (options) => {
+      const clauses = [
+        options.isolationLevel ? `isolation level ${isolationSql(options.isolationLevel)}` : undefined,
+        options.accessMode?.replace("-", " ")
+      ].filter((value): value is string => value !== undefined)
+      return [{ sql: clauses.length > 0 ? `begin ${clauses.join(" ")}` : "begin", phase: "begin" }]
+    }
+  },
   migrations: PostgresMigrations
 }
 

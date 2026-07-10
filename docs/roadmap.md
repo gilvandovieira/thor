@@ -343,7 +343,7 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 |---|---|---|---|---|---|
 | K | Compiled Query API (`.compile()` → executable handle) | §8 | alpha.1 | D (`.prepare`) | ✅ K1–K5 |
 | L | Query caches + precompilation modes | §9, §10 | alpha.1 | F, D, E | ❌ |
-| M | Dialect hardening v1 (full contract, MySQL/Postgres) | §11 | alpha.2 | B | 🟡 (v0 suites pass) |
+| M | Dialect hardening v1 (full contract, MySQL/Postgres) | §11 | alpha.2 | B | ✅ M1–M5 |
 | N | Runtime lanes v1 (Node + Bun) | §12 | alpha.3 | C | 🟡 (caps + Bun harness) |
 | O | Migration hardening v1 (dry-run, expand/contract, policies) | §15 | alpha.4 | migrator (§13 v0) | 🟡 |
 | P | Introspection & drift detection | §16 | alpha.4 | migrator `drift()` | ❌ |
@@ -403,13 +403,20 @@ implemented and verified. ✅
 
 ## Epic M — Dialect hardening v1 (§11, alpha.2)
 
-| # | Task | Spec | Acceptance |
-|---|---|---|---|
-| M1 | Postgres passes the **full** contract + feature matrix | §11.4, alpha.2 | no gaps vs Level 1–2 (and Level 3+ as J lands) |
-| M2 | MySQL capability-aware pass or **explicitly marked partial** | §25 | matrix records unsupported (`RETURNING`, …) and asserts `CapabilityError` |
-| M3 | SQLite real adapter path hardened (Node + Bun) | alpha.2 | contract suite green on both runtimes |
-| M4 | Dialect-specific behavior isolated (no leakage into IR/guards) | §11.5 | audit: shared core stays dialect-neutral |
-| M5 | `thor capabilities <dialect>` reflects the matrix | §20.3 | native/emulated/unsupported/unknown per capability |
+| # | Status | Task | Spec | Acceptance |
+|---|---|---|---|---|
+| M1 | ✅ | Postgres passes the **full** contract + feature matrix | §11.4, alpha.2 | Both PostgreSQL drivers pass the expanded shared contract; live matrix covers complete Levels 1–5 plus 7/9 implemented surfaces, including routine decoding/table functions; Levels 6/8/10 remain separately scoped to G6a |
+| M2 | ✅ | MySQL capability-aware pass or **explicitly marked partial** | §25 | Exhaustive matrix records every status; live contract/matrix prove plain mutations, right/lateral joins, sets, transactions, and duplicate-key updates while unsupported `RETURNING`, full join, conflict syntax, table routines, and transactional DDL are documented and rejected |
+| M3 | ✅ | SQLite real adapter path hardened (Node + Bun) | alpha.2 | Node and Bun run the same expanded 12-case real contract and 37-case feature fixture; unsupported features fail through capabilities on both runtimes |
+| M4 | ✅ | Dialect-specific behavior isolated (no leakage into IR/guards) | §11.5 | Logical data type renamed `SqlDataType`; candidate-row, routine-argument, and transaction-start syntax moved behind dialect hooks; architecture tests forbid dialect imports/ID branching in shared IR, guards, compiler, and transaction execution |
+| M5 | ✅ | `thor capabilities <dialect>` reflects the matrix | §20.3 | Published CLI prints all capabilities in registry order for postgres/sqlite/mysql with native/emulated/unsupported/unknown statuses; subprocess and packed-consumer tests prevent drift |
+
+**Release-work record:** prerequisite Epic B ✅; owner Thor maintainers; required
+tests expanded shared contract, `sql-features.test.ts`, Node/Bun SQLite,
+PostgreSQL/MySQL E2E, CLI subprocess/packed consumers, type/docs/quality checks;
+closes the alpha.2 claim that shipped dialect targets are executable,
+capability-aware, and truthfully reported. **Definition of done:** M1–M5 are
+implemented and verified. ✅
 
 ## Epic N — Runtime lanes v1 (§12, alpha.3)
 

@@ -52,9 +52,6 @@ const transactionError =
 const lifecycle = (database: DatabaseService, sql: string, phase: string) =>
   database.driver.execute(sql, []).pipe(Effect.mapError(transactionError(phase)), Effect.asVoid)
 
-/** @param level - Hyphenated public level. @returns Dialect SQL spelling. */
-const isolationSql = (level: TransactionIsolationLevel): string => level.replace(/-/g, " ").toUpperCase()
-
 /**
  * @param database - Active database service.
  * @param options - Outer transaction options.
@@ -63,38 +60,14 @@ const isolationSql = (level: TransactionIsolationLevel): string => level.replace
 const outerStart = (
   database: DatabaseService,
   options: Pick<TransactionOptions<never>, "isolationLevel" | "accessMode" | "sqliteMode">
-): ReadonlyArray<readonly [sql: string, phase: string]> => {
-  const dialect = database.dialect.id
-  if (dialect === "sqlite") {
-    if (options.accessMode === "read-only") {
-      throw new TransactionError({ message: "SQLite does not enforce read-only transactions" })
-    }
-    if (
-      options.isolationLevel &&
-      options.isolationLevel !== "serializable" &&
-      options.isolationLevel !== "read-uncommitted"
-    ) {
-      throw new TransactionError({ message: `SQLite does not support ${options.isolationLevel} isolation` })
-    }
-    const mode = options.sqliteMode?.toUpperCase()
-    return [[mode ? `begin ${mode.toLowerCase()}` : (database.dialect.migrations.beginTransaction ?? "begin"), "begin"]]
-  }
-  if (dialect === "mysql") {
-    const statements: Array<readonly [string, string]> = []
-    if (options.isolationLevel) {
-      statements.push([`set transaction isolation level ${isolationSql(options.isolationLevel)}`, "set isolation"])
-    }
-    const mode = options.accessMode ? ` ${options.accessMode.replace("-", " ")}` : ""
-    statements.push([`${database.dialect.migrations.beginTransaction ?? "start transaction"}${mode}`, "begin"])
-    return statements
-  }
-  const clauses = [
-    options.isolationLevel ? `isolation level ${isolationSql(options.isolationLevel)}` : undefined,
-    options.accessMode?.replace("-", " ")
-  ].filter((value): value is string => value !== undefined)
-  const begin = database.dialect.migrations.beginTransaction ?? "begin"
-  return [[clauses.length > 0 ? `${begin} ${clauses.join(" ")}` : begin, "begin"]]
-}
+): ReadonlyArray<readonly [sql: string, phase: string]> =>
+  database.dialect.transactions
+    .begin({
+      ...(options.isolationLevel ? { isolationLevel: options.isolationLevel } : {}),
+      ...(options.accessMode ? { accessMode: options.accessMode } : {}),
+      ...(options.sqliteMode ? { beginMode: options.sqliteMode } : {})
+    })
+    .map(({ sql, phase }) => [sql, phase] as const)
 
 /**
  * @param bodyCause - Original body failure cause.

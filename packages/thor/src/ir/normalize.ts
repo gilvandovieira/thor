@@ -87,9 +87,10 @@ const normalizeSource = (source: QuerySource): QuerySource =>
     ? Object.freeze({ ...source, query: normalizeQuery(source.query) as SelectIR })
     : "_tag" in source && source._tag === "TableFunctionSource"
       ? Object.freeze({
-          ...source,
-          args: Object.freeze(source.args.map(normalizeExpression)),
-          columns: Object.freeze([...source.columns])
+           ...source,
+           args: Object.freeze(source.args.map(normalizeExpression)),
+           argTypes: Object.freeze([...source.argTypes]),
+           columns: Object.freeze([...source.columns])
         })
     : Object.freeze({ ...source })
 

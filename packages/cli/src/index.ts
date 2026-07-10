@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Thor migration CLI (spec §2.2, §13.2). Binary name: `thor`.
+ * Thor database toolkit CLI (spec §2.2, §13.2, v1 §20.3). Binary name: `thor`.
  *
  * Parses process arguments, dispatches commands, and converts thrown failures
  * into user-facing stderr messages and a non-zero exit code.
@@ -16,6 +16,8 @@ Usage: thor <command> [args]
 Commands:
   init              Create config, migrations folder, and journal
   create <name>     Create an empty/manual migration
+  capabilities <dialect>
+                    Print postgres/sqlite/mysql capability statuses
 `
 
 /**
@@ -37,8 +39,10 @@ const main = (): void => {
       return commands.init(cwd)
     case "create":
       return commands.create(cwd, rest[0] ?? "")
+    case "capabilities":
+      return commands.capabilities(rest)
     default:
-      process.stderr.write(`Unsupported command: ${command}. This release only ships "init" and "create".\n\n${HELP}`)
+      process.stderr.write(`Unsupported command: ${command}.\n\n${HELP}`)
       process.exitCode = 1
   }
 }

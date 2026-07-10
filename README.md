@@ -256,6 +256,7 @@ dynamic SQL text is genuinely required, mark that trust boundary visibly with
 ```sh
 thor init          # scaffold config + migrations/ + journal
 thor create <name> # new migration file
+thor capabilities postgres # print the authoritative capability matrix
 # Other commands are not published yet and exit non-zero.
 # Use the programmatic Migrator service for status/check/up/down/generate/drift.
 ```
@@ -271,7 +272,7 @@ typed builder → runtime IR → capability check → compile → execute → de
 | Query builder (select/insert/update/delete, predicates, params) | ✅ Done |
 | Advanced queries (joins, aggregation, windows, CTEs, sets, upserts) | ✅ Done |
 | Guards & capability checks | ✅ Done |
-| PostgreSQL / SQLite / MySQL dialects | ✅ Done |
+| Dialects | ✅ PostgreSQL + SQLite production targets; MySQL 8 compatibility target is explicitly partial (see `docs/dialects.md`) |
 | Effect execution + drivers (2 Postgres drivers, Node & Bun SQLite, mysql2) | ✅ Done |
 | Prepared handles & performance modes | ✅ Done |
 | Benchmarks + CI regression gate | ✅ Done |
@@ -286,10 +287,13 @@ matrices (36 declared capabilities), rather than maintained by hand.
 <!-- capabilities:generated:start -->
 | Dialect | Native | Emulated | Unsupported | Unknown |
 |---|---:|---:|---:|---:|
-| PostgreSQL | 34 | 1 | 1 | 0 |
+| PostgreSQL | 23 | 1 | 1 | 11 |
 | SQLite | 15 | 5 | 15 | 1 |
-| MySQL 8 | 20 | 1 | 14 | 1 |
+| MySQL 8 | 17 | 1 | 14 | 4 |
 <!-- capabilities:generated:end -->
+
+See [`docs/dialects.md`](docs/dialects.md) for live lanes, MySQL's explicit
+partial-support boundary, and the core/dialect isolation rule.
 
 Task-level detail lives in [`docs/roadmap.md`](docs/roadmap.md); the design of
 record is [`docs/thor-project-v1-spec.md`](docs/thor-project-v1-spec.md).

@@ -83,7 +83,7 @@ describe("Level 9 routine query integration", () => {
     const query = db.select({ value: series.field("value") }).from(series)
 
     expect(query.toSql(PostgresDialect).sql).toBe(
-      'SELECT "series"."value" AS "value" FROM "public"."generate_series"($1, $2) "series"("value")'
+      'SELECT "series"."value" AS "value" FROM "public"."generate_series"($1::integer, $2::integer) "series"("value")'
     )
     expect(query.requiredCapabilities()).toEqual(["routine.tableValuedFunction"])
   })

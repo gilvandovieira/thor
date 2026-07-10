@@ -23,7 +23,7 @@ import type { QueryError } from "../errors/index.js"
 import { internIdentifier } from "../ir/identifiers.js"
 import { nextId, queryCapabilityBits, type CallIR, type SelectionField } from "../ir/query-ir.js"
 import { PostgresDialect } from "../postgres/dialect.js"
-import type { PgDataType } from "../schema/column.js"
+import type { SqlDataType } from "../schema/column.js"
 import { type Expr, toValueNode } from "../sql/expressions.js"
 import { QueryReference } from "../sql/query-builder.js"
 
@@ -38,7 +38,7 @@ export interface RoutineName {
 
 /** A typed routine argument. */
 export interface RoutineArg<A = any> {
-  readonly dataType: PgDataType
+  readonly dataType: SqlDataType
   readonly codec: Schema.Schema<A, any>
 }
 
@@ -354,6 +354,7 @@ export const defineTableFunction = (
           ...(name.schema ? { schema: name.schema } : {}),
           name: name.name,
           args: Object.keys(spec.args).map((key) => toValueNode(values[key])),
+          argTypes: Object.values(spec.args).map((argument) => argument.dataType),
           alias: relationAlias,
           columns: Object.keys(spec.returns).map(internIdentifier),
           capabilities

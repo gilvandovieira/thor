@@ -9,9 +9,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test"
 import { Database } from "bun:sqlite"
 import { BunSQLiteLayer, SQLiteDialect } from "@gilvandovieira/thor/sqlite"
 import {
+  ADVANCED_SQL_FEATURES,
+  LEVEL_1_2_FEATURES,
+  ROUTINE_SQL_FEATURES,
   SQLITE_CONTRACT_RESET,
+  SQLITE_FEATURE_RESET,
   type ContractTestApi,
-  makeDialectContractSuite
+  makeDialectContractSuite,
+  runSqlFeatureIntegration
 } from "@gilvandovieira/thor/testing"
 
 const api: ContractTestApi = {
@@ -29,6 +34,14 @@ makeDialectContractSuite(api, {
   name: "bun:sqlite",
   dialect: SQLiteDialect,
   reset: SQLITE_CONTRACT_RESET,
-  layer: BunSQLiteLayer(client),
-  teardown: () => client.close()
+  layer: BunSQLiteLayer(client)
 })
+
+runSqlFeatureIntegration(api, {
+  dialect: SQLiteDialect,
+  features: [...LEVEL_1_2_FEATURES, ...ADVANCED_SQL_FEATURES, ...ROUTINE_SQL_FEATURES],
+  layer: BunSQLiteLayer(client),
+  reset: SQLITE_FEATURE_RESET
+})
+
+afterAll(() => client.close())

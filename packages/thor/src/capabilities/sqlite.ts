@@ -3,10 +3,10 @@
  *
  * @module capabilities/sqlite
  */
-import { defineCapabilities } from "./matrix.js"
+import { defineVerifiedCapabilities } from "./matrix.js"
 
 /** Verified SQLite feature support and explicit emulation boundaries. */
-export const SQLiteCapabilities = defineCapabilities("sqlite", {
+export const SQLiteCapabilities = defineVerifiedCapabilities("sqlite", {
   "insert.returning": "native",
   "update.returning": "native",
   "delete.returning": "native",

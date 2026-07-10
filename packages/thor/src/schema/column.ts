@@ -14,7 +14,7 @@ import type { Schema } from "effect"
 import { internIdentifier } from "../ir/identifiers.js"
 
 /** Logical column data types rendered independently by each dialect. */
-export type PgDataType =
+export type SqlDataType =
   | "uuid"
   | "text"
   | "varchar"
@@ -41,7 +41,7 @@ export interface ColumnDef {
   readonly name: string
   /** Owning table name; `""` until the column is attached to a table. */
   readonly table: string
-  readonly dataType: PgDataType
+  readonly dataType: SqlDataType
   readonly codec: Schema.Schema<any, any>
   readonly notNull: boolean
   readonly hasDefault: boolean
@@ -189,7 +189,7 @@ export type AnyColumn = Column<any>
  */
 const makeColumn = <Name extends string, Data>(
   name: Name,
-  dataType: PgDataType,
+  dataType: SqlDataType,
   codec: Schema.Schema<any, any>
 ): Column<{ name: Name; data: Data; notNull: false; hasDefault: false; generated: false }> => {
   const identifier = internIdentifier(name) as Name

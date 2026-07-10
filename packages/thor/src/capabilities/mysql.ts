@@ -3,10 +3,10 @@
  *
  * @module capabilities/mysql
  */
-import { defineCapabilities } from "./matrix.js"
+import { defineVerifiedCapabilities } from "./matrix.js"
 
 /** Verified MySQL 8 feature support and unsupported PostgreSQL-style features. */
-export const MySQLCapabilities = defineCapabilities("mysql", {
+export const MySQLCapabilities = defineVerifiedCapabilities("mysql", {
   "insert.returning": "unsupported",
   "update.returning": "unsupported",
   "delete.returning": "unsupported",
@@ -19,12 +19,12 @@ export const MySQLCapabilities = defineCapabilities("mysql", {
   "select.rightJoin": "native",
   "select.fullJoin": "unsupported",
   "select.setOperations": "native",
-  "select.forUpdate": "native",
+  "select.forUpdate": "unknown",
   "transaction.savepoints": "native",
   "transaction.isolationLevel": "native",
   "schema.json": "native",
   "schema.array": "unsupported",
-  "schema.enum": "native",
+  "schema.enum": "unknown",
   "schema.generatedColumns": "native",
   "schema.identityColumns": "emulated",
   "query.streaming": "unknown",
@@ -33,7 +33,7 @@ export const MySQLCapabilities = defineCapabilities("mysql", {
   "routine.procedureCall": "native",
   "routine.tableValuedFunction": "unsupported",
   "routine.namedArguments": "unsupported",
-  "routine.outParameters": "native",
+  "routine.outParameters": "unknown",
   "routine.overloading": "unsupported",
   "routine.variadicArguments": "unsupported",
   "routine.defaultArguments": "unsupported",

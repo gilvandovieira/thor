@@ -100,6 +100,7 @@ const sourceShape = (source: QuerySource): unknown => {
       source.schema ?? null,
       source.name,
       source.args.map(expressionShape),
+      source.argTypes,
       source.alias,
       source.columns,
       source.capabilities.toString()

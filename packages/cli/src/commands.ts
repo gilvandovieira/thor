@@ -1,14 +1,22 @@
 /**
- * Thor CLI command handlers (spec §13.2).
+ * Thor CLI command handlers (spec §13.2, v1 §20.3).
  *
- * This release exposes only filesystem-safe `init` and `create` commands.
- * Database-connected operations remain available through the programmatic
- * migrator and are deliberately absent from the published CLI dispatcher.
+ * Filesystem-safe migration scaffolding and static dialect capability reporting
+ * are available without opening a database connection. Database-connected
+ * operations remain available through the programmatic migrator.
  *
  * @module cli/commands
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import {
+  ALL_CAPABILITIES,
+  MySQLCapabilities,
+  PostgresCapabilities,
+  SQLiteCapabilities,
+  statusOf,
+  type CapabilityMatrix
+} from "@gilvandovieira/thor/capabilities"
 
 const CONFIG_FILE = "thor.config.json"
 
@@ -108,4 +116,27 @@ export const create = (cwd: string, name: string): void => {
   const file = join(cwd, cfg.migrationsDir, `${id}.ts`)
   writeFileSync(file, migrationTemplate(id, name))
   log(`Created ${cfg.migrationsDir}/${id}.ts`)
+}
+
+const DIALECT_CAPABILITIES: Readonly<Record<string, CapabilityMatrix>> = {
+  postgres: PostgresCapabilities,
+  sqlite: SQLiteCapabilities,
+  mysql: MySQLCapabilities
+}
+
+/**
+ * Prints every declared capability status for a built-in SQL dialect.
+ *
+ * @param args - Exactly one dialect name: postgres, sqlite, or mysql.
+ * @returns Nothing.
+ * @throws {Error} When the dialect argument is missing, extra, or unknown.
+ */
+export const capabilities = (args: ReadonlyArray<string>): void => {
+  if (args.length !== 1) throw new Error("Usage: thor capabilities <postgres|sqlite|mysql>")
+  const dialect = args[0]!
+  const matrix = DIALECT_CAPABILITIES[dialect]
+  if (!matrix) throw new Error(`Unknown dialect: ${dialect}. Expected one of: postgres, sqlite, mysql.`)
+
+  const rows = ALL_CAPABILITIES.map((capability) => `${capability}\t${statusOf(matrix, capability)}`)
+  process.stdout.write([`Dialect: ${dialect}`, "Capability\tStatus", ...rows, ""].join("\n"))
 }

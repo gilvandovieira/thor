@@ -4,7 +4,7 @@
  *
  * @module migrate/migration-ir
  */
-import type { PgDataType } from "../schema/column.js"
+import type { SqlDataType } from "../schema/column.js"
 
 /** Typed literal accepted as a generated DDL default. */
 export type DefaultLiteral = string | number | bigint | boolean | null | Date
@@ -25,7 +25,7 @@ export interface GeneratedColumnSpec {
 /** Dialect-neutral column description used by migration operations. */
 export interface ColumnSpec {
   readonly name: string
-  readonly type: PgDataType
+  readonly type: SqlDataType
   readonly nullable: boolean
   readonly default?: ColumnDefault
   readonly unique?: boolean
@@ -112,7 +112,7 @@ export interface AlterColumnTypeOp extends OpBase {
   readonly _tag: "AlterColumnType"
   readonly table: string
   readonly column: string
-  readonly to: PgDataType
+  readonly to: SqlDataType
 }
 /** Adds a `NOT NULL` constraint. */
 export interface SetNotNullOp extends OpBase {

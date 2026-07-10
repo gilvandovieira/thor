@@ -13,6 +13,7 @@ import {
   ADVANCED_SQL_FEATURES,
   type ContractTestApi,
   LEVEL_1_2_FEATURES,
+  ROUTINE_SQL_FEATURES,
   runSqlFeatureIntegration
 } from "@gilvandovieira/thor/testing"
 
@@ -26,7 +27,10 @@ const PG_RESET = [
   "insert into users (email, name, age) values ('seed@x.c', 'Seed', 30)",
   "drop table if exists posts",
   "create table posts (id uuid primary key default gen_random_uuid(), user_id uuid not null, title text not null)",
-  "insert into posts (user_id, title) select id, 'Hello' from users limit 1"
+  "insert into posts (user_id, title) select id, 'Hello' from users limit 1",
+  "create schema if not exists maintenance",
+  "drop procedure if exists maintenance.cleanup(text)",
+  "create procedure maintenance.cleanup(\"before\" text) language sql as 'select 1'"
 ]
 const MYSQL_RESET = [
   "drop table if exists users",
@@ -41,7 +45,7 @@ describe.skipIf(!DATABASE_URL)("feature integration: postgres (e2e)", () => {
   const client = new pg.Client({ connectionString: DATABASE_URL })
   runSqlFeatureIntegration(api, {
     dialect: PostgresDialect,
-    features: [...LEVEL_1_2_FEATURES, ...ADVANCED_SQL_FEATURES],
+    features: [...LEVEL_1_2_FEATURES, ...ADVANCED_SQL_FEATURES, ...ROUTINE_SQL_FEATURES],
     layer: PostgresLayer(client),
     reset: PG_RESET,
     setup: async () => {

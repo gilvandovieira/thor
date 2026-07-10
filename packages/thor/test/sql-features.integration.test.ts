@@ -12,6 +12,7 @@ import {
   type ContractTestApi,
   LEVEL_1_2_FEATURES,
   ROUTINE_SQL_FEATURES,
+  SQLITE_FEATURE_RESET,
   runSqlFeatureIntegration
 } from "@gilvandovieira/thor/testing"
 
@@ -23,13 +24,6 @@ runSqlFeatureIntegration(api, {
   dialect: SQLiteDialect,
   features: [...LEVEL_1_2_FEATURES, ...ADVANCED_SQL_FEATURES, ...ROUTINE_SQL_FEATURES],
   layer: NodeSQLiteLayer(client),
-  reset: [
-    "drop table if exists users",
-    "create table users (id text primary key default (lower(hex(randomblob(16)))), email text not null unique, name text, age integer, created_at text not null default current_timestamp)",
-    "insert into users (id, email, name, age) values ('u1', 'seed@x.c', 'Seed', 30)",
-    "drop table if exists posts",
-    "create table posts (id text primary key default (lower(hex(randomblob(16)))), user_id text not null, title text not null)",
-    "insert into posts (id, user_id, title) values ('p1', 'u1', 'Hello')"
-  ],
+  reset: SQLITE_FEATURE_RESET,
   teardown: () => client.close()
 })

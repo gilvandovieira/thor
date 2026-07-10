@@ -1,7 +1,7 @@
 {
   "name": "@gilvandovieira/cli",
   "version": "0.0.0",
-  "description": "Thor migration CLI.",
+  "description": "Thor migration and dialect capability CLI.",
   "type": "module",
   "license": "MIT",
   "homepage": "https://github.com/gilvandovieira/thor#readme",
@@ -33,6 +33,9 @@
     "prepack": "pnpm run clean && pnpm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@gilvandovieira/thor": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "22.19.0",

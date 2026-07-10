@@ -17,6 +17,7 @@ import { Effect, Schema, type Layer } from "effect"
 import { db } from "../sql/query-builder.js"
 import { eq } from "../sql/predicates.js"
 import { param } from "../sql/expressions.js"
+import { excluded } from "../sql/advanced-expressions.js"
 import { defineTable } from "../schema/table.js"
 import { integer, text, uuid } from "../schema/index.js"
 import { Database } from "../execution/database.js"
@@ -178,21 +179,28 @@ export const makeDialectContractSuite = (api: ContractTestApi, options: DialectC
       expect(found).toEqual({ name: "Y" })
     })
 
-    it("commits a transaction block", async () => {
-      await script("begin")
-      await run(db.insert(users).values({ email: "c@example.com" }).run())
-      await script("commit")
+    it("commits through the transaction-scoped API", async () => {
+      await run(db.transaction(db.insert(users).values({ email: "c@example.com" }).run()))
       const rows = await run(db.select({ email: users.email }).from(users).all())
       expect(rows).toEqual([{ email: "c@example.com" }])
     })
 
-    it("rolls a transaction block back", async () => {
-      await script("begin")
-      await run(db.insert(users).values({ email: "rb@example.com" }).run())
-      await script("rollback")
+    it("rolls failed transaction-scoped work back", async () => {
+      await run(Effect.either(db.transaction(Effect.zipRight(
+        db.insert(users).values({ email: "rb@example.com" }).run(),
+        Effect.fail("rollback")
+      ))))
       const rows = await run(db.select({ email: users.email }).from(users).all())
       expect(rows).toEqual([])
     })
+
+    if (supports("transaction.savepoints")) {
+      it("executes nested transactions through savepoints", async () => {
+        await run(db.transaction(db.transaction(db.insert(users).values({ email: "nested@example.com" }).run())))
+        const rows = await run(db.select({ email: users.email }).from(users).all())
+        expect(rows).toEqual([{ email: "nested@example.com" }])
+      })
+    }
 
     it("maps a unique-constraint violation to a tagged ConstraintError", async () => {
       await run(db.insert(users).values({ email: "dup@example.com" }).run())
@@ -206,6 +214,41 @@ export const makeDialectContractSuite = (api: ContractTestApi, options: DialectC
       const row = await run(db.select({ name: users.name, age: users.age }).from(users).one())
       expect(row).toEqual({ name: null, age: 41 })
     })
+
+    it("updates and deletes rows without RETURNING", async () => {
+      await run(db.insert(users).values({ email: "plain@example.com", name: "Old" }).run())
+      const updated = await run(
+        db.update(users).set({ name: "New" }).where(eq(users.email, param("email", Schema.String))).run({ email: "plain@example.com" })
+      )
+      expect(updated.rowCount).toBe(1)
+      const row = await run(db.select({ name: users.name }).from(users).one())
+      expect(row).toEqual({ name: "New" })
+      const removed = await run(db.delete(users).where(eq(users.email, param("deleteEmail", Schema.String))).run({ deleteEmail: "plain@example.com" }))
+      expect(removed.rowCount).toBe(1)
+      expect(await run(db.select({ email: users.email }).from(users).all())).toEqual([])
+    })
+
+    if (supports("insert.onConflict")) {
+      it("executes ON CONFLICT update semantics", async () => {
+        await run(db.insert(users).values({ email: "conflict@example.com", name: "Old" }).run())
+        await run(db.insert(users)
+          .values({ email: "conflict@example.com", name: "New" })
+          .onConflictDoUpdate([users.email], { name: excluded(users.name) })
+          .run())
+        expect(await run(db.select({ name: users.name }).from(users).one())).toEqual({ name: "New" })
+      })
+    }
+
+    if (supports("insert.onDuplicateKey")) {
+      it("executes ON DUPLICATE KEY update semantics", async () => {
+        await run(db.insert(users).values({ email: "duplicate@example.com", name: "Old" }).run())
+        await run(db.insert(users)
+          .values({ email: "duplicate@example.com", name: "New" })
+          .onDuplicateKeyUpdate({ name: excluded(users.name) })
+          .run())
+        expect(await run(db.select({ name: users.name }).from(users).one())).toEqual({ name: "New" })
+      })
+    }
 
     // --- capability-gated RETURNING cases (spec §14.11) ----------------------
 

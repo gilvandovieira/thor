@@ -13,6 +13,35 @@ import type { CompiledStatement } from "./execution/driver.js"
 import type { QueryIR } from "./ir/query-ir.js"
 import type { ComparisonOp } from "./ir/query-ir.js"
 import type { MigrationOperation } from "./migrate/migration-ir.js"
+import type { SqlDataType } from "./schema/column.js"
+
+/** Backend-neutral transaction options passed to a dialect renderer. */
+export interface DialectTransactionOptions {
+  /** Requested SQL isolation level. */
+  readonly isolationLevel?: "read-uncommitted" | "read-committed" | "repeatable-read" | "serializable"
+  /** Requested read/write intent. */
+  readonly accessMode?: "read-only" | "read-write"
+  /** Optional begin mode for engines that expose one. */
+  readonly beginMode?: "deferred" | "immediate" | "exclusive"
+}
+
+/** One transaction lifecycle statement and its diagnostic phase. */
+export interface TransactionStatement {
+  /** SQL sent to the driver. */
+  readonly sql: string
+  /** Human-readable lifecycle phase used in errors. */
+  readonly phase: string
+}
+
+/** Dialect-owned transaction syntax and option validation. */
+export interface TransactionDialect {
+  /**
+   * @param options - Backend-neutral transaction options.
+   * @returns Ordered statements that start a transaction.
+   * @throws {TransactionError} When the backend cannot honor an option.
+   */
+  readonly begin: (options: DialectTransactionOptions) => ReadonlyArray<TransactionStatement>
+}
 
 /** A SQL statement used by dialect-specific migration lifecycle hooks. */
 export interface DialectStatement {
@@ -108,10 +137,23 @@ export interface Dialect {
    */
   readonly comparison: (left: string, operator: ComparisonOp, right: string) => string
   /**
+   * @param column - Candidate-row column name used by an upsert assignment.
+   * @returns Dialect-specific excluded/candidate-row SQL.
+   */
+  readonly excluded: (column: string) => string
+  /**
+   * @param expression - Compiled routine argument SQL.
+   * @param dataType - Declared logical argument type.
+   * @returns Argument SQL with any casts needed for overload resolution.
+   */
+  readonly routineArgument: (expression: string, dataType: SqlDataType) => string
+  /**
    * @param ir - Runtime query representation.
    * @returns SQL, parameter order, and structural cache key.
    */
   readonly compileQuery: (ir: QueryIR) => CompiledStatement
+  /** Transaction syntax and option validation for this backend. */
+  readonly transactions: TransactionDialect
   /** Migration compiler and lifecycle behavior for this backend. */
   readonly migrations: MigrationDialect
 }

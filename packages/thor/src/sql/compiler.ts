@@ -46,7 +46,9 @@ const compileSource = (context: CompileContext, source: QuerySource): string => 
     const name = source.schema
       ? `${context.dialect.quoteIdent(source.schema)}.${context.dialect.quoteIdent(source.name)}`
       : context.dialect.quoteIdent(source.name)
-    const args = source.args.map((arg) => compileExpr(context, arg)).join(", ")
+    const args = source.args.map((arg, index) =>
+      context.dialect.routineArgument(compileExpr(context, arg), source.argTypes[index]!)
+    ).join(", ")
     const columns = source.columns.length > 0
       ? `(${source.columns.map((column) => context.dialect.quoteIdent(column)).join(", ")})`
       : ""
@@ -157,9 +159,7 @@ const compileExpr = (context: CompileContext, node: ExprNode): string => {
       return `${compileExpr(context, node.function)} OVER (${clauses.join(" ")})`
     }
     case "ExcludedRef":
-      return context.dialect.id === "mysql"
-        ? `VALUES(${context.dialect.quoteIdent(node.column)})`
-        : `EXCLUDED.${context.dialect.quoteIdent(node.column)}`
+      return context.dialect.excluded(node.column)
   }
 }
 

@@ -8,6 +8,7 @@ import type { Dialect } from "../dialect.js"
 import { compileQuery } from "../sql/compiler.js"
 import { SQLiteMigrations } from "./migrations.js"
 import { dialectProfileHash } from "../capabilities/profile.js"
+import { TransactionError } from "../errors/index.js"
 
 const version = "3"
 
@@ -37,10 +38,37 @@ export const SQLiteDialect: Dialect = {
     operator === "ilike"
       ? `${left} LIKE ${right} COLLATE NOCASE`
       : `${left} ${operator === "like" ? "LIKE" : operator} ${right}`,
+  /** @param column - Candidate-row column. @returns SQLite excluded-row syntax. */
+  excluded: (column) => `EXCLUDED.${SQLiteDialect.quoteIdent(column)}`,
+  /** @param expression - Argument SQL. @param _dataType - Declared type. @returns Unchanged SQLite argument. */
+  routineArgument: (expression) => expression,
   /**
    * @param ir - Runtime query representation.
    * @returns Compiled SQLite query data.
    */
   compileQuery: (ir) => compileQuery(ir, SQLiteDialect),
+  transactions: {
+    /**
+     * @param options - Transaction options.
+     * @returns SQLite begin statement.
+     * @throws {TransactionError} When SQLite cannot honor an option.
+     */
+    begin: (options) => {
+      if (options.accessMode === "read-only") {
+        throw new TransactionError({ message: "SQLite does not enforce read-only transactions" })
+      }
+      if (
+        options.isolationLevel &&
+        options.isolationLevel !== "serializable" &&
+        options.isolationLevel !== "read-uncommitted"
+      ) {
+        throw new TransactionError({ message: `SQLite does not support ${options.isolationLevel} isolation` })
+      }
+      return [{
+        sql: options.beginMode ? `begin ${options.beginMode}` : (SQLiteMigrations.beginTransaction ?? "begin"),
+        phase: "begin"
+      }]
+    }
+  },
   migrations: SQLiteMigrations
 }

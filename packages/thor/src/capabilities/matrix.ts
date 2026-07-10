@@ -37,6 +37,20 @@ export const defineCapabilities = (
 })
 
 /**
+ * Builds an exhaustive built-in dialect matrix. Unlike {@link defineCapabilities},
+ * this requires an explicit status for every known capability so release claims
+ * cannot silently acquire an `unknown` entry when the registry grows.
+ *
+ * @param dialect - Stable identifier for the built-in backend.
+ * @param capabilities - Complete capability-to-status mapping.
+ * @returns Immutable exhaustive capability matrix.
+ */
+export const defineVerifiedCapabilities = (
+  dialect: DialectId,
+  capabilities: Readonly<Record<Capability, CapabilityStatus>>
+): CapabilityMatrix => ({ dialect, capabilities })
+
+/**
  * Looks up one capability's support status.
  *
  * @param matrix - Dialect capability matrix.
