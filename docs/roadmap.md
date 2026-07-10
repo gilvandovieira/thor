@@ -348,7 +348,7 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | N | Runtime lanes v1 (Node + Bun) | §12 | alpha.3 | C | 🟡 (caps + Bun harness) |
 | O | Migration hardening v1 (dry-run, expand/contract, policies) | §15 | alpha.4 | migrator (§13 v0) | ✅ O1–O6 |
 | P | Introspection & drift detection | §16 | alpha.4 | migrator✅, **M✅** | 🟡 P1/P2/P3 ✅ · P4/P5 ❌ (⟵ T) |
-| Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J✅**, FK (Q1) | 🟡 Q1 ✅ |
+| Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J✅**, FK (Q1) | ✅ Q1–Q6 |
 | R | Routines v1 (functions/procedures, typed + guarded) | §14 | beta | routine v0✅, J✅ | ✅ R1–R6 (OUT-params follow-up) |
 | S | Observability (metadata, spans, param-redaction) | §17 | beta | annotations (§7.4 v0) | ✅ S1–S5 |
 | T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI v0; ⟵ P, U, W1 (T3 ⟵ M5✅) | ❌ |
@@ -369,8 +369,8 @@ v1-beta     Observability, skills, API stability → R, S, T, U, V, W
 
 ## Remaining dependency tree (updated 2026-07-10)
 
-> **Done:** K, L, M, O, S ✅ (v1) and J, I, F, E, D, C, B ✅ (v0). This graph is
-> the per-task prerequisite tree for the **undone** epics (N, P, Q, R, T, U, V, W).
+> **Done:** K, L, M, O, Q, R, S ✅ (v1) and J, I, F, E, D, C, B ✅ (v0). This graph is
+> the per-task prerequisite tree for the **undone** epics (N, P, T, U, V, W).
 > `✅` = prerequisite now satisfied · `⧗ X` = still waiting on task/epic `X`.
 > **Key changes from completed work:** O6 closes **R6**; M5 largely delivers **T3**;
 > M unblocks **P**'s core; J unblocks all of **Q**; L's `bench:cache` seeds **W1**'s
@@ -378,9 +378,7 @@ v1-beta     Observability, skills, API stability → R, S, T, U, V, W
 
 ```txt
 Ready now (all prerequisites satisfied)
-  Q1 ✅ ⟵ schema DSL✅                  (FK metadata; also feeds P1/P3)
-  Q2 ⟵ Q1                               │ Q3 ⟵ Q2, IR✅ │ Q4 ⟵ Q3, J✅
-  Q5 ⟵ Q3,Q4 │ Q6 ⟵ Q5, V1
+  Q1–Q6 ✅                              (typed graph, IR planner, explicit strategies, no N+1)
   P1 🟡 ⟵ M✅, schema IR✅ │ P3 ✅ ⟵ M✅ │ P2 ✅ ⟵ P1 core,Q1✅
   N1 ⟵ B✅,C✅,M✅ │ N2 ⟵ C✅ │ N3 ⟵ C✅,M3✅ │ N5 ⟵ N1
   U1 ⟵ — │ U2 ⟵ U1 (all 11 subjects exist: schema/query/exec/testing✅,
@@ -400,15 +398,14 @@ Blocked on other undone epics
   T4 ⟵ ⧗ W1 (bench groups), I✅
   T5 ⟵ ⧗ U4 │ U4 ⟵ U1–U3, ⧗ T (CLI host)
   W2 ⟵ W1, ⧗ N (Bun lane) │ W4 ⟵ W2
-  W5 ⟵ K✅,L✅,S✅ + ⧗ Q, ⧗ P, ⧗ U, ⧗ V   (final docs pass)
-  V2 ⟵ V1✅ │ V4 ⟵ V3 + all error-producing epics (⧗ Q)
+  W5 ⟵ K✅,L✅,S✅,Q✅ + ⧗ P, ⧗ U, ⧗ V   (final docs pass)
+  V2 ⟵ V1✅ │ V4 ⟵ V3 + all error-producing epics (Q✅)
 
 Already satisfied by completed work (close these out)
   R6 ✅ ⟵ O6                (routine DDL in migrations — done)
 ```
 
-**Suggested remaining order:** **Q2–Q6** (unblocked by J/Q1/V1) and the remaining
-**P1** introspection breadth in parallel → **T1/T2** (⟵ P) with **T3** already mostly shipped → **P4/P5**
+**Suggested remaining order:** **T1/T2** (⟵ P) with **T3** already mostly shipped → **P4/P5**
 (⟵ T) → **U1–U3/U5** any time → **U4 + T5** (CLI export) → **N1–N3/N5** any time →
 **W1/W3** any time, **W2** after N, **V1/V3** early then **V2/V4** after Q → **W5**
 last (docs over the whole surface).
@@ -528,11 +525,17 @@ verified. ✅
 | # | Status | Task | Spec | Acceptance |
 |---|---|---|---|---|
 | Q1 | ✅ | `column.references(() => other)` foreign-key metadata | §13.2 | FK captured in schema IR (also feeds P) |
-| Q2 | ❌ | `defineRelations({...})` with `one()` / `many()` | §13.2 | typed relation graph keyed by table |
-| Q3 | ❌ | `db.relation(t).findMany({ with: { rel: { strategy } } })` | §13.2 | relation planner lowers to Query IR |
-| Q4 | ❌ | Loading strategies: `join` (⟵ J), `query` (batched by keys), `manual` | §13.3 | explicit per relation; no default magic |
-| Q5 | ❌ | **No hidden N+1** guard | §13.4 | a would-be N+1 is rejected, batched, or requires explicit opt-in |
-| Q6 | ❌ | Relation planner tests + `@experimental` marking | §6.2, alpha.5 | planner unit tests; API marked experimental |
+| Q2 | ✅ | `defineRelations({...})` with `one()` / `many()` | §13.2 | typed, FK-validated relation graph keyed by table name |
+| Q3 | ✅ | graph-bound `relation(t).findMany({ with: { rel: { strategy } } })` | §13.2 | `withRelations(graph).relation(t)` planner builds ordinary fluent queries that lower through Query IR |
+| Q4 | ✅ | Loading strategies: `join` (⟵ J), `query` (batched by keys), `manual` | §13.3 | explicit per relation; join is one query, query batches distinct keys, manual receives one aggregate key set |
+| Q5 | ✅ | **No hidden N+1** guard | §13.4 | every included edge requires a strategy; query loading chunks key sets rather than querying per parent |
+| Q6 | ✅ | Relation planner tests + `@experimental` marking | §6.2, alpha.5 | `relations.test.ts` covers declarations, inference, all strategies, typed guard failure, and statement counts; public API marked experimental |
+
+**Release-work record:** Q1–Q6 are complete. The public `/relations` surface
+retains literal graph inference and uses a graph-bound facade rather than global
+relation registration. All loading paths execute ordinary fluent queries through
+the existing IR/executor pipeline, and no built-in strategy issues one query per
+parent row. ✅
 
 ## Epic R — Routines v1 (§14, beta)
 
@@ -605,8 +608,8 @@ implemented and verified. ✅
 surface ✅; owner Thor maintainers; required checks `check-api-stability.mjs`,
 declaration build, docs, quality, and full tests. V1 establishes source-level
 compatibility tags and an executable gate without prematurely implementing T's
-future CLI commands or V3/V4's final error contract. Relation APIs remain
-explicitly owned by Q6 and must be `@experimental` when introduced. ✅
+future CLI commands or V3/V4's final error contract. Relation APIs introduced by
+Q6 are marked `@experimental`. ✅
 
 ## Epic W — Benchmarks v1 + docs v1 (§19, §23, beta)
 
@@ -647,8 +650,8 @@ explicitly owned by Q6 and must be `@experimental` when introduced. ✅
 
 **Wave 1 — Feature completion (parallel; each ⟵ Wave 0 or v0)**
 
-5. **Q2 → Q3 → Q4 → Q5 → Q6** — relation layer (Q4 join ⟵ J✅; Q6 ⟵ V1)
-6. **R2, R3** — finish routines (R2 ⟵ J✅; R6 already done via O6)
+5. **Q2 → Q3 → Q4 → Q5 → Q6** ✅ — relation layer (Q4 join ⟵ J✅; Q6 ⟵ V1)
+6. **R2, R3** ✅ — finish routines (R2 ⟵ J✅; R6 already done via O6)
 7. **N1, N2, N3, N5** — Node/Bun runtime lanes (⟵ B/C/M✅)
 8. **U1 → U2 → U3, U5** — 11 skills + manifest + invariant (all subjects exist)
 9. **W1, W3** — bench groups + hot-path tracking (cache group ⟵ L✅)

@@ -14,7 +14,7 @@
     "url": "https://github.com/gilvandovieira/thor/issues"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.5.0"
   },
   "files": [
     "dist",
@@ -61,6 +61,10 @@
     "./routine": {
       "types": "./dist/routine/index.d.ts",
       "default": "./dist/routine/index.js"
+    },
+    "./relations": {
+      "types": "./dist/relations/index.d.ts",
+      "default": "./dist/relations/index.js"
     },
     "./capabilities": {
       "types": "./dist/capabilities/index.d.ts",

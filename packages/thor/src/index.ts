@@ -4,7 +4,7 @@
  *   import { pg, db, sql, eq, and, param } from "@gilvandovieira/thor"
  *
  * Deeper surfaces live under subpaths: `/schema`, `/sql`, `/postgres`, `/sqlite`, `/mysql`,
- * `/migrate`, `/testing`, `/routine`, `/capabilities`.
+ * `/migrate`, `/testing`, `/routine`, `/relations`, `/capabilities`.
  *
  * @module thor
  */
@@ -29,9 +29,11 @@ export {
   BunSQLiteLayer,
   makeBunSQLiteDriver,
   makeNodeSQLiteDriver,
+  makeRuntimeSQLiteDriver,
   sqlite,
   NodeSQLiteDriverRuntime,
   NodeSQLiteLayer,
+  RuntimeSQLiteLayer,
   SQLiteDialect,
   SQLiteDriverRuntime,
   SQLiteLayer,
@@ -56,6 +58,25 @@ export {
   type MySQLPoolConnection
 } from "./mysql/index.js"
 export { db, PreparedQuery, QueryReference } from "./sql/query-builder.js"
+export {
+  defineRelations,
+  many,
+  one,
+  relation,
+  withRelations,
+  RelationalDatabase,
+  RelationalQuery,
+  type AnyRelation,
+  type ManualRelationContext,
+  type RelationDefinitions,
+  type RelationDescriptor,
+  type RelationKind,
+  type RelationLoad,
+  type Relations,
+  type RelationSelection,
+  type RelationStrategy,
+  type RelationalRow
+} from "./relations/index.js"
 export type { Dialect, DialectStatement, MigrationDialect } from "./dialect.js"
 
 // Expressions & predicates
