@@ -16,13 +16,115 @@ import type { CapabilityMatrix } from "../capabilities/matrix.js"
 import type { CapabilityBits } from "../capabilities/capability.js"
 import { queryStructuralHash } from "../ir/structural-hash.js"
 import { normalizeQuery } from "../ir/normalize.js"
-import { DecodeError, GuardError, NotFoundError, type QueryError, TooManyRowsError } from "../errors/index.js"
+import { DecodeError, GuardError, NotFoundError, ParameterError, type QueryError, TooManyRowsError } from "../errors/index.js"
 import type { CommandResult, CompiledQuery, RawRow } from "./driver.js"
 import { type DatabaseService } from "./database.js"
 import { DEFAULT_EXECUTION_MODE, resolveDecodeMode } from "./plan.js"
 
 /** Named values supplied to `param()` placeholders at execution time. */
 export type QueryArgs = Record<string, unknown>
+
+type ParameterEncoder = (value: unknown) => Either.Either<unknown, ParseResult.ParseError>
+
+interface NamedParameter {
+  readonly node: ParamNode
+  readonly encode: ParameterEncoder
+}
+
+/** Compiled validation/encoding plan for a query's named parameters. */
+class ParameterPlan {
+  private readonly named = new Map<string, NamedParameter>()
+  private readonly failure: ParameterError | undefined
+
+  /**
+   * @param params - Query parameters collected in placeholder order.
+   */
+  constructor(params: ReadonlyArray<ParamNode>) {
+    let failure: ParameterError | undefined
+    for (const node of params) {
+      if (Object.prototype.hasOwnProperty.call(node, "value")) continue
+      const existing = this.named.get(node.name)
+      if (existing) {
+        if (existing.node === node) continue
+        const reason = existing.node.codec === node.codec ? "duplicate" : "conflict"
+        failure ??= new ParameterError({
+          parameter: node.name,
+          reason,
+          message: reason === "conflict"
+            ? `Named parameter "${node.name}" was declared with conflicting schemas`
+            : `Named parameter "${node.name}" was declared more than once; reuse the same param() value`
+        })
+        continue
+      }
+      this.named.set(node.name, {
+        node,
+        encode: Schema.encodeUnknownEither(node.codec) as ParameterEncoder
+      })
+    }
+    this.failure = failure
+  }
+
+  /**
+   * @param paramOrder - Compiled placeholder order, including repeated references.
+   * @param args - Untrusted named execution arguments.
+   * @returns Encoded positional driver values or a tagged validation failure.
+   */
+  bind(paramOrder: ReadonlyArray<ParamNode>, args: QueryArgs): Effect.Effect<ReadonlyArray<unknown>, ParameterError> {
+    if (this.failure) return Effect.fail(this.failure)
+
+    for (const name of this.named.keys()) {
+      if (!Object.prototype.hasOwnProperty.call(args, name)) {
+        return Effect.fail(new ParameterError({
+          parameter: name,
+          reason: "missing",
+          message: `Missing required named parameter "${name}"`
+        }))
+      }
+    }
+    for (const name of Object.keys(args)) {
+      if (!this.named.has(name)) {
+        return Effect.fail(new ParameterError({
+          parameter: name,
+          reason: "extra",
+          message: `Unexpected named parameter "${name}"`
+        }))
+      }
+    }
+
+    const encoded = new Map<string, unknown>()
+    for (const [name, parameter] of this.named) {
+      const result = parameter.encode(args[name])
+      if (Either.isLeft(result)) {
+        return Effect.fail(new ParameterError({
+          parameter: name,
+          reason: "invalid",
+          message: `Invalid value for named parameter "${name}": ${ParseResult.TreeFormatter.formatErrorSync(result.left)}`,
+          cause: result.left
+        }))
+      }
+      encoded.set(name, result.right)
+    }
+
+    return Effect.succeed(paramOrder.map((node) =>
+      Object.prototype.hasOwnProperty.call(node, "value") ? node.value : encoded.get(node.name)
+    ))
+  }
+}
+
+const parameterPlanCache = new WeakMap<QueryIR, ParameterPlan>()
+
+/**
+ * @param ir - Stable query shape.
+ * @returns Its cached parameter validation and encoding plan.
+ */
+const parameterPlanFor = (ir: QueryIR): ParameterPlan => {
+  let plan = parameterPlanCache.get(ir)
+  if (!plan) {
+    plan = new ParameterPlan(collectQueryParams(ir))
+    parameterPlanCache.set(ir, plan)
+  }
+  return plan
+}
 
 /**
  * The runtime IR is immutable and compilation/guarding are pure functions of
@@ -147,10 +249,14 @@ const decodeForMode = (
  *
  * @param paramOrder - Parameter nodes in compiled placeholder order.
  * @param args - Named values supplied at execution time.
+ * @param ir - Query owning the parameter codecs.
  * @returns Positional values ready for the driver.
  */
-const bindValues = (paramOrder: ReadonlyArray<ParamNode>, args: QueryArgs): ReadonlyArray<unknown> =>
-  paramOrder.map((p) => ("value" in p ? p.value : args[p.name]))
+const bindValues = (
+  ir: QueryIR,
+  paramOrder: ReadonlyArray<ParamNode>,
+  args: QueryArgs
+): Effect.Effect<ReadonlyArray<unknown>, ParameterError> => parameterPlanFor(ir).bind(paramOrder, args)
 
 /**
  * The prepared-statement name for a compiled query, or undefined to run it
@@ -358,6 +464,7 @@ export class PreparedExecutionPlan {
   private readonly fields: ReadonlyArray<SelectionField>
   private readonly decoder: RowDecoder
   private readonly structuralFailure: QueryError | null
+  private readonly parameterPlan: ParameterPlan
   private readonly compilations = new WeakMap<Dialect, CachedCompilation>()
   private readonly guards = new WeakMap<Dialect, Map<boolean, CachedGuard>>()
   private readonly dialectInspections = new Map<string, PreparedDialectInspection>()
@@ -384,6 +491,7 @@ export class PreparedExecutionPlan {
     this.capabilityBits = queryCapabilityBits(this.ir)
     this.params = Object.freeze(params.map((parameter) => parameter.name))
     this.structuralFailure = collectStructuralViolations(this.ir)[0] ?? null
+    this.parameterPlan = new ParameterPlan(collectQueryParams(this.ir))
   }
 
   /**
@@ -445,6 +553,15 @@ export class PreparedExecutionPlan {
     return decodeRows(this.fields, rows, this.decoder)
   }
 
+  /**
+   * @param paramOrder - Compiled placeholder order.
+   * @param args - Untrusted named execution arguments.
+   * @returns Encoded positional values or a tagged parameter failure.
+   */
+  bind(paramOrder: ReadonlyArray<ParamNode>, args: QueryArgs): Effect.Effect<ReadonlyArray<unknown>, ParameterError> {
+    return this.parameterPlan.bind(paramOrder, args)
+  }
+
   /** @returns Precomputed shape metadata and cached dialect-profile outcomes. */
   inspect(): PreparedPlanInspection {
     return {
@@ -501,10 +618,11 @@ export const executePreparedRows = <A>(
   if (failure) return Effect.fail(failure)
 
   const compiled = plan.compile(db.dialect)
-  const values = bindValues(compiled.paramOrder, args)
   const trusted = resolveDecodeMode(db.mode ?? DEFAULT_EXECUTION_MODE, db.decodeMode) === "trusted"
-  return Effect.flatMap(db.driver.query(compiled.sql, values, preparedNameFor(db, compiled)), (rows) =>
-    trusted ? Effect.succeed(rows as ReadonlyArray<A>) : (plan.decode(rows) as Effect.Effect<ReadonlyArray<A>, DecodeError>)
+  return Effect.flatMap(plan.bind(compiled.paramOrder, args), (values) =>
+    Effect.flatMap(db.driver.query(compiled.sql, values, preparedNameFor(db, compiled)), (rows) =>
+      trusted ? Effect.succeed(rows as ReadonlyArray<A>) : (plan.decode(rows) as Effect.Effect<ReadonlyArray<A>, DecodeError>)
+    )
   )
 }
 
@@ -525,8 +643,9 @@ export const executePreparedCommand = (
   if (failure) return Effect.fail(failure)
 
   const compiled = plan.compile(db.dialect)
-  const values = bindValues(compiled.paramOrder, args)
-  return db.driver.execute(compiled.sql, values, preparedNameFor(db, compiled))
+  return Effect.flatMap(plan.bind(compiled.paramOrder, args), (values) =>
+    db.driver.execute(compiled.sql, values, preparedNameFor(db, compiled))
+  )
 }
 
 /**
@@ -548,7 +667,7 @@ export const executeRows = <A>(
   Effect.gen(function* () {
     yield* guardForMode(ir, db)
     const compiled = compileCached(ir, db.dialect)
-    const values = bindValues(compiled.paramOrder, args)
+    const values = yield* bindValues(ir, compiled.paramOrder, args)
     const rows = yield* db.driver.query(compiled.sql, values, preparedNameFor(db, compiled))
     return (yield* decodeForMode(fields, rows, db)) as ReadonlyArray<A>
   })
@@ -569,7 +688,7 @@ export const executeCommand = (
   Effect.gen(function* () {
     yield* guardForMode(ir, db)
     const compiled = compileCached(ir, db.dialect)
-    const values = bindValues(compiled.paramOrder, args)
+    const values = yield* bindValues(ir, compiled.paramOrder, args)
     return yield* db.driver.execute(compiled.sql, values, preparedNameFor(db, compiled))
   })
 

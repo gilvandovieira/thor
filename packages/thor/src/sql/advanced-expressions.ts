@@ -7,6 +7,7 @@
  * @module sql/advanced-expressions
  */
 import { Schema } from "effect"
+import { NumericCodec, SafeIntegerCodec } from "../schema/codecs.js"
 import type { AnyColumn } from "../schema/column.js"
 import type { FunctionCallNode, OrderByTerm, SelectIR } from "../ir/query-ir.js"
 import { type ColumnValue, type Expr, isColumn, toExprNode } from "./expressions.js"
@@ -89,19 +90,19 @@ const aggregate = <A>(
  * @returns A numeric count expression.
  */
 export const count = (value?: ExpressionInput): WindowableExpr<number> =>
-  aggregate<number>("count", value === undefined ? [] : [value], Schema.Number)
+  aggregate<number>("count", value === undefined ? [] : [value], SafeIntegerCodec)
 
 /**
  * @param value - Numeric expression to sum.
  * @returns A numeric sum expression.
  */
-export const sum = (value: ExpressionInput): WindowableExpr<number> => aggregate<number>("sum", [value], Schema.Number)
+export const sum = (value: ExpressionInput): WindowableExpr<number> => aggregate<number>("sum", [value], NumericCodec)
 
 /**
  * @param value - Numeric expression to average.
  * @returns A numeric average expression.
  */
-export const avg = (value: ExpressionInput): WindowableExpr<number> => aggregate<number>("avg", [value], Schema.Number)
+export const avg = (value: ExpressionInput): WindowableExpr<number> => aggregate<number>("avg", [value], NumericCodec)
 
 /**
  * @typeParam A - Expression result type.
@@ -130,7 +131,7 @@ export const rowNumber = (): WindowableExpr<number> =>
     declared: false,
     volatility: "immutable",
     capabilities: 0n
-  }, Schema.Number)
+  }, SafeIntegerCodec)
 
 /** @returns A `rank()` window function awaiting `.over()`. */
 export const rank = (): WindowableExpr<number> =>
@@ -143,7 +144,7 @@ export const rank = (): WindowableExpr<number> =>
     declared: false,
     volatility: "immutable",
     capabilities: 0n
-  }, Schema.Number)
+  }, SafeIntegerCodec)
 
 /** @returns A `dense_rank()` window function awaiting `.over()`. */
 export const denseRank = (): WindowableExpr<number> =>
@@ -156,7 +157,7 @@ export const denseRank = (): WindowableExpr<number> =>
     declared: false,
     volatility: "immutable",
     capabilities: 0n
-  }, Schema.Number)
+  }, SafeIntegerCodec)
 
 /**
  * @typeParam A - Scalar subquery result type.

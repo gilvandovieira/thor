@@ -10,7 +10,7 @@ import { codecs } from "./codecs.js"
 
 export * from "./column.js"
 export * from "./table.js"
-export { BooleanCodec, codecs, TimestampCodec } from "./codecs.js"
+export { BigIntCodec, BooleanCodec, codecs, NumericCodec, SafeIntegerCodec, TimestampCodec } from "./codecs.js"
 
 /**
  * @param name - SQL column name.

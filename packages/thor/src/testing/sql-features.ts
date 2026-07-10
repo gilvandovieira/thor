@@ -14,7 +14,6 @@
  */
 import { Effect, Either, type Layer, Option, Schema } from "effect"
 import { db } from "../sql/query-builder.js"
-import { withMode } from "../execution/plan.js"
 import { and, eq, gt, isNull, or } from "../sql/predicates.js"
 import { asc, desc, param } from "../sql/expressions.js"
 import { avg, count, excluded, exists, max, min, rowNumber, scalar, sum } from "../sql/advanced-expressions.js"
@@ -204,10 +203,10 @@ export interface SqlFeatureIntegrationOptions {
  * Runs the feature matrix against a **real** dialect (spec §14.11 integration
  * level): it proves the generated SQL is actually valid for that backend.
  *
- * Execution uses `unsafe` mode so decode (a fixture-codec concern already covered
- * at the fake level) never masks a SQL-validity failure. A supported feature must
- * not surface a `DriverError` (the SQL parsed and ran); an unsupported feature
- * must fail with `CapabilityError` before the driver.
+ * Execution uses the default safe mode so live driver representations are
+ * validated by the same decoder plan users receive. A supported feature must
+ * not surface a query error; an unsupported feature must fail with
+ * `CapabilityError` before the driver.
  *
  * @param api - Test-runner registration and assertion functions.
  * @param options - Dialect, features, live layer, and reset DDL.
@@ -216,7 +215,7 @@ export interface SqlFeatureIntegrationOptions {
 export const runSqlFeatureIntegration = (api: ContractTestApi, options: SqlFeatureIntegrationOptions): void => {
   const { describe, it, beforeAll, afterAll, beforeEach, expect } = api
   const { dialect } = options
-  const layer = withMode(options.layer, "unsafe")
+  const layer = options.layer
   const script = (sql: string): Promise<unknown> =>
     Effect.runPromise(
       Effect.provide(
@@ -245,9 +244,9 @@ export const runSqlFeatureIntegration = (api: ContractTestApi, options: SqlFeatu
           const q = feature.build(sqlFeatureFixtures) as RunnableQuery
           const result = await Effect.runPromise(Effect.either(Effect.provide(q[method]!(feature.args), layer)))
           if (Either.isLeft(result)) {
-            // Cardinality/constraint errors mean the SQL executed; a DriverError means invalid SQL.
+            // Cardinality/constraint errors mean the SQL executed; driver/decode failures are defects.
             const tag = (result.left as { readonly _tag?: string })._tag
-            expect(tag !== "DriverError").toBe(true)
+            expect(tag !== "DriverError" && tag !== "DecodeError").toBe(true)
           }
         })
       } else {

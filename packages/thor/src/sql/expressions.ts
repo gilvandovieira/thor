@@ -7,8 +7,27 @@ import { Schema } from "effect"
 import type { AnyColumn, Column } from "../schema/column.js"
 import type { ColumnRefNode, ExprNode, LiteralNode, OrderByTerm, ParamNode } from "../ir/query-ir.js"
 
-/** A bound query parameter carrying a phantom runtime type `A`. */
-export type Param<A> = ParamNode & { readonly _A?: A }
+declare const ParamType: unique symbol
+
+/** A bound query parameter carrying its literal name and phantom runtime type. */
+export type Param<Name extends string, A> = ParamNode & {
+  readonly name: Name
+  readonly [ParamType]: readonly [Name, A]
+}
+
+/** Phantom named-parameter map carried by typed predicate nodes. */
+export type ParamsOf<T> = T extends { readonly [ParamType]: readonly [infer Name extends string, infer A] }
+  ? { readonly [K in Name]: A }
+  : T extends { readonly _Params?: infer P }
+    ? P extends Record<string, unknown> ? P : {}
+    : {}
+
+/** Runtime expression node carrying its named-parameter requirements. */
+export type Predicate<P extends Record<string, unknown> = {}> = ExprNode & { readonly _Params?: P }
+
+/** Converts a union of parameter maps to their combined intersection. */
+export type MergeParameterMaps<U> = (U extends unknown ? (value: U) => void : never) extends
+  (value: infer I) => void ? I extends Record<string, unknown> ? I : {} : {}
 
 /** A typed expression wrapper (currently a thin carrier around an IR node). */
 export interface Expr<A> {
@@ -35,11 +54,14 @@ export type ColumnValue<T> = T extends Column<infer C>
  * @param schema - Effect Schema describing the value.
  * @returns A parameter node that remains unbound until execution.
  */
-export const param = <A>(name: string, schema: Schema.Schema<A, any>): Param<A> => ({
+export const param = <const Name extends string, S extends Schema.Schema.AnyNoContext>(
+  name: Name,
+  schema: S
+): Param<Name, Schema.Schema.Type<S>> => ({
   _tag: "Param",
   name,
   codec: schema as Schema.Schema<any, any>
-})
+} as Param<Name, Schema.Schema.Type<S>>)
 
 let anonCounter = 0
 

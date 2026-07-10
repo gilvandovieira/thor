@@ -8,7 +8,7 @@
  *
  * @module schema/table
  */
-import type { AnyColumn, Column } from "./column.js"
+import type { AnyColumn, BoundColumn, Column } from "./column.js"
 import { internIdentifier } from "../ir/identifiers.js"
 
 /** Non-enumerable key carrying a table's runtime metadata. */
@@ -21,6 +21,41 @@ export interface TableIndex {
   readonly unique: boolean
 }
 
+/** Table-level unique constraint. */
+export interface TableUniqueConstraint {
+  readonly name?: string
+  readonly columns: ReadonlyArray<string>
+}
+
+/** Table-level trusted check expression. */
+export interface TableCheckConstraint {
+  readonly name?: string
+  readonly expression: string
+}
+
+/** Table-level foreign key metadata. */
+export interface TableForeignKey {
+  readonly name?: string
+  readonly columns: ReadonlyArray<string>
+  readonly references: { readonly table: string; readonly columns: ReadonlyArray<string> }
+  readonly onDelete?: "cascade" | "restrict" | "set null" | "no action"
+  readonly onUpdate?: "cascade" | "restrict" | "set null" | "no action"
+}
+
+/** Optional lossless DDL metadata accepted by `table()`. Column names are application keys. */
+export interface TableOptions<Cols extends Columns> {
+  readonly indexes?: ReadonlyArray<{ readonly name: string; readonly columns: ReadonlyArray<Extract<keyof Cols, string>>; readonly unique?: boolean }>
+  readonly uniqueConstraints?: ReadonlyArray<{ readonly name?: string; readonly columns: ReadonlyArray<Extract<keyof Cols, string>> }>
+  readonly checks?: ReadonlyArray<TableCheckConstraint>
+  readonly foreignKeys?: ReadonlyArray<{
+    readonly name?: string
+    readonly columns: ReadonlyArray<Extract<keyof Cols, string>>
+    readonly references: TableForeignKey["references"]
+    readonly onDelete?: TableForeignKey["onDelete"]
+    readonly onUpdate?: TableForeignKey["onUpdate"]
+  }>
+}
+
 /** Runtime metadata stored on every table through `TableMeta`. */
 export interface TableMetadata {
   readonly name: string
@@ -29,6 +64,9 @@ export interface TableMetadata {
   readonly columns: Readonly<Record<string, AnyColumn>>
   readonly primaryKey: ReadonlyArray<string>
   readonly indexes: ReadonlyArray<TableIndex>
+  readonly uniqueConstraints: ReadonlyArray<TableUniqueConstraint>
+  readonly checks: ReadonlyArray<TableCheckConstraint>
+  readonly foreignKeys: ReadonlyArray<TableForeignKey>
 }
 
 /** The columns record for a table. */
@@ -50,11 +88,18 @@ export type Table<Name extends string, Cols extends Columns> = Cols & {
     readonly columns: Cols
     readonly primaryKey: ReadonlyArray<string>
     readonly indexes: ReadonlyArray<TableIndex>
+    readonly uniqueConstraints: ReadonlyArray<TableUniqueConstraint>
+    readonly checks: ReadonlyArray<TableCheckConstraint>
+    readonly foreignKeys: ReadonlyArray<TableForeignKey>
   }
 }
 
 /** Any table. */
 export type AnyTable = Table<string, Columns>
+
+type BoundColumns<Name extends string, Cols extends Columns> = {
+  readonly [K in keyof Cols]: BoundColumn<Cols[K], Name>
+}
 
 // --- type-level column projections ------------------------------------------
 
@@ -130,12 +175,14 @@ export type Update<T extends AnyTable> = Simplify<{
  * @typeParam Cols - Named column record.
  * @param name - SQL table name.
  * @param columns - Column definitions keyed by application property name.
+ * @param options - Optional indexes and table-level constraints.
  * @returns A table whose properties are bound column references.
  */
 export const defineTable = <Name extends string, Cols extends Columns>(
   name: Name,
-  columns: Cols
-): Table<Name, Cols> => {
+  columns: Cols,
+  options: TableOptions<Cols> = {}
+): Table<Name, BoundColumns<Name, Cols>> => {
   const tableName = internIdentifier(name) as Name
   const boundColumns: Record<string, AnyColumn> = {}
   const primaryKey: string[] = []
@@ -154,12 +201,28 @@ export const defineTable = <Name extends string, Cols extends Columns>(
     name: tableName,
     columns: boundColumns,
     primaryKey,
-    indexes: []
+    indexes: (options.indexes ?? []).map((index) => ({
+      name: internIdentifier(index.name),
+      columns: index.columns.map((key) => columns[key]!.def.name),
+      unique: index.unique ?? false
+    })),
+    uniqueConstraints: (options.uniqueConstraints ?? []).map((constraint) => ({
+      ...(constraint.name ? { name: internIdentifier(constraint.name) } : {}),
+      columns: constraint.columns.map((key) => columns[key]!.def.name)
+    })),
+    checks: options.checks ?? [],
+    foreignKeys: (options.foreignKeys ?? []).map((foreignKey) => ({
+      ...(foreignKey.name ? { name: internIdentifier(foreignKey.name) } : {}),
+      columns: foreignKey.columns.map((key) => columns[key]!.def.name),
+      references: foreignKey.references,
+      ...(foreignKey.onDelete ? { onDelete: foreignKey.onDelete } : {}),
+      ...(foreignKey.onUpdate ? { onUpdate: foreignKey.onUpdate } : {})
+    }))
   }
 
   const table = { ...boundColumns } as Record<PropertyKey, unknown>
   Object.defineProperty(table, TableMeta, { value: meta, enumerable: false })
-  return table as Table<Name, Cols>
+  return table as Table<Name, BoundColumns<Name, Cols>>
 }
 
 /**
@@ -176,7 +239,7 @@ export const tableMeta = (table: AnyTable): TableMetadata => table[TableMeta]
  * @param name - Alias visible to column references and scope guards.
  * @returns A table-shaped reference retaining the source column types.
  */
-export const alias = <T extends AnyTable>(table: T, name: string): T => {
+export const alias = <T extends AnyTable, const Name extends string>(table: T, name: Name): T => {
   const source = tableMeta(table)
   const aliasName = internIdentifier(name)
   const columns: Record<string, AnyColumn> = {}
@@ -191,7 +254,10 @@ export const alias = <T extends AnyTable>(table: T, name: string): T => {
     alias: aliasName,
     columns,
     primaryKey: source.primaryKey,
-    indexes: source.indexes
+    indexes: source.indexes,
+    uniqueConstraints: source.uniqueConstraints,
+    checks: source.checks,
+    foreignKeys: source.foreignKeys
   }
   const value = { ...columns } as Record<PropertyKey, unknown>
   Object.defineProperty(value, TableMeta, { value: meta, enumerable: false })

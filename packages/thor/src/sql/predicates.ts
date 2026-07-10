@@ -5,11 +5,29 @@
  */
 import type { AnyColumn } from "../schema/column.js"
 import type { ComparisonOp, ExprNode } from "../ir/query-ir.js"
-import { type ColumnValue, type Expr, type Param, isColumn, toExprNode, toValueNode } from "./expressions.js"
+import {
+  type ColumnValue,
+  type Expr,
+  type MergeParameterMaps,
+  type Param,
+  type ParamsOf,
+  type Predicate,
+  isColumn,
+  toExprNode,
+  toValueNode
+} from "./expressions.js"
 
 type Comparable = AnyColumn | Expr<any>
 type ComparableValue<T> = T extends AnyColumn ? ColumnValue<T> : T extends Expr<infer A> ? A : unknown
-type Value<T extends Comparable> = ComparableValue<T> | Param<ComparableValue<T>> | Expr<ComparableValue<T>> | AnyColumn
+type Value<T extends Comparable> = ComparableValue<T> | Param<string, ComparableValue<T>> | Expr<any> | AnyColumn
+type NonParamValue<T extends Comparable> = ComparableValue<T> | Expr<any> | AnyColumn
+type Compare = {
+  <T extends Comparable, Name extends string, A extends ComparableValue<T>>(
+    left: T,
+    right: Param<Name, A>
+  ): Predicate<{ readonly [K in Name]: A }>
+  <T extends Comparable, const R extends NonParamValue<T>>(left: T, right: R): Predicate<ParamsOf<R>>
+}
 
 /**
  * @param op - Comparison operator.
@@ -17,7 +35,11 @@ type Value<T extends Comparable> = ComparableValue<T> | Param<ComparableValue<T>
  * @param right - Right expression.
  * @returns Runtime comparison representation.
  */
-const comparison = (op: ComparisonOp, left: ExprNode, right: ExprNode): ExprNode => ({
+const comparison = <P extends Record<string, unknown>>(
+  op: ComparisonOp,
+  left: ExprNode,
+  right: ExprNode
+): Predicate<P> => ({
   _tag: "Comparison",
   op,
   left,
@@ -32,8 +54,8 @@ const comparison = (op: ComparisonOp, left: ExprNode, right: ExprNode): ExprNode
  */
 const compare =
   (op: ComparisonOp) =>
-  <T extends Comparable>(left: T, right: Value<T>): ExprNode =>
-    comparison(op, toExprNode(left), toValueNode(right, isColumn(left) ? left : undefined))
+  ((left: Comparable, right: Value<Comparable>): Predicate<any> =>
+    comparison(op, toExprNode(left), toValueNode(right, isColumn(left) ? left : undefined))) as Compare
 
 /**
  * @param left - Column on the left.
@@ -91,7 +113,7 @@ export const ilike = compare("ilike")
  * @param values - Typed values, parameters, expressions, or columns.
  * @returns An `InList` expression node.
  */
-export const inArray = <T extends Comparable>(left: T, values: ReadonlyArray<Value<T>>): ExprNode => ({
+export const inArray = <T extends Comparable, V extends ReadonlyArray<Value<T>>>(left: T, values: V): Predicate<MergeParameterMaps<ParamsOf<V[number]>>> => ({
   _tag: "InList",
   expr: toExprNode(left),
   values: values.map((v) => toValueNode(v, isColumn(left) ? left : undefined)),
@@ -105,7 +127,7 @@ export const inArray = <T extends Comparable>(left: T, values: ReadonlyArray<Val
  * @param values - Typed values, parameters, expressions, or columns.
  * @returns A negated `InList` expression node.
  */
-export const notInArray = <T extends Comparable>(left: T, values: ReadonlyArray<Value<T>>): ExprNode => ({
+export const notInArray = <T extends Comparable, V extends ReadonlyArray<Value<T>>>(left: T, values: V): Predicate<MergeParameterMaps<ParamsOf<V[number]>>> => ({
   _tag: "InList",
   expr: toExprNode(left),
   values: values.map((v) => toValueNode(v, isColumn(left) ? left : undefined)),
@@ -128,17 +150,19 @@ export const isNotNull = (column: Comparable): ExprNode => ({ _tag: "IsNull", ex
  * @param operands - Predicates to conjoin.
  * @returns A parenthesized logical `AND` node.
  */
-export const and = (...operands: ReadonlyArray<ExprNode>): ExprNode => ({ _tag: "Logical", op: "and", operands })
+export const and = <const T extends ReadonlyArray<ExprNode>>(...operands: T): Predicate<MergeParameterMaps<ParamsOf<T[number]>>> =>
+  ({ _tag: "Logical", op: "and", operands })
 
 /**
  * @param operands - Predicates to disjoin.
  * @returns A parenthesized logical `OR` node.
  */
-export const or = (...operands: ReadonlyArray<ExprNode>): ExprNode => ({ _tag: "Logical", op: "or", operands })
+export const or = <const T extends ReadonlyArray<ExprNode>>(...operands: T): Predicate<MergeParameterMaps<ParamsOf<T[number]>>> =>
+  ({ _tag: "Logical", op: "or", operands })
 
 /**
  * @param expr - Predicate to negate.
  * @returns A logical `NOT` node.
 
  */
-export const not = (expr: ExprNode): ExprNode => ({ _tag: "Not", expr })
+export const not = <T extends ExprNode>(expr: T): Predicate<ParamsOf<T>> => ({ _tag: "Not", expr })

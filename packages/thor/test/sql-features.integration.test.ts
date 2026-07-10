@@ -25,11 +25,11 @@ runSqlFeatureIntegration(api, {
   layer: NodeSQLiteLayer(client),
   reset: [
     "drop table if exists users",
-    "create table users (id integer primary key, email text not null unique, name text, age integer, created_at text not null default current_timestamp)",
-    "insert into users (email, name, age) values ('seed@x.c', 'Seed', 30)",
+    "create table users (id text primary key default (lower(hex(randomblob(16)))), email text not null unique, name text, age integer, created_at text not null default current_timestamp)",
+    "insert into users (id, email, name, age) values ('u1', 'seed@x.c', 'Seed', 30)",
     "drop table if exists posts",
-    "create table posts (id integer primary key, user_id integer not null, title text not null)",
-    "insert into posts (user_id, title) values (1, 'Hello')"
+    "create table posts (id text primary key default (lower(hex(randomblob(16)))), user_id text not null, title text not null)",
+    "insert into posts (id, user_id, title) values ('p1', 'u1', 'Hello')"
   ],
   teardown: () => client.close()
 })

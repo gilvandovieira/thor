@@ -54,12 +54,19 @@ export interface ColumnDef {
 /** Phantom, type-level view of a column used for row-shape inference. */
 export interface ColumnConfig {
   readonly name: string
+  /** Owning table or query alias, attached by `table()`/`alias()` for join typing. */
+  readonly table?: string
   /** Decoded, non-null scalar TS type. */
   readonly data: unknown
   readonly notNull: boolean
   readonly hasDefault: boolean
   readonly generated: boolean
 }
+
+/** Rebinds a column's phantom configuration to an owning table name. */
+export type BoundColumn<T, Name extends string> = T extends Column<infer C>
+  ? Column<Omit<C, "table"> & { readonly table: Name }>
+  : never
 
 /** Intersect a config with a patch, letting the patch's fields win. */
 type Patch<C, P> = Omit<C, keyof P> & P

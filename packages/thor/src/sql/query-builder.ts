@@ -9,7 +9,7 @@
  */
 import { Effect, Option, Schema } from "effect"
 import type { AnyColumn, Column } from "../schema/column.js"
-import { type AnyTable, type Insert as InsertInput, type Update as UpdateInput, tableMeta } from "../schema/table.js"
+import { type AnyTable, type Insert as InsertInput, TableMeta, type Update as UpdateInput, tableMeta } from "../schema/table.js"
 import {
   type CommonTableExpression,
   type ExprNode,
@@ -40,7 +40,15 @@ import {
   type QueryArgs
 } from "../execution/run.js"
 import type { CommandResult, CompiledQuery } from "../execution/driver.js"
-import { type Expr, type Param, columnRef, isColumn, toValueNode } from "./expressions.js"
+import {
+  type Expr,
+  type MergeParameterMaps,
+  type Param,
+  type ParamsOf,
+  columnRef,
+  isColumn,
+  toValueNode
+} from "./expressions.js"
 import { type ExpressionInput } from "./advanced-expressions.js"
 import { internIdentifier } from "../ir/identifiers.js"
 
@@ -59,9 +67,44 @@ type FieldValue<T> = T extends Column<infer C>
     : unknown
 
 type SelectResult<F extends SelectFields> = { [K in keyof F]: FieldValue<F[K]> } & {}
+type SourceName<T> = T extends { readonly [TableMeta]: { readonly name: infer Name extends string } } ? Name : string
+type FieldSource<T> = T extends Column<infer C>
+  ? C extends { readonly table: infer Name extends string } ? Name : never
+  : never
+type LeftJoined<A, F extends SelectFields, Name extends string> = {
+  [K in keyof A]: K extends keyof F
+    ? [FieldSource<F[K]>] extends [never] ? A[K]
+      : FieldSource<F[K]> extends Name ? A[K] | null : A[K]
+    : A[K]
+}
+type RightJoined<A, F extends SelectFields, Name extends string> = {
+  [K in keyof A]: K extends keyof F
+    ? [FieldSource<F[K]>] extends [never] ? A[K] | null
+      : FieldSource<F[K]> extends Name ? A[K] : A[K] | null
+    : A[K]
+}
+type FullJoined<A> = { [K in keyof A]: A[K] | null }
 
-type ParameterizedValue<A> = A | Param<Exclude<A, undefined>> | Expr<Exclude<A, undefined>>
+type NamedParams = Record<string, unknown>
+type MergeParams<A extends NamedParams, B extends NamedParams> = { [K in keyof A | keyof B]:
+  K extends keyof B ? B[K] : K extends keyof A ? A[K] : never }
+type ExecutionArguments<P extends NamedParams> = keyof P extends never
+  ? [args?: Record<string, never>]
+  : [args: { [K in keyof P]: P[K] }]
+
+/**
+ * @param args - Optional terminal-method argument tuple.
+ * @returns The supplied named arguments or an empty map.
+ */
+const argsFrom = (args: readonly [QueryArgs?]): QueryArgs => args[0] ?? {}
+
+type ParameterizedValue<A> = A | Param<string, Exclude<A, undefined>> | Expr<Exclude<A, undefined>>
 type ParameterizedInput<T> = { [K in keyof T]: ParameterizedValue<T[K]> }
+type InputParams<T> = T extends ReadonlyArray<infer R>
+  ? InputParams<R>
+  : T extends Record<string, unknown>
+    ? MergeParameterMaps<ParamsOf<T[keyof T]>>
+    : {}
 
 /**
  * Converts a selected column or expression into runtime selection metadata.
@@ -135,6 +178,40 @@ const expressionSyntaxCapabilities = (node: ExprNode): bigint => {
  */
 const selectionSyntaxCapabilities = (fields: ReadonlyArray<SelectionField>): bigint =>
   fields.reduce((bits, field) => bits | expressionSyntaxCapabilities(field.expr), noCapabilities)
+
+/** @param source - Relation source. @returns Its visible SQL name or alias. */
+const sourceVisibleName = (source: QuerySource): string => {
+  if ("_tag" in source) {
+    if (source._tag === "SubquerySource" || source._tag === "TableFunctionSource") return source.alias
+    return source.alias ?? source.name
+  }
+  return source.alias ?? source.name
+}
+
+/** @param field - Selected field. @returns A copy accepting SQL null. */
+const nullableField = (field: SelectionField): SelectionField => ({ ...field, codec: Schema.NullOr(field.codec) })
+
+/**
+ * @param fields - Current decoder selection.
+ * @param type - Join kind being added.
+ * @param existingSources - Visible names on the existing side.
+ * @param joinedSource - Visible name of the new side.
+ * @returns Selection codecs adjusted for outer-join null extension.
+ */
+const fieldsForJoin = (
+  fields: ReadonlyArray<SelectionField>,
+  type: JoinType,
+  existingSources: ReadonlySet<string>,
+  joinedSource: string
+): SelectionField[] => fields.map((field) => {
+  // Non-column expressions can resolve over the null-extended side, so mirror the
+  // RightJoined/FullJoined row types (which mark them nullable) in the decoder.
+  if (field.expr._tag !== "ColumnRef") return type === "full" || type === "right" ? nullableField(field) : field
+  const nullable = type === "full" ||
+    (type === "left" && field.expr.table === joinedSource) ||
+    (type === "right" && existingSources.has(field.expr.table))
+  return nullable ? nullableField(field) : field
+})
 
 /**
  * Builds a star selection with one decoded field per table column.
@@ -262,7 +339,7 @@ const inspectIr = (ir: QueryIR) => ({
  * yield* FindUserByEmail.one({ email })
  * ```
  */
-export class PreparedQuery<A> {
+export class PreparedQuery<A, P extends NamedParams = {}> {
   private readonly plan: PreparedExecutionPlan
 
   /**
@@ -310,8 +387,8 @@ export class PreparedQuery<A> {
    * @param args - Values for named query parameters.
    * @returns An Effect yielding every decoded row.
    */
-  all(args: QueryArgs = {}): Effect.Effect<ReadonlyArray<A>, QueryError, Database> {
-    return Effect.flatMap(Database, (db) => executePreparedRows<A>(this.plan, db, args))
+  all(...args: ExecutionArguments<P>): Effect.Effect<ReadonlyArray<A>, QueryError, Database> {
+    return Effect.flatMap(Database, (db) => executePreparedRows<A>(this.plan, db, argsFrom(args)))
   }
 
   /**
@@ -320,8 +397,8 @@ export class PreparedQuery<A> {
    * @throws {NotFoundError} Through the Effect error channel when no row exists.
    * @throws {TooManyRowsError} Through the Effect error channel when multiple rows exist.
    */
-  one(args: QueryArgs = {}): Effect.Effect<A, QueryError | NotFoundError | TooManyRowsError, Database> {
-    return Effect.flatMap(this.all(args), (rows) => exactlyOne(rows, `${this.name}.one`))
+  one(...args: ExecutionArguments<P>): Effect.Effect<A, QueryError | NotFoundError | TooManyRowsError, Database> {
+    return Effect.flatMap(this.all(...args), (rows) => exactlyOne(rows, `${this.name}.one`))
   }
 
   /**
@@ -329,8 +406,8 @@ export class PreparedQuery<A> {
    * @returns An Effect yielding zero or one decoded row.
    * @throws {TooManyRowsError} Through the Effect error channel when multiple rows exist.
    */
-  maybeOne(args: QueryArgs = {}): Effect.Effect<Option.Option<A>, QueryError | TooManyRowsError, Database> {
-    return Effect.flatMap(this.all(args), (rows) => atMostOne(rows, `${this.name}.maybeOne`))
+  maybeOne(...args: ExecutionArguments<P>): Effect.Effect<Option.Option<A>, QueryError | TooManyRowsError, Database> {
+    return Effect.flatMap(this.all(...args), (rows) => atMostOne(rows, `${this.name}.maybeOne`))
   }
 
   /**
@@ -339,15 +416,15 @@ export class PreparedQuery<A> {
    * @param args - Values for named query parameters.
    * @returns An Effect yielding the affected-row count.
    */
-  run(args: QueryArgs = {}): Effect.Effect<CommandResult, QueryError, Database> {
-    return Effect.flatMap(Database, (db) => executePreparedCommand(this.plan, db, args))
+  run(...args: ExecutionArguments<P>): Effect.Effect<CommandResult, QueryError, Database> {
+    return Effect.flatMap(Database, (db) => executePreparedCommand(this.plan, db, argsFrom(args)))
   }
 }
 
 // --- SELECT ------------------------------------------------------------------
 
 /** Immutable selectable query with terminal Effect-based execution methods. */
-class SelectQuery<A> {
+class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = SelectFields> {
   /**
    * @param ir - Immutable select representation.
    * @param fields - Runtime fields used to decode result rows.
@@ -361,19 +438,19 @@ class SelectQuery<A> {
    * @param patch - Select properties to replace.
    * @returns A new query preserving the current row decoder.
    */
-  private clone(patch: Partial<SelectIR>): SelectQuery<A> {
-    return new SelectQuery<A>({ ...this.ir, ...patch }, this.fields)
+  private clone(patch: Partial<SelectIR>): SelectQuery<A, P, F> {
+    return new SelectQuery<A, P, F>({ ...this.ir, ...patch }, this.fields)
   }
 
   /**
    * @param predicate - Predicate replacing the current `WHERE` clause.
    * @returns A new select query.
    */
-  where(predicate: ExprNode): SelectQuery<A> {
-    return this.clone({
+  where<T extends ExprNode>(predicate: T): SelectQuery<A, MergeParams<P, ParamsOf<T>>, F> {
+    return new SelectQuery<A, MergeParams<P, ParamsOf<T>>, F>({ ...this.ir,
       where: predicate,
       capabilities: this.ir.capabilities | expressionSyntaxCapabilities(predicate)
-    })
+    }, this.fields)
   }
 
   /**
@@ -383,7 +460,7 @@ class SelectQuery<A> {
    * @param on - Join predicate evaluated with both sides in scope.
    * @returns A new select query.
    */
-  join(source: QuerySourceInput, on: ExprNode): SelectQuery<A> {
+  join(source: QuerySourceInput, on: ExprNode): SelectQuery<A, P, F> {
     return this.addJoin("inner", source, on, false)
   }
 
@@ -392,7 +469,7 @@ class SelectQuery<A> {
    * @param on - Join predicate.
    * @returns A new inner-joined select query.
    */
-  innerJoin(source: QuerySourceInput, on: ExprNode): SelectQuery<A> {
+  innerJoin(source: QuerySourceInput, on: ExprNode): SelectQuery<A, P, F> {
     return this.addJoin("inner", source, on, false)
   }
 
@@ -401,8 +478,8 @@ class SelectQuery<A> {
    * @param on - Join predicate.
    * @returns A new left-joined select query.
    */
-  leftJoin(source: QuerySourceInput, on: ExprNode): SelectQuery<A> {
-    return this.addJoin("left", source, on, false)
+  leftJoin<S extends QuerySourceInput>(source: S, on: ExprNode): SelectQuery<LeftJoined<A, F, SourceName<S>>, P, F> {
+    return this.addJoin("left", source, on, false) as unknown as SelectQuery<LeftJoined<A, F, SourceName<S>>, P, F>
   }
 
   /**
@@ -410,8 +487,8 @@ class SelectQuery<A> {
    * @param on - Join predicate.
    * @returns A new capability-gated right-joined select query.
    */
-  rightJoin(source: QuerySourceInput, on: ExprNode): SelectQuery<A> {
-    return this.addJoin("right", source, on, false)
+  rightJoin<S extends QuerySourceInput>(source: S, on: ExprNode): SelectQuery<RightJoined<A, F, SourceName<S>>, P, F> {
+    return this.addJoin("right", source, on, false) as unknown as SelectQuery<RightJoined<A, F, SourceName<S>>, P, F>
   }
 
   /**
@@ -419,15 +496,15 @@ class SelectQuery<A> {
    * @param on - Join predicate.
    * @returns A new capability-gated full-joined select query.
    */
-  fullJoin(source: QuerySourceInput, on: ExprNode): SelectQuery<A> {
-    return this.addJoin("full", source, on, false)
+  fullJoin(source: QuerySourceInput, on: ExprNode): SelectQuery<FullJoined<A>, P, F> {
+    return this.addJoin("full", source, on, false) as unknown as SelectQuery<FullJoined<A>, P, F>
   }
 
   /**
    * @param source - Relation to cross join.
    * @returns A new cross-joined select query.
    */
-  crossJoin(source: QuerySourceInput): SelectQuery<A> {
+  crossJoin(source: QuerySourceInput): SelectQuery<A, P, F> {
     return this.addJoin("cross", source, undefined, false)
   }
 
@@ -443,7 +520,7 @@ class SelectQuery<A> {
     source: QuerySourceInput,
     on?: ExprNode,
     type: Extract<JoinType, "inner" | "left" | "cross"> = on ? "inner" : "cross"
-  ): SelectQuery<A> {
+  ): SelectQuery<A, P, F> {
     return this.addJoin(type, source, on, true)
   }
 
@@ -454,13 +531,19 @@ class SelectQuery<A> {
    * @param lateral - Whether the joined relation can reference prior scope.
    * @returns A new select query.
    */
-  private addJoin(type: JoinType, input: QuerySourceInput, on: ExprNode | undefined, lateral: boolean): SelectQuery<A> {
+  private addJoin(type: JoinType, input: QuerySourceInput, on: ExprNode | undefined, lateral: boolean): SelectQuery<A, P, F> {
     const resolved = resolveSource(input)
+    const existingSources = new Set<string>([
+      sourceVisibleName(this.ir.from),
+      ...(this.ir.joins ?? []).map((join) => sourceVisibleName(join.source))
+    ])
+    const fields = fieldsForJoin(this.fields, type, existingSources, sourceVisibleName(resolved.source))
     let capabilities = this.ir.capabilities | resolved.capabilities | (on ? expressionSyntaxCapabilities(on) : noCapabilities)
     if (type === "right") capabilities |= capabilityBit("select.rightJoin")
     if (type === "full") capabilities |= capabilityBit("select.fullJoin")
     if (lateral) capabilities |= capabilityBit("select.lateralJoin")
-    return this.clone({
+    return new SelectQuery<A, P, F>({ ...this.ir,
+      selection: fields,
       joins: [...(this.ir.joins ?? []), { type, source: resolved.source, ...(on ? { on } : {}), lateral }],
       ctes: mergeCtes(this.ir.ctes ?? [], resolved.ctes),
       capabilities,
@@ -468,7 +551,7 @@ class SelectQuery<A> {
         ...this.ir.annotations,
         tableNames: [...new Set([...this.ir.annotations.tableNames, ...resolved.tableNames])]
       }
-    })
+    }, fields)
   }
 
   /**
@@ -477,7 +560,7 @@ class SelectQuery<A> {
    * @param references - CTE references created by `db.cte` or `db.recursiveCte`.
    * @returns A new select query.
    */
-  with(...references: ReadonlyArray<QueryReference<any>>): SelectQuery<A> {
+  with(...references: ReadonlyArray<QueryReference<any>>): SelectQuery<A, P, F> {
     const ctes = references.flatMap((reference) => reference.cte ? [reference.cte] : [])
     let capabilities = this.ir.capabilities
     for (const cte of ctes) {
@@ -487,7 +570,7 @@ class SelectQuery<A> {
   }
 
   /** @returns A new `SELECT DISTINCT` query. */
-  distinct(): SelectQuery<A> {
+  distinct(): SelectQuery<A, P, F> {
     return this.clone({ distinct: true })
   }
 
@@ -495,7 +578,7 @@ class SelectQuery<A> {
    * @param expressions - Grouping expressions.
    * @returns A grouped select query.
    */
-  groupBy(...expressions: ReadonlyArray<ExpressionInput>): SelectQuery<A> {
+  groupBy(...expressions: ReadonlyArray<ExpressionInput>): SelectQuery<A, P, F> {
     const nodes = expressions.map((expression) => isColumn(expression) ? columnRef(expression) : expression.node)
     return this.clone({
       groupBy: [...(this.ir.groupBy ?? []), ...nodes],
@@ -510,7 +593,7 @@ class SelectQuery<A> {
    * @param predicate - Post-aggregation predicate.
    * @returns A select query with `HAVING`.
    */
-  having(predicate: ExprNode): SelectQuery<A> {
+  having(predicate: ExprNode): SelectQuery<A, P, F> {
     return this.clone({
       having: predicate,
       capabilities: this.ir.capabilities | expressionSyntaxCapabilities(predicate)
@@ -521,7 +604,7 @@ class SelectQuery<A> {
    * @param query - Compatible select appended with `UNION`.
    * @returns A set-operation query.
    */
-  union(query: SelectQuery<A>): SelectQuery<A> {
+  union(query: SelectQuery<A, P, F>): SelectQuery<A, P, F> {
     return this.addSetOperation("union", query, false)
   }
 
@@ -529,7 +612,7 @@ class SelectQuery<A> {
    * @param query - Compatible select appended with `UNION ALL`.
    * @returns A set-operation query.
    */
-  unionAll(query: SelectQuery<A>): SelectQuery<A> {
+  unionAll(query: SelectQuery<A, P, F>): SelectQuery<A, P, F> {
     return this.addSetOperation("union", query, true)
   }
 
@@ -537,7 +620,7 @@ class SelectQuery<A> {
    * @param query - Compatible select appended with `INTERSECT`.
    * @returns A set-operation query.
    */
-  intersect(query: SelectQuery<A>): SelectQuery<A> {
+  intersect(query: SelectQuery<A, P, F>): SelectQuery<A, P, F> {
     return this.addSetOperation("intersect", query, false)
   }
 
@@ -545,7 +628,7 @@ class SelectQuery<A> {
    * @param query - Compatible select appended with `EXCEPT`.
    * @returns A set-operation query.
    */
-  except(query: SelectQuery<A>): SelectQuery<A> {
+  except(query: SelectQuery<A, P, F>): SelectQuery<A, P, F> {
     return this.addSetOperation("except", query, false)
   }
 
@@ -555,7 +638,7 @@ class SelectQuery<A> {
    * @param all - Whether duplicate rows are retained.
    * @returns A new set-operation query.
    */
-  private addSetOperation(type: "union" | "intersect" | "except", query: SelectQuery<A>, all: boolean): SelectQuery<A> {
+  private addSetOperation(type: "union" | "intersect" | "except", query: SelectQuery<A, P, F>, all: boolean): SelectQuery<A, P, F> {
     return this.clone({
       setOperations: [...(this.ir.setOperations ?? []), { type, query: query.ir, all }],
       capabilities: this.ir.capabilities | capabilityBit("select.setOperations"),
@@ -570,7 +653,7 @@ class SelectQuery<A> {
    * @param terms - Ordering terms appended in declaration order.
    * @returns A new select query.
    */
-  orderBy(...terms: ReadonlyArray<OrderByTerm>): SelectQuery<A> {
+  orderBy(...terms: ReadonlyArray<OrderByTerm>): SelectQuery<A, P, F> {
     return this.clone({
       orderBy: [...this.ir.orderBy, ...terms],
       capabilities: terms.reduce(
@@ -584,7 +667,7 @@ class SelectQuery<A> {
    * @param n - Maximum number of rows.
    * @returns A new select query.
    */
-  limit(n: number): SelectQuery<A> {
+  limit(n: number): SelectQuery<A, P, F> {
     return this.clone({ limit: n, cardinality: n === 1 ? "one" : this.ir.cardinality })
   }
 
@@ -592,7 +675,7 @@ class SelectQuery<A> {
    * @param n - Number of rows to skip.
    * @returns A new select query.
    */
-  offset(n: number): SelectQuery<A> {
+  offset(n: number): SelectQuery<A, P, F> {
     return this.clone({ offset: n })
   }
 
@@ -626,8 +709,8 @@ class SelectQuery<A> {
    * @param args - Values for named query parameters.
    * @returns An Effect requiring `Database` and yielding decoded rows.
    */
-  all(args: QueryArgs = {}): Effect.Effect<ReadonlyArray<A>, QueryError, Database> {
-    return Effect.flatMap(Database, (db) => executeRows<A>(this.ir, this.fields, db, args))
+  all(...args: ExecutionArguments<P>): Effect.Effect<ReadonlyArray<A>, QueryError, Database> {
+    return Effect.flatMap(Database, (db) => executeRows<A>(this.ir, this.fields, db, argsFrom(args)))
   }
 
   /**
@@ -638,8 +721,8 @@ class SelectQuery<A> {
    * @throws {NotFoundError} Through the Effect error channel when no row exists.
    * @throws {TooManyRowsError} Through the Effect error channel when multiple rows exist.
    */
-  one(args: QueryArgs = {}): Effect.Effect<A, QueryError | NotFoundError | TooManyRowsError, Database> {
-    return Effect.flatMap(this.all(args), (rows) => exactlyOne(rows, "select.one"))
+  one(...args: ExecutionArguments<P>): Effect.Effect<A, QueryError | NotFoundError | TooManyRowsError, Database> {
+    return Effect.flatMap(this.all(...args), (rows) => exactlyOne(rows, "select.one"))
   }
 
   /**
@@ -649,8 +732,8 @@ class SelectQuery<A> {
    * @returns An Effect yielding `Option.none()` or `Option.some(row)`.
    * @throws {TooManyRowsError} Through the Effect error channel when multiple rows exist.
    */
-  maybeOne(args: QueryArgs = {}): Effect.Effect<Option.Option<A>, QueryError | TooManyRowsError, Database> {
-    return Effect.flatMap(this.all(args), (rows) => atMostOne(rows, "select.maybeOne"))
+  maybeOne(...args: ExecutionArguments<P>): Effect.Effect<Option.Option<A>, QueryError | TooManyRowsError, Database> {
+    return Effect.flatMap(this.all(...args), (rows) => atMostOne(rows, "select.maybeOne"))
   }
 
   /**
@@ -659,8 +742,8 @@ class SelectQuery<A> {
    * @param name - Stable handle name for diagnostics/tracing (defaults to a generated id).
    * @returns A `PreparedQuery` that binds values per call and reuses compile/guard/decoder work.
    */
-  prepare(name?: string): PreparedQuery<A> {
-    return new PreparedQuery<A>(name ?? nextId("prepared"), this.ir, this.fields)
+  prepare(name?: string): PreparedQuery<A, P> {
+    return new PreparedQuery<A, P>(name ?? nextId("prepared"), this.ir, this.fields)
   }
 
   /**
@@ -683,7 +766,7 @@ class SelectQuery<A> {
   }
 }
 
-class SelectInit<A> {
+class SelectInit<A, F extends SelectFields = SelectFields> {
   /**
    * @param fields - Runtime fields used to decode selected rows.
    */
@@ -693,7 +776,7 @@ class SelectInit<A> {
    * @param input - Table, derived query, or CTE placed in the `FROM` clause.
    * @returns A selectable query.
    */
-  from(input: QuerySourceInput): SelectQuery<A> {
+  from(input: QuerySourceInput): SelectQuery<A, {}, F> {
     const resolved = resolveSource(input)
     const cteCapabilities = resolved.ctes.reduce(
       (bits, cte) => bits | capabilityBit(cte.recursive ? "select.recursiveCte" : "select.cte"),
@@ -710,7 +793,7 @@ class SelectInit<A> {
       cardinality: "many",
       annotations: { tableNames: [...resolved.tableNames] }
     }
-    return new SelectQuery<A>(ir, this.fields)
+    return new SelectQuery<A, {}, F>(ir, this.fields)
   }
 }
 
@@ -776,7 +859,7 @@ const assignmentsFrom = (
 }
 
 /** Insert, update, or delete query with a decoded `RETURNING` selection. */
-class ReturningQuery<A> {
+class ReturningQuery<A, P extends NamedParams = {}> {
   /**
    * @param ir - Data-modification representation containing `RETURNING`.
    * @param fields - Runtime fields used to decode returned rows.
@@ -812,8 +895,8 @@ class ReturningQuery<A> {
    * @param args - Named parameter values.
    * @returns An Effect yielding every returned row.
    */
-  all(args: QueryArgs = {}): Effect.Effect<ReadonlyArray<A>, QueryError, Database> {
-    return Effect.flatMap(Database, (db) => executeRows<A>(this.ir, this.fields, db, args))
+  all(...args: ExecutionArguments<P>): Effect.Effect<ReadonlyArray<A>, QueryError, Database> {
+    return Effect.flatMap(Database, (db) => executeRows<A>(this.ir, this.fields, db, argsFrom(args)))
   }
 
   /**
@@ -822,8 +905,8 @@ class ReturningQuery<A> {
    * @throws {NotFoundError} Through the Effect error channel when no row is returned.
    * @throws {TooManyRowsError} Through the Effect error channel when multiple rows are returned.
    */
-  one(args: QueryArgs = {}): Effect.Effect<A, QueryError | NotFoundError | TooManyRowsError, Database> {
-    return Effect.flatMap(this.all(args), (rows) => exactlyOne(rows, `${this.ir._tag}.one`))
+  one(...args: ExecutionArguments<P>): Effect.Effect<A, QueryError | NotFoundError | TooManyRowsError, Database> {
+    return Effect.flatMap(this.all(...args), (rows) => exactlyOne(rows, `${this.ir._tag}.one`))
   }
 
   /**
@@ -831,16 +914,16 @@ class ReturningQuery<A> {
    * @returns An Effect yielding zero or one returned row.
    * @throws {TooManyRowsError} Through the Effect error channel when multiple rows are returned.
    */
-  maybeOne(args: QueryArgs = {}): Effect.Effect<Option.Option<A>, QueryError | TooManyRowsError, Database> {
-    return Effect.flatMap(this.all(args), (rows) => atMostOne(rows, `${this.ir._tag}.maybeOne`))
+  maybeOne(...args: ExecutionArguments<P>): Effect.Effect<Option.Option<A>, QueryError | TooManyRowsError, Database> {
+    return Effect.flatMap(this.all(...args), (rows) => atMostOne(rows, `${this.ir._tag}.maybeOne`))
   }
 
   /**
    * @param args - Named parameter values.
    * @returns An Effect yielding the affected-row count.
    */
-  run(args: QueryArgs = {}): Effect.Effect<CommandResult, QueryError, Database> {
-    return Effect.flatMap(Database, (db) => executeCommand(this.ir, db, args))
+  run(...args: ExecutionArguments<P>): Effect.Effect<CommandResult, QueryError, Database> {
+    return Effect.flatMap(Database, (db) => executeCommand(this.ir, db, argsFrom(args)))
   }
 
   /**
@@ -849,8 +932,8 @@ class ReturningQuery<A> {
    * @param name - Stable handle name (defaults to a generated id).
    * @returns A `PreparedQuery` exposing `all`/`one`/`maybeOne`/`run`.
    */
-  prepare(name?: string): PreparedQuery<A> {
-    return new PreparedQuery<A>(name ?? nextId("prepared"), this.ir, this.fields)
+  prepare(name?: string): PreparedQuery<A, P> {
+    return new PreparedQuery<A, P>(name ?? nextId("prepared"), this.ir, this.fields)
   }
 }
 
@@ -876,15 +959,17 @@ class InsertBuilder<T extends AnyTable> {
    * @param input - A single insert value or homogeneous array of values.
    * @returns An insert builder ready for `returning()` or `run()`.
    */
-  values(input: ParameterizedInput<InsertInput<T>> | ReadonlyArray<ParameterizedInput<InsertInput<T>>>): InsertValues<T> {
+  values<I extends ParameterizedInput<InsertInput<T>> | ReadonlyArray<ParameterizedInput<InsertInput<T>>>>(
+    input: I
+  ): InsertValues<T, InputParams<I>> {
     const list = (Array.isArray(input) ? input : [input]) as ReadonlyArray<Record<string, unknown>>
     const first = valuesToRow(this.table, list[0] ?? {})
     const rows = list.map((r) => valuesToRow(this.table, r).row)
-    return new InsertValues<T>(this.table, first.columns, rows)
+    return new InsertValues<T, InputParams<I>>(this.table, first.columns, rows)
   }
 }
 
-class InsertValues<T extends AnyTable> {
+class InsertValues<T extends AnyTable, P extends NamedParams = {}> {
   /**
    * @param table - Target table.
    * @param columns - Physical columns included by the insert.
@@ -945,8 +1030,8 @@ class InsertValues<T extends AnyTable> {
    * @param target - Optional conflict-target columns.
    * @returns A new insert builder guarded by `insert.onConflict`.
    */
-  onConflictDoNothing(target: ReadonlyArray<AnyColumn> = []): InsertValues<T> {
-    return new InsertValues(this.table, this.columns, this.rows, {
+  onConflictDoNothing(target: ReadonlyArray<AnyColumn> = []): InsertValues<T, P> {
+    return new InsertValues<T, P>(this.table, this.columns, this.rows, {
       kind: "onConflict",
       target: target.map((column) => column.def.name),
       action: "nothing",
@@ -961,11 +1046,11 @@ class InsertValues<T extends AnyTable> {
    * @param input - Assignments applied to the conflicting row.
    * @returns A new insert builder guarded by `insert.onConflict`.
    */
-  onConflictDoUpdate(
+  onConflictDoUpdate<I extends ParameterizedInput<UpdateInput<T>>>(
     target: ReadonlyArray<AnyColumn>,
-    input: ParameterizedInput<UpdateInput<T>>
-  ): InsertValues<T> {
-    return new InsertValues(this.table, this.columns, this.rows, {
+    input: I
+  ): InsertValues<T, MergeParams<P, InputParams<I>>> {
+    return new InsertValues<T, MergeParams<P, InputParams<I>>>(this.table, this.columns, this.rows, {
       kind: "onConflict",
       target: target.map((column) => column.def.name),
       action: "update",
@@ -979,8 +1064,8 @@ class InsertValues<T extends AnyTable> {
    * @param input - Assignments applied to the conflicting row.
    * @returns A new insert builder guarded by `insert.onDuplicateKey`.
    */
-  onDuplicateKeyUpdate(input: ParameterizedInput<UpdateInput<T>>): InsertValues<T> {
-    return new InsertValues(this.table, this.columns, this.rows, {
+  onDuplicateKeyUpdate<I extends ParameterizedInput<UpdateInput<T>>>(input: I): InsertValues<T, MergeParams<P, InputParams<I>>> {
+    return new InsertValues<T, MergeParams<P, InputParams<I>>>(this.table, this.columns, this.rows, {
       kind: "onDuplicateKey",
       set: assignmentsFrom(this.table, input as Record<string, unknown>)
     })
@@ -992,7 +1077,7 @@ class InsertValues<T extends AnyTable> {
    * @param fields - Optional selected fields; omit to return every table column.
    * @returns A row-returning query guarded by dialect capabilities.
    */
-  returning<F extends SelectFields>(fields?: F): ReturningQuery<F extends SelectFields ? SelectResult<F> : Record<string, unknown>> {
+  returning<F extends SelectFields>(fields?: F): ReturningQuery<F extends SelectFields ? SelectResult<F> : Record<string, unknown>, P> {
     const selection = returningFields(this.table, fields)
     return new ReturningQuery(this.ir(selection), selection)
   }
@@ -1001,9 +1086,9 @@ class InsertValues<T extends AnyTable> {
    * @param args - Named parameter values.
    * @returns An Effect yielding the affected-row count.
    */
-  run(args: QueryArgs = {}): Effect.Effect<CommandResult, QueryError, Database> {
+  run(...args: ExecutionArguments<P>): Effect.Effect<CommandResult, QueryError, Database> {
     const ir = this.ir()
-    return Effect.flatMap(Database, (db) => executeCommand(ir, db, args))
+    return Effect.flatMap(Database, (db) => executeCommand(ir, db, argsFrom(args)))
   }
 }
 
@@ -1019,30 +1104,33 @@ class UpdateBuilder<T extends AnyTable> {
    * @param input - Partial non-generated column values.
    * @returns An update builder with assignments.
    */
-  set(input: ParameterizedInput<UpdateInput<T>>): UpdateValues<T> {
-    return new UpdateValues<T>(this.table, assignmentsFrom(this.table, input as Record<string, unknown>))
+  set<I extends ParameterizedInput<UpdateInput<T>>>(input: I): UpdateValues<T, InputParams<I>> {
+    return new UpdateValues<T, InputParams<I>>(this.table, assignmentsFrom(this.table, input as Record<string, unknown>))
   }
 }
 
-class UpdateValues<T extends AnyTable> {
+class UpdateValues<T extends AnyTable, P extends NamedParams = {}> {
   private whereNode?: ExprNode
 
   /**
    * @param table - Target table.
    * @param assignments - Physical column assignments.
+   * @param whereNode - Optional predicate retained by an immutable clone.
    */
   constructor(
     private readonly table: T,
-    private readonly assignments: ReadonlyArray<{ column: string; value: ExprNode }>
-  ) {}
+    private readonly assignments: ReadonlyArray<{ column: string; value: ExprNode }>,
+    whereNode?: ExprNode
+  ) {
+    if (whereNode !== undefined) this.whereNode = whereNode
+  }
 
   /**
    * @param predicate - Predicate replacing the current `WHERE` clause.
    * @returns This update builder.
    */
-  where(predicate: ExprNode): this {
-    this.whereNode = predicate
-    return this
+  where<E extends ExprNode>(predicate: E): UpdateValues<T, MergeParams<P, ParamsOf<E>>> {
+    return new UpdateValues<T, MergeParams<P, ParamsOf<E>>>(this.table, this.assignments, predicate)
   }
 
   /**
@@ -1068,7 +1156,7 @@ class UpdateValues<T extends AnyTable> {
    * @param fields - Optional fields to return; omit for all columns.
    * @returns A row-returning update query.
    */
-  returning<F extends SelectFields>(fields?: F): ReturningQuery<F extends SelectFields ? SelectResult<F> : Record<string, unknown>> {
+  returning<F extends SelectFields>(fields?: F): ReturningQuery<F extends SelectFields ? SelectResult<F> : Record<string, unknown>, P> {
     const selection = returningFields(this.table, fields)
     return new ReturningQuery(this.ir(selection), selection)
   }
@@ -1077,29 +1165,31 @@ class UpdateValues<T extends AnyTable> {
    * @param args - Named parameter values.
    * @returns An Effect yielding the affected-row count.
    */
-  run(args: QueryArgs = {}): Effect.Effect<CommandResult, QueryError, Database> {
+  run(...args: ExecutionArguments<P>): Effect.Effect<CommandResult, QueryError, Database> {
     const ir = this.ir()
-    return Effect.flatMap(Database, (db) => executeCommand(ir, db, args))
+    return Effect.flatMap(Database, (db) => executeCommand(ir, db, argsFrom(args)))
   }
 }
 
 // --- DELETE ------------------------------------------------------------------
 
-class DeleteBuilder<T extends AnyTable> {
+class DeleteBuilder<T extends AnyTable, P extends NamedParams = {}> {
   private whereNode?: ExprNode
 
   /**
    * @param table - Target table.
+   * @param whereNode - Optional predicate retained by an immutable clone.
    */
-  constructor(private readonly table: T) {}
+  constructor(private readonly table: T, whereNode?: ExprNode) {
+    if (whereNode !== undefined) this.whereNode = whereNode
+  }
 
   /**
    * @param predicate - Predicate replacing the current `WHERE` clause.
    * @returns This delete builder.
    */
-  where(predicate: ExprNode): this {
-    this.whereNode = predicate
-    return this
+  where<E extends ExprNode>(predicate: E): DeleteBuilder<T, MergeParams<P, ParamsOf<E>>> {
+    return new DeleteBuilder<T, MergeParams<P, ParamsOf<E>>>(this.table, predicate)
   }
 
   /**
@@ -1124,7 +1214,7 @@ class DeleteBuilder<T extends AnyTable> {
    * @param fields - Optional fields to return; omit for all columns.
    * @returns A row-returning delete query.
    */
-  returning<F extends SelectFields>(fields?: F): ReturningQuery<F extends SelectFields ? SelectResult<F> : Record<string, unknown>> {
+  returning<F extends SelectFields>(fields?: F): ReturningQuery<F extends SelectFields ? SelectResult<F> : Record<string, unknown>, P> {
     const selection = returningFields(this.table, fields)
     return new ReturningQuery(this.ir(selection), selection)
   }
@@ -1133,9 +1223,9 @@ class DeleteBuilder<T extends AnyTable> {
    * @param args - Named parameter values.
    * @returns An Effect yielding the affected-row count.
    */
-  run(args: QueryArgs = {}): Effect.Effect<CommandResult, QueryError, Database> {
+  run(...args: ExecutionArguments<P>): Effect.Effect<CommandResult, QueryError, Database> {
     const ir = this.ir()
-    return Effect.flatMap(Database, (db) => executeCommand(ir, db, args))
+    return Effect.flatMap(Database, (db) => executeCommand(ir, db, argsFrom(args)))
   }
 }
 
@@ -1147,7 +1237,7 @@ export const db = {
    * @param fields - Output aliases mapped to columns or expressions.
    * @returns A select awaiting `from()`.
    */
-  select: <F extends SelectFields>(fields: F): SelectInit<SelectResult<F>> => new SelectInit(selectionFrom(fields)),
+  select: <F extends SelectFields>(fields: F): SelectInit<SelectResult<F>, F> => new SelectInit(selectionFrom(fields)),
   /**
    * @param table - Target table.
    * @returns An insert builder.

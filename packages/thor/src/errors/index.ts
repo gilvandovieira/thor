@@ -54,6 +54,14 @@ export class DecodeError extends Data.TaggedError("DecodeError")<{
   readonly cause?: unknown
 }> {}
 
+/** Named query arguments failed shape validation or schema encoding. */
+export class ParameterError extends Data.TaggedError("ParameterError")<{
+  readonly parameter?: string
+  readonly reason: "missing" | "extra" | "invalid" | "duplicate" | "conflict"
+  readonly message: string
+  readonly cause?: unknown
+}> {}
+
 /** `.one()` found zero rows. */
 export class NotFoundError extends Data.TaggedError("NotFoundError")<{
   readonly message: string
@@ -110,6 +118,7 @@ export type ThorError =
   | DriverError
   | ConstraintError
   | DecodeError
+  | ParameterError
   | NotFoundError
   | TooManyRowsError
   | GuardError
@@ -127,3 +136,4 @@ export type QueryError =
   | DriverError
   | ConstraintError
   | DecodeError
+  | ParameterError
