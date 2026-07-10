@@ -5,6 +5,7 @@
  * @module introspect
  */
 export * from "./schema-ir.js"
+export * from "./drift.js"
 export * from "./introspector.js"
 export { PostgresIntrospection } from "./postgres.js"
 export { SQLiteIntrospection } from "./sqlite.js"

@@ -347,7 +347,7 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | M | Dialect hardening v1 (full contract, MySQL/Postgres) | §11 | alpha.2 | B | ✅ M1–M5 |
 | N | Runtime lanes v1 (Node + Bun) | §12 | alpha.3 | C | 🟡 (caps + Bun harness) |
 | O | Migration hardening v1 (dry-run, expand/contract, policies) | §15 | alpha.4 | migrator (§13 v0) | ✅ O1–O6 |
-| P | Introspection & drift detection | §16 | alpha.4 | migrator✅, **M✅** | 🟡 P3 ✅ · P1 🟡 · P2/P4/P5 ❌ |
+| P | Introspection & drift detection | §16 | alpha.4 | migrator✅, **M✅** | 🟡 P2/P3 ✅ · P1 🟡 · P4/P5 ❌ |
 | Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J✅**, FK (Q1) | ❌ (unblocked) |
 | R | Routines v1 (functions/procedures, typed + guarded) | §14 | beta | routine v0✅, J✅; **R6 ⟵ O6✅** | 🟡 (R6 done; R2/R3 left) |
 | S | Observability (metadata, spans, param-redaction) | §17 | beta | annotations (§7.4 v0) | ✅ S1–S5 |
@@ -508,15 +508,15 @@ verified. ✅
 | # | Status | Task | Spec | Acceptance |
 |---|---|---|---|---|
 | P1 | 🟡 | `Introspector` service: `currentSchema()` | §16.3 | `introspect/` module + `Introspector`/`IntrospectorLive` read live DB → `IntrospectedSchema` (tables/columns/primary keys/foreign keys); live SQLite E2E + fake-driver unit tests. **Indexes/views/enums/routines/extensions deferred** |
-| P2 | ❌ | `Introspector.drift(expectedSchema)` | §16.3, §16.5 | diffs live vs schema-as-code; reports before `up` unless policy ignores (⟵ P1, Q1) |
+| P2 | ✅ | `Introspector.drift(expectedSchema)` | §16.3, §16.5 | `Introspector.drift(tables, options?)` diffs the live `IntrospectedSchema` against schema-as-code → a `DriftReport` (missing/extra tables & columns, nullability, primary-key, and foreign-key changes; journal table ignored); structural drift only (type-diff deferred — SQLite affinity is lossy); pure + live-SQLite tests |
 | P3 | ✅ | Per-dialect introspection queries (pg/sqlite/mysql) | §16.4 | PostgreSQL/MySQL via `information_schema` (set-based), SQLite via `table_info`/`foreign_key_list` pragmas; per-dialect strategies selected by `dialect.id`; parsing unit-tested per dialect |
 | P4 | ❌ | CLI `thor pull` / `introspect` / `inspect schema` / `inspect routines` | §16.2 | writes/prints introspected Schema IR (⟵ P1, T1) |
 | P5 | ❌ | Wire `drift` into `thor doctor` + migration flow | §16.5, §20.2 | drift surfaced pre-migration (⟵ P2, T2) |
 
 > **P1 is 🟡:** the Introspector reads tables/columns/PKs/FKs across all three
 > dialects (enough for drift's core); indexes, views, enums, routines, and
-> extensions are the remaining introspection surface. **P3 ✅.** Next: **P2 drift**
-> (has P1 + Q1). Live PostgreSQL/MySQL E2E for P1 tracked with the e2e lane.
+> extensions are the remaining introspection surface. **P3 ✅, P2 ✅.** Next: P4/P5
+> (CLI-facing, ⟵ Epic T). Live PostgreSQL/MySQL E2E for P1 tracked with the e2e lane.
 
 ## Epic Q — Relation layer (§13, alpha.5) — ⟵ Epic J
 
