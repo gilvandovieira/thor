@@ -18,6 +18,8 @@ Commands:
   create <name>     Create an empty/manual migration
   capabilities <dialect|runtime>
                     Print postgres/sqlite/mysql or runtime capability statuses
+  skills <list|export>
+                    List or export Thor LLM skills (--to <dir>, --format md|json)
 `
 
 /**
@@ -41,6 +43,8 @@ const main = (): void => {
       return commands.create(cwd, rest[0] ?? "")
     case "capabilities":
       return commands.capabilities(rest)
+    case "skills":
+      return commands.skills(cwd, rest)
     default:
       process.stderr.write(`Unsupported command: ${command}.\n\n${HELP}`)
       process.exitCode = 1

@@ -8,7 +8,7 @@
  * @module cli/commands
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import {
   ALL_CAPABILITIES,
   ALL_RUNTIME_CAPABILITIES,
@@ -19,6 +19,7 @@ import {
   statusOf,
   type CapabilityMatrix
 } from "@gilvandovieira/thor/capabilities"
+import { SKILLS, skillFiles, type SkillExportFormat } from "@gilvandovieira/thor/skills"
 
 const CONFIG_FILE = "thor.config.json"
 
@@ -158,4 +159,56 @@ export const capabilities = (args: ReadonlyArray<string>): void => {
 
   const rows = ALL_CAPABILITIES.map((capability) => `${capability}\t${statusOf(matrix, capability)}`)
   process.stdout.write([`Dialect: ${target}`, "Capability\tStatus", ...rows, ""].join("\n"))
+}
+
+/**
+ * @param args - Argument list to search.
+ * @param flag - Flag name, e.g. `--to`.
+ * @returns The value following `flag`, or `undefined` when absent.
+ */
+const flagValue = (args: ReadonlyArray<string>, flag: string): string | undefined => {
+  const index = args.indexOf(flag)
+  return index >= 0 ? args[index + 1] : undefined
+}
+
+/**
+ * Lists or exports Thor's LLM skills (spec §20.5, §21). `list` prints the skill
+ * index; `export` writes the rendered files (Epic U's `skillFiles`) under a
+ * target directory.
+ *
+ * @stable
+ * @param cwd - Project root used to resolve a relative `--to` directory.
+ * @param args - `list`, or `export [--to <dir>] [--format md|json]`.
+ * @returns Nothing.
+ * @throws {Error} When the subcommand or `--format` value is invalid.
+ */
+export const skills = (cwd: string, args: ReadonlyArray<string>): void => {
+  const sub = args[0]
+
+  if (sub === "list") {
+    const rows = SKILLS.map((skill) => `${skill.id}\t${skill.description}`)
+    process.stdout.write(["Skill\tDescription", ...rows, ""].join("\n"))
+    return
+  }
+
+  if (sub === "export") {
+    const rest = args.slice(1)
+    const to = flagValue(rest, "--to") ?? ".agents/skills"
+    const format = flagValue(rest, "--format") ?? "md"
+    if (format !== "md" && format !== "json") {
+      throw new Error("Usage: thor skills export [--to <dir>] [--format md|json]")
+    }
+    // `resolve` honors an absolute `--to`; a relative one is taken from `cwd`.
+    const base = resolve(cwd, to)
+    const files = skillFiles(format as SkillExportFormat)
+    for (const file of files) {
+      const target = join(base, file.path)
+      mkdirSync(dirname(target), { recursive: true })
+      writeFileSync(target, file.content)
+    }
+    log(`Exported ${files.length} skill file(s) to ${to}/thor`)
+    return
+  }
+
+  throw new Error("Usage: thor skills <list|export> [--to <dir>] [--format md|json]")
 }

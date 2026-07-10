@@ -11,6 +11,7 @@ import {
   SQLiteCapabilities,
   statusOf
 } from "@gilvandovieira/thor/capabilities"
+import { SKILLS } from "@gilvandovieira/thor/skills"
 
 const cli = resolve("packages/cli/dist/index.js")
 const directories: string[] = []
@@ -88,7 +89,36 @@ describe("published CLI surface", () => {
     }
   })
 
-  it("fails placeholder commands and unsafe migration names with a non-zero exit", () => {
+  it("lists the LLM skills", () => {
+    const cwd = project()
+    const output = execFileSync(process.execPath, [cli, "skills", "list"], { cwd, encoding: "utf8" })
+    expect(output.split("\n")[0]).toBe("Skill\tDescription")
+    expect(output).toContain("thor.query\t")
+    expect(output).toContain("thor.safety\t")
+    expect(output.trim().split("\n").length).toBe(SKILLS.length + 1) // header + one per skill
+  })
+
+  it("exports skills as markdown files plus README and manifest", () => {
+    const cwd = project()
+    execFileSync(process.execPath, [cli, "skills", "export", "--to", ".agents/skills"], { cwd })
+    const dir = join(cwd, ".agents", "skills", "thor")
+    const files = readdirSync(dir)
+    expect(files).toContain("README.md")
+    expect(files).toContain("manifest.json")
+    for (const skill of SKILLS) expect(files).toContain(skill.file)
+    const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"))
+    expect(manifest.skills).toHaveLength(SKILLS.length)
+  })
+
+  it("exports skills as a single JSON bundle", () => {
+    const cwd = project()
+    execFileSync(process.execPath, [cli, "skills", "export", "--format", "json"], { cwd })
+    const bundle = JSON.parse(readFileSync(join(cwd, ".agents", "skills", "thor", "skills.json"), "utf8"))
+    expect(bundle.skills).toHaveLength(SKILLS.length)
+    expect(bundle.skills[0].content).toContain("# Thor Skill:")
+  })
+
+  it("fails placeholder commands, unsafe names, and bad skills usage with a non-zero exit", () => {
     const cwd = project()
     const unsupported = spawnSync(process.execPath, [cli, "up"], { cwd, encoding: "utf8" })
     expect(unsupported.status).toBe(1)
@@ -97,5 +127,13 @@ describe("published CLI surface", () => {
     const unsafe = spawnSync(process.execPath, [cli, "create", "../escape"], { cwd, encoding: "utf8" })
     expect(unsafe.status).toBe(1)
     expect(unsafe.stderr).toContain("Migration name must")
+
+    const badFormat = spawnSync(process.execPath, [cli, "skills", "export", "--format", "yaml"], { cwd, encoding: "utf8" })
+    expect(badFormat.status).toBe(1)
+    expect(badFormat.stderr).toContain("Usage: thor skills export")
+
+    const badSub = spawnSync(process.execPath, [cli, "skills", "wat"], { cwd, encoding: "utf8" })
+    expect(badSub.status).toBe(1)
+    expect(badSub.stderr).toContain("Usage: thor skills")
   })
 })

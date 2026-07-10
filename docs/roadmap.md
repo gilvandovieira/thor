@@ -351,8 +351,8 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J✅**, FK (Q1) | ✅ Q1–Q6 |
 | R | Routines v1 (functions/procedures, typed + guarded) | §14 | beta | routine v0✅, J✅ | ✅ R1–R6 (OUT-params follow-up) |
 | S | Observability (metadata, spans, param-redaction) | §17 | beta | annotations (§7.4 v0) | ✅ S1–S5 |
-| T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI v0; ⟵ P, U, W1 | 🟡 T3 ✅ · T1/T2 ⟵ P · T4 ⟵ W1 · T5 ⟵ U |
-| U | LLM skills (11 skill files + manifest + export) | §21 | beta | — (U4 ⟵ T) | 🟡 U1–U3/U5 ✅ · U4 ⟵ T |
+| T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI v0; ⟵ P, U, W1 | 🟡 T3/T5 ✅ · T1/T2 ⟵ P✅ · T4 ⟵ W1✅ |
+| U | LLM skills (11 skill files + manifest + export) | §21 | beta | — | ✅ U1–U5 |
 | V | API stability levels + error model v1 | §6, §22 | beta | errors v0✅; ⟵ Q | 🟡 (V1 done) |
 | W | Benchmarks v1 + docs v1 (cold/warm/hot, Node+Bun) | §19, §23 | beta | I✅, L✅; W2 ⟵ N, W5 ⟵ Q/P/U/V | 🟡 W1/W3 ✅ |
 
@@ -588,7 +588,7 @@ implemented and verified. ✅
 | T2 | ❌ | `thor doctor` | §20.2 | checks runtime/dialect/driver/connectivity/journal/pending/drift/capabilities/config (⟵ P) |
 | T3 | ✅ | `thor capabilities <dialect\|runtime>` | §20.3 | dialect matrix (M5) + **runtime variant**: `thor capabilities runtime` prints each `ALL_RUNTIME_CAPABILITIES` as native/unsupported for the detected host; subprocess tests |
 | T4 | ❌ | `thor bench <query\|compile\|decode\|runtime>` | §20.4 | runs the bench groups; `--node`/`--bun` (⟵ W1) |
-| T5 | ❌ | `thor skills list\|export` | §20.5, §21 | exports skill files to an agent workspace (`--to`, `--format md\|json`) — Epic U's `skillFiles` renders the content (U4); this wires it to the CLI (⟵ U) |
+| T5 | ✅ | `thor skills list\|export` | §20.5, §21 | `thor skills list` prints the index; `thor skills export [--to <dir>] [--format md\|json]` writes Epic U's `skillFiles` under `<to>/thor` (default `.agents/skills`); subprocess tests cover list/export/errors |
 
 ## Epic U — LLM skills (§21, beta)
 
@@ -597,13 +597,12 @@ implemented and verified. ✅
 | U1 | ✅ | Skill file format (goal/use-when/checks/safe+unsafe patterns/examples/verification) | §21.3 | `skillMarkdown` renders the canonical §21.3 shape; asserted per skill |
 | U2 | ✅ | Author the 11 required skills | §21.4 | `SKILLS` authors all 11 (`schema`/`query`/`effect-execution`/`migrations`/`capabilities`/`routines`/`testing`/`benchmarks`/`dialects`/`debugging`/`safety`) against Thor's real API, each with its spec hard rule |
 | U3 | ✅ | Skill manifest | §21.5 | `skillManifest()` → machine-readable index matching the authored set |
-| U4 | 🟡 | `thor skills export` (md + json, `--to`) | §20.5, §21 | **export logic done** — `skillFiles("md"\|"json")` renders the fs-free file set (per-skill `.skill.md` + README + manifest.json, or a single `skills.json`); the CLI wiring is deferred to Epic T (T5) |
+| U4 | ✅ | `thor skills export` (md + json, `--to`) | §20.5, §21 | `skillFiles("md"\|"json")` renders the fs-free file set (per-skill `.skill.md` + README + manifest.json, or a single `skills.json`); the `thor skills export` CLI command (T5) writes it under `<to>/thor` |
 | U5 | ✅ | LLM usage invariant | §21.6 | skills encode capability-checking, prefer-declared-APIs, and no-raw-interpolation/`unsafeSql` rules; `skills.test.ts` asserts the invariant |
 
-> **U1–U3, U5 ✅.** The 11 skills, the §21.3 shape, the manifest, and the LLM
-> usage invariant ship in `packages/thor/src/skills` (subpath `/skills`). **U4 is
-> 🟡:** the export *rendering* (`skillFiles`) is complete and tested; only the
-> `thor skills export` CLI command remains, landing with Epic T (T5).
+> **U1–U5 ✅.** The 11 skills, the §21.3 shape, the manifest, the LLM usage
+> invariant, and the export rendering ship in `packages/thor/src/skills` (subpath
+> `/skills`); the `thor skills list\|export` CLI command (T5) exposes them.
 
 ## Epic V — API stability + error model v1 (§6, §22, beta)
 
@@ -669,16 +668,16 @@ the aspirational target into W4's future release gate. ✅
 5. **Q2 → Q3 → Q4 → Q5 → Q6** ✅ — relation layer (Q4 join ⟵ J✅; Q6 ⟵ V1)
 6. **R2, R3** ✅ — finish routines (R2 ⟵ J✅; R6 already done via O6)
 7. **N1, N2, N3, N5** ✅ — Node/Bun runtime lanes (⟵ B/C/M✅)
-8. **U1 → U2 → U3, U5** — 11 skills + manifest + invariant (all subjects exist)
+8. **U1 → U2 → U3, U5** ✅ — 11 skills + manifest + invariant (all subjects exist)
 9. **W1, W3** ✅ — bench groups + hot-path tracking (cache group ⟵ L✅)
 
 **Wave 2 — CLI integration (⟵ P, W1, U)**
 
-10. **T3** — finish the `runtime` variant (dialect shipped via M5✅)
+10. **T3** ✅ — finish the `runtime` variant (dialect shipped via M5✅)
 11. **T1, T2** — wire migrator/introspector into the CLI + `thor doctor` (⟵ P core)
 12. **P4, P5** — CLI `pull`/`introspect`/`inspect` + drift-in-doctor/flow (⟵ T1/T2)
 13. **T4** — `thor bench` (⟵ W1)
-14. **U4 + T5** — `thor skills export` (⟵ U1–U3 + CLI host)
+14. **U4 + T5** ✅ — `thor skills export` (⟵ U1–U3 + CLI host)
 
 **Wave 3 — Stabilize + baselines**
 
