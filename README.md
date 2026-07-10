@@ -310,6 +310,19 @@ partial-support boundary, and the core/dialect isolation rule.
 Task-level detail lives in [`docs/roadmap.md`](docs/roadmap.md); the design of
 record is [`docs/thor-project-v1-spec.md`](docs/thor-project-v1-spec.md).
 
+## Examples
+
+[`examples/jsonl-etl`](examples/jsonl-etl) is a self-contained Effect application
+that generates a 15,000-line JSONL input, migrates SQLite, performs prepared and
+transactional upserts, builds aggregates, and exercises Thor's query,
+observability, cache, capability, routine-compilation, and migration-planning
+surfaces:
+
+```sh
+pnpm build
+pnpm example:jsonl-etl
+```
+
 ## Working on Thor
 
 ```sh

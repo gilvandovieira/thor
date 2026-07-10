@@ -1,0 +1,23 @@
+{
+  "name": "@thor-examples/jsonl-etl",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Effect-based JSONL ETL demonstrating Thor's database feature set.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist .tsbuildinfo data/events.jsonl data/etl.sqlite data/etl.sqlite-shm data/etl.sqlite-wal",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@gilvandovieira/thor": "workspace:*",
+    "effect": "^3.21.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.22.5"
+  }
+}

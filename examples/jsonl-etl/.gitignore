@@ -1,0 +1,6 @@
+data/events.jsonl
+data/etl.sqlite
+data/etl.sqlite-shm
+data/etl.sqlite-wal
+dist/
+.tsbuildinfo

@@ -21,6 +21,7 @@
     "test:packages": "pnpm build && node scripts/test-packages.mjs",
     "test:property": "pnpm --filter @gilvandovieira/thor run build && vitest run packages/thor/test/property-ir.test.ts",
     "test:watch": "vitest",
+    "example:jsonl-etl": "pnpm --filter @thor-examples/jsonl-etl run start",
     "test:contract:sqlite:node": "pnpm --filter @gilvandovieira/thor run build && vitest run packages/thor/test/sqlite.contract.test.ts",
     "test:contract:sqlite:bun": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec bun test test-bun/sqlite.contract.test.ts",
     "test:contract:sqlite": "pnpm test:contract:sqlite:node && pnpm test:contract:sqlite:bun",
