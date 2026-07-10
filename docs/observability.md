@@ -71,3 +71,23 @@ named opt-ins because full SQL or encoded parameter values can contain secrets.
 The query hash, cache identities, span attributes, and default structured events
 remain value-independent. Enabling tracing or metrics alone does not expose SQL
 or parameter values.
+
+## Testing and cost
+
+Use an `onEvent` collector with `FakeDatabaseLayer` to assert metadata and the
+default no-secrets invariant without requiring a telemetry backend:
+
+```ts
+const events: ObservabilityEvent[] = []
+const layer = withObservability(FakeDatabaseLayer(driver), {
+  onEvent: (event) => events.push(event)
+})
+
+await Effect.runPromise(query.pipe(Effect.provide(layer)))
+expect(events[0]).toMatchObject({ dialect: "postgres", operation: "select" })
+```
+
+Instrumentation is opt-in and adds span, metric, logging, or event-sink work at
+the execution boundary. Event sinks should stay non-blocking and avoid expensive
+serialization on hot paths. Benchmark the enabled configuration used in
+production; the default disabled path does not construct telemetry payloads.

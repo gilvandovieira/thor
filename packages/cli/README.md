@@ -2,7 +2,9 @@
 
 Thor's migration and diagnostics CLI. It provides `create`, `generate`,
 `check`, `status`, `up`, `down`, `redo`, structural `drift`, live introspection,
-`doctor`, capability reporting, benchmarks, and LLM skill export.
+`doctor`, capability reporting, and LLM skill export. Benchmark groups are
+currently run through the repository `pnpm bench:*` commands; `thor bench` is not
+shipped yet.
 
 Connected commands read `thor.config.json`:
 

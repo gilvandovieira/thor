@@ -31,7 +31,8 @@ helpers, and the shipped CLI commands:
 - Dialect/driver: `Dialect`, `Driver`
 - Testing: `FakeDriver`, `FakeDatabaseLayer`, `expectSql`
 - Observability: `ObservabilityOptions`, `withObservability`
-- CLI: `init`, `create`, `capabilities`
+- CLI: `init`, `create`, `generate`, `check`, `status`, `up`, `down`, `redo`,
+  `drift`, `pull`, `introspect`, `inspect`, `doctor`, `capabilities`, and `skills`
 
 ## Experimental
 

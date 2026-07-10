@@ -36,8 +36,9 @@ pnpm db:up          # manual: postgres@5433 + mysql@3307
 
 ```sh
 pnpm bench:hotpath  # cold/warm/prepared/mode axes vs a no-op driver (no DB)
-pnpm bench:gate     # fails only on a >2.5× regression vs scripts/hotpath-baseline.json
-pnpm bench:baseline # (re)record the baseline
+pnpm bench:gate:node # stabilized Node gate vs hotpath-baselines/node-<platform>-<arch>.json
+pnpm bench:gate:bun  # stabilized Bun gate vs hotpath-baselines/bun-<platform>-<arch>.json
+pnpm bench:baseline  # deliberately (re)record the Node baseline; use :bun for Bun
 pnpm bench:e2e      # per-driver prepared off/on vs real Postgres
 ```
 

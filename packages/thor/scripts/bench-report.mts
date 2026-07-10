@@ -35,6 +35,81 @@ export interface BenchmarkTargetAssessment {
   readonly excessNs: number
 }
 
+/** Environment identity used to select and validate a hot-path baseline. */
+export interface BenchmarkEnvironment {
+  readonly runtime: "node" | "bun"
+  readonly version: string
+  readonly platform: string
+  readonly architecture: string
+}
+
+/** Reviewed machine-class baseline consumed by the regression gate. */
+export interface BenchmarkBaseline {
+  readonly schemaVersion: 1
+  readonly environment: BenchmarkEnvironment
+  readonly measurement: { readonly statistic: "median"; readonly samples: number }
+  readonly metrics: Readonly<Record<string, number>>
+}
+
+/** Stabilized hosted-runner regression limit; target verdicts remain informational. */
+export const BENCHMARK_REGRESSION_LIMIT = 2.25
+
+/** Sub-microsecond floors are recorded but excluded from multiplicative CI gating. */
+export const BENCHMARK_GATE_MIN_NS = 500
+
+/**
+ * Validates baseline shape, machine class, and required metrics.
+ * Runtime version is recorded but intentionally not matched: one baseline covers
+ * the supported runtime major range on the same runtime/platform/architecture.
+ */
+export const validateBenchmarkBaseline = (
+  value: unknown,
+  expected: Omit<BenchmarkEnvironment, "version">,
+  requiredMetrics: ReadonlyArray<string>
+): BenchmarkBaseline => {
+  const baseline = value as Partial<BenchmarkBaseline> | null
+  if (!baseline || baseline.schemaVersion !== 1 || !baseline.environment || !baseline.measurement || !baseline.metrics) {
+    throw new Error("unsupported baseline format")
+  }
+  const environment = baseline.environment
+  if (environment.runtime !== expected.runtime || environment.platform !== expected.platform || environment.architecture !== expected.architecture) {
+    throw new Error(`baseline environment mismatch: expected ${expected.runtime}/${expected.platform}/${expected.architecture}`)
+  }
+  if (typeof environment.version !== "string" || environment.version.length === 0) throw new Error("baseline runtime version is missing")
+  if (baseline.measurement.statistic !== "median" || !Number.isInteger(baseline.measurement.samples) || baseline.measurement.samples < 1) {
+    throw new Error("baseline measurement metadata is invalid")
+  }
+  for (const metric of requiredMetrics) {
+    const measured = baseline.metrics[metric]
+    if (!Number.isFinite(measured) || measured! <= 0) throw new Error(`baseline metric is missing or invalid: ${metric}`)
+  }
+  return baseline as BenchmarkBaseline
+}
+
+/** Returns labels whose current value exceeds the reviewed multiplicative limit. */
+export const benchmarkRegressions = (
+  current: Readonly<Record<string, number>>,
+  baseline: BenchmarkBaseline,
+  limit = BENCHMARK_REGRESSION_LIMIT,
+  minimumBaselineNs = BENCHMARK_GATE_MIN_NS
+): ReadonlyArray<{ readonly metric: string; readonly currentNs: number; readonly baselineNs: number; readonly ratio: number }> => {
+  if (!Number.isFinite(limit) || limit <= 1) throw new Error("regression limit must be finite and greater than one")
+  return Object.entries(current).flatMap(([metric, currentNs]) => {
+    const baselineNs = baseline.metrics[metric]
+    if (!Number.isFinite(currentNs) || currentNs <= 0 || baselineNs === undefined || baselineNs < minimumBaselineNs) return []
+    const ratio = currentNs / baselineNs
+    return ratio > limit ? [{ metric, currentNs, baselineNs, ratio }] : []
+  })
+}
+
+/** Guards the essential cold-to-warm cache relationship independently of absolute speed. */
+export const benchmarkInvariantViolations = (metrics: Readonly<Record<string, number>>): ReadonlyArray<string> => {
+  const cold = metrics["point.cold"]
+  const warm = metrics["point.warm"]
+  if (!Number.isFinite(cold) || !Number.isFinite(warm)) return ["point.cold and point.warm must be finite"]
+  return warm! * 2 < cold! ? [] : ["point.warm must remain at least 2x faster than point.cold"]
+}
+
 /** Classifies one measured value against an inclusive upper target. */
 export const assessBenchmarkTarget = (valueNs: number, targetNs: number): BenchmarkTargetAssessment => {
   if (!Number.isFinite(valueNs) || valueNs < 0) throw new Error(`valueNs must be finite and non-negative; received ${valueNs}`)

@@ -371,7 +371,7 @@ export const SKILLS: ReadonlyArray<Skill> = [
         "Self-baselining the perf gate.",
         "Comparing across machines without a matching baseline."
       ],
-      examples: "```sh\npnpm bench:hotpath   # cold/warm/prepared\npnpm bench:cache     # per-layer hit/miss\npnpm bench:gate      # catastrophic-regression guard\n```",
+      examples: "```sh\npnpm bench:hotpath   # cold/warm/compiled/unsafe-hot\npnpm bench:cache     # per-layer hit/miss\npnpm bench:gate:node # reviewed Node regression gate\npnpm bench:gate:bun  # reviewed Bun regression gate\n```",
       verification: [
         "Record a reviewed baseline per runtime/platform/arch.",
         "Report warm-path overhead vs the 1–2 µs target.",

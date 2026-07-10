@@ -11,12 +11,17 @@
     "samples": 5
   },
   "metrics": {
-    "point.cold": 32956,
-    "point.warm": 3272,
-    "point.prepared": 2443,
-    "advanced.prepared": 2612,
-    "routine.prepared": 1943,
-    "bulk.safe": 35099,
-    "bulk.unsafe": 2356
+    "point.raw": 103,
+    "point.minimal": 10,
+    "point.cold": 39128,
+    "point.warm": 4393,
+    "point.prepared": 4277,
+    "point.compiled": 3888,
+    "point.compiledPrepared": 3808,
+    "point.unsafeHot": 3736,
+    "advanced.prepared": 4076,
+    "routine.prepared": 3534,
+    "bulk.safe": 39641,
+    "bulk.unsafe": 3028
   }
 }

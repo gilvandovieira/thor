@@ -111,7 +111,7 @@ constraint.
 | F | Cache-key composition & optimization strategies | §15.14 | ✅ F1–F4 | P1 |
 | G | SQL feature matrix tests | §14.11, M6 | ✅ G1–G5,G6b · 🟡 G6a | P1 |
 | H | Property & fuzz tests | §14.12, M6 | ✅ H1–H5 | P2 |
-| I | Performance benchmarks, targets & CI gates | §15.12, §15.16, §18.8/18.9, M7 | ✅ I1–I5,I7 · 🟡 I6 (gate self-baselines — see P0-6) | P1 |
+| I | Performance benchmarks, targets & CI gates | §15.12, §15.16, §18.8/18.9, M7 | ✅ I1–I7 | P1 |
 | J | Advanced query features (joins/agg/CTE/window/upsert) | §6, §14.11 L3–5,7 | ✅ J1–J5 | P2 |
 
 ## Sequencing (phases)
@@ -265,16 +265,15 @@ Levels 6, 8, and 10 (data types, transactions, DDL). 🟡
 |---|---|---|---|---|
 | I1 | ✅ | Fake/no-op driver hot-path benchmark | §15.12 | `bench:overhead` + `bench:hotpath` measure Thor overhead over a constant driver |
 | I2 | ✅ | Cache-hit vs cold-compile benchmark | §15.16 | `bench:hotpath` measures `point.cold` (rebuild each call) vs `point.warm` (memoized IR) → **~10× faster** cache hit (≈9.7× in the recorded baseline) |
-| I3 | ✅ | Prepared-handle benchmark | M7 | `point.warm` vs `point.prepared` → **~1.5–1.6× faster**; `point.prepared` lands at **~2.06 µs**, essentially at the 1–2 µs target |
+| I3 | ✅ | Prepared-handle benchmark | M7 | `point.warm` vs legacy `point.prepared` plus the v1 `point.compiled`/`point.compiledPrepared`/`point.unsafeHot` matrix; reviewed current values live in runtime baseline files |
 | I4 | ✅ | Node **and** Bun benchmark lanes | M7 | `bench:hotpath` + `bench:hotpath:bun` (also `:overhead`/`:sqlite`); the no-op driver needs no runtime-specific client |
-| I5 | ✅ | 1–2 µs hot-path overhead **tracking** | §15.12/18.8 | The script prints `point.prepared ≤ 2 µs — MET/over` each run; recorded in `driver-benchmarks.md` |
-| I6 | ✅ | CI performance **gates** (staged) | §15.16 | `bench:gate` requires a reviewed runtime/platform/architecture baseline, fails when it is absent/invalid, and guards catastrophic >2.5× regressions without self-baselining |
+| I5 | ✅ | 1–2 µs hot-path overhead **tracking** | §15.12/18.8 | the script reports `point.warm` against ≤2 µs and `point.compiledPrepared` against the ≤1 µs ideal boundary under both runtimes; recorded in `driver-benchmarks.md` |
+| I6 | ✅ | CI performance **gates** (staged) | §15.16 | Node and Bun gates require reviewed runtime/platform/architecture baselines, validate shape/environment/metrics, enforce a 2.25× limit plus cold→warm invariant, and never self-baseline |
 | I7 | ✅ | Per-feature benchmark requirement | §18.9 | Checklist in `driver-benchmarks.md` (“Performance contribution checklist”): new query features add build/IR/compile/cap-check/exec benchmarks + a `bench:gate` run |
 
 **Definition of done:** hot-path overhead is measured per runtime, cache-hit ≫
-cold, unsupported caps fail before the driver, and CI runs the catastrophic
-regression gate against a reviewed, committed baseline. 🟡 I6 remains open via
-P0-6.
+cold, unsupported caps fail before the driver, and CI runs stabilized Node and
+Bun regression gates against reviewed committed baselines. ✅
 
 ---
 
@@ -345,7 +344,7 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | K | Compiled Query API (`.compile()` → executable handle) | §8 | alpha.1 | D (`.prepare`) | ✅ K1–K5 |
 | L | Query caches + precompilation modes | §9, §10 | alpha.1 | F, D, E | ✅ L1–L6 |
 | M | Dialect hardening v1 (full contract, MySQL/Postgres) | §11 | alpha.2 | B | ✅ M1–M5 |
-| N | Runtime lanes v1 (Node + Bun) | §12 | alpha.3 | C | 🟡 N1–N3/N5 ✅ · N4 ❌ |
+| N | Runtime lanes v1 (Node + Bun) | §12 | alpha.3 | C | ✅ N1–N5 |
 | O | Migration hardening v1 (dry-run, expand/contract, policies) | §15 | alpha.4 | migrator (§13 v0) | ✅ O1–O6 |
 | P | Introspection & drift detection | §16 | alpha.4 | migrator✅, **M✅** | ✅ P1–P5 (views/enums/routines introspection follow-up) |
 | Q | Relation layer (`defineRelations`, strategies, no N+1) | §13 | alpha.5 | **J✅**, FK (Q1) | ✅ Q1–Q6 |
@@ -354,7 +353,7 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 | T | CLI v1 (`doctor`/`capabilities`/`bench`/`skills`/`inspect`) | §20 | beta | CLI v0; ⟵ P, U, W1 | 🟡 T1/T2/T3/T5 ✅ · T4 ⟵ W1✅ |
 | U | LLM skills (11 skill files + manifest + export) | §21 | beta | — | ✅ U1–U5 |
 | V | API stability levels + error model v1 | §6, §22 | beta | errors v0✅ | ✅ V1–V4 |
-| W | Benchmarks v1 + docs v1 (cold/warm/hot, Node+Bun) | §19, §23 | beta | I✅, L✅; W2 ⟵ N, W5 ⟵ Q/P/U/V | 🟡 W1/W3 ✅ |
+| W | Benchmarks v1 + docs v1 (cold/warm/hot, Node+Bun) | §19, §23 | beta | I✅, L✅; W2 ⟵ N, W5 ⟵ Q/P/U/V | ✅ W1–W5 |
 
 ## v1 milestone → epic map
 
@@ -369,8 +368,8 @@ v1-beta     Observability, skills, API stability → R, S, T, U, V, W
 
 ## Remaining dependency tree (updated 2026-07-10)
 
-> **Done:** K, L, M, O, Q, R, S ✅ (v1) and J, I, F, E, D, C, B ✅ (v0). This graph is
-> the per-task prerequisite tree for the **undone** epics (N, P, T, U, V, W).
+> **Done:** K, L, M, N, O, P, Q, R, S, U, V, W ✅ (v1) and J, I, F, E, D, C, B ✅ (v0).
+> The only remaining v1 epic task in this tree is T4 (`thor bench`).
 > `✅` = prerequisite now satisfied · `⧗ X` = still waiting on task/epic `X`.
 > **Key changes from completed work:** O6 closes **R6**; M5 largely delivers **T3**;
 > M unblocks **P**'s core; J unblocks all of **Q**; L's `bench:cache` seeds **W1**'s
@@ -378,33 +377,20 @@ v1-beta     Observability, skills, API stability → R, S, T, U, V, W
 
 ```txt
 Ready now (all prerequisites satisfied)
-  Q1–Q6 ✅                              (typed graph, IR planner, explicit strategies, no N+1)
-  P1 🟡 ⟵ M✅, schema IR✅ │ P3 ✅ ⟵ M✅ │ P2 ✅ ⟵ P1 core,Q1✅
-  N1–N3,N5 ✅                           (formal lanes, capability selection, shared invariant)
-  U1 ⟵ — │ U2 ⟵ U1 (all 11 subjects exist: schema/query/exec/testing✅,
-                     capabilities M✅, migrations O✅, routines R✅, dialects M✅,
-                     benchmarks I✅, debugging/safety✅)
-  U3 ⟵ U2 │ U5 ⟵ U2
-  R2 ⟵ J✅ (aggregation/window — verify vs J3/J4) │ R3 ⟵ routine v0✅, tx meta✅
-  W1 ✅ ⟵ I✅, L✅ (cache group) │ W3 ✅ ⟵ I5✅
-  V1 ✅ ⟵ K✅,M✅,O✅ stable surface (Q relation tags remain owned by Q6) │ V3 ⟵ errors✅,M,O,S
+  N1–N5 ✅                              (formal lanes, runtime baselines, shared invariant)
+  P1–P5,Q1–Q6,U1–U5,V1–V4,W1–W5 ✅
 
 Blocked on other undone epics
   P4/P5 ✅ ⟵ P1–P3,T1/T2   (CLI introspection + drift flow)
   T1/T2/T3 ✅ ⟵ O✅,P✅,M5✅,C✅
   T4 ⟵ W1✅ (bench groups), I✅
-  T5 ⟵ ⧗ U4 │ U4 ⟵ U1–U3, ⧗ T (CLI host)
-  W2 ⟵ W1✅, N1–N3/N5✅ (N4 benchmark record) │ W4 ⟵ W2
-  W5 ⟵ K✅,L✅,S✅,Q✅ + ⧗ P, ⧗ U, ⧗ V   (final docs pass)
-  V2 ⟵ V1✅ │ V4 ⟵ V3 + all error-producing epics (Q✅)
+  T5/U4,W2/W4/W5,V2–V4 ✅
 
 Already satisfied by completed work (close these out)
   R6 ✅ ⟵ O6                (routine DDL in migrations — done)
 ```
 
-**Suggested remaining order:** **T4** (⟵ W1✅) → **W2** after N →
-**V1/V3** early then **V2/V4** after Q → **W5**
-last (docs over the whole surface).
+**Suggested remaining order:** **T4** (`thor bench`, ⟵ W1✅).
 
 ---
 
@@ -473,13 +459,13 @@ implemented and verified. ✅
 | N1 | ✅ | Formal **Node lane** + **Bun lane** in CI | §12, §18 | `test:runtime:node` and `test:runtime:bun` run the shared SQLite contract in dedicated CI lanes; Bun also runs the shared feature fixture |
 | N2 | ✅ | Runtime capability matrix drives adapter selection | §12.1 | `makeRuntimeSQLiteDriver` / `RuntimeSQLiteLayer` select Node or Bun from the detected profile and reject unavailable native adapters before use; matrix includes the specified worker-thread capability |
 | N3 | ✅ | Bun-specific SQLite driver path sharing the SQLite dialect | §12.3 | `bun:sqlite` uses `RuntimeSQLiteLayer`, the shared `SQLiteDialect`, and the same contract and feature fixtures as Node |
-| N4 | ❌ | Runtime benchmarks (Node vs Bun) recorded | §12, §19 | `bench:*:bun` lanes formalized; results in `driver-benchmarks.md` |
+| N4 | ✅ | Runtime benchmarks (Node vs Bun) recorded | §12, §19 | identical raw/minimal/cold/warm/compiled/prepared/unsafe-hot matrices recorded in reviewed Node and Bun baseline files; results and commands in `driver-benchmarks.md` |
 | N5 | ✅ | Runtime testing invariant enforced | §12.4 | the runner-neutral contract asserts the layer's driver declares the expected runtime requirements and that the actual host satisfies every requirement |
 
-**Release-work record:** N1–N3 and N5 are complete. Runtime capabilities remain
+**Release-work record:** N1–N5 are complete. Runtime capabilities remain
 separate from dialect capabilities; native SQLite selection is capability-driven,
 and both Node and Bun prove their selected adapter contract under the actual host.
-N4 remains the only open runtime task and is owned by the benchmark/baseline pass. ✅
+runtime/platform/architecture-specific baselines and gates cover both hosts. ✅
 
 ## Epic O — Migration hardening v1 (§15, alpha.4)
 
@@ -582,14 +568,15 @@ implemented and verified. ✅
 |---|---|---|---|---|
 | T1 | ✅ | Wire DB-connected commands to the live migrator/introspector | §20.1 | configured `node:sqlite`/optional `pg`/`mysql2`; tsx loads schema and ordered migration modules; `generate` (create-table-only), `check`, `status`, `up`, `down`, `redo`, `drift`, `pull`, and `inspect` use live Migrator/Introspector services; SQLite subprocess lifecycle tests |
 | T2 | ✅ | `thor doctor` | §20.2 | checks runtime, config/schema, dialect, driver compatibility, connectivity, journal/checksums, pending migrations, drift, and capability summary; drift/failures exit non-zero; SQLite E2E test |
-
-**Release-work record:** T1/T2 are complete within the current core planner
-boundary. Generated migrations intentionally cover missing tables only and are
-marked irreversible; column/rename/reverse-plan generation remains explicit
-follow-up work rather than being guessed in the CLI. ✅
 | T3 | ✅ | `thor capabilities <dialect\|runtime>` | §20.3 | dialect matrix (M5) + **runtime variant**: `thor capabilities runtime` prints each `ALL_RUNTIME_CAPABILITIES` as native/unsupported for the detected host; subprocess tests |
 | T4 | ❌ | `thor bench <query\|compile\|decode\|runtime>` | §20.4 | runs the bench groups; `--node`/`--bun` (⟵ W1) |
 | T5 | ✅ | `thor skills list\|export` | §20.5, §21 | `thor skills list` prints the index; `thor skills export [--to <dir>] [--format md\|json]` writes Epic U's `skillFiles` under `<to>/thor` (default `.agents/skills`); subprocess tests cover list/export/errors |
+
+**Release-work record:** T1/T2/T3/T5 are complete within the current core planner
+boundary; T4 (`thor bench`) is intentionally deferred. Generated migrations cover
+missing tables only and are marked irreversible; column/rename/reverse-plan
+generation remains explicit follow-up work rather than being guessed in the CLI.
+🟡 (T4 pending)
 
 ## Epic U — LLM skills (§21, beta)
 
@@ -628,16 +615,17 @@ Q6 are marked `@experimental`. ✅
 | # | Status | Task | Spec | Acceptance |
 |---|---|---|---|---|
 | W1 | ✅ | Benchmark groups: build/IR/compile/decode/effect/cache/runtime | §19.1 | `bench-stages.mts` independently measures build, complete IR construction, stable-IR compile, precompiled row decode, and the shared Effect boundary; `bench:cache` remains dedicated; `bench:runtime-node`/`bench:runtime-bun` run the identical matrix |
-| W2 | ❌ | Cold / warm / hot baselines under **Node and Bun** | §19.5, §25 | recorded baselines; gate per runtime |
-| W3 | ✅ | Hot-path targets tracked (warm cached path) | §19.3 | `bench:hotpath` classifies `point.warm` against ≤2 µs and the smallest prepared path against a ≤1 µs ideal boundary; human and structured JSON reports include value, target, ratio, excess, and MET/OVER status |
-| W4 | ❌ | Benchmark gates stabilized | §19.6, beta | tighten `bench:gate` threshold once baselines settle |
-| W5 | ❌ | v1 docs pass | §23 | README + subpath docs cover compiled queries, relations, introspection, observability, skills, stability |
+| W2 | ✅ | Cold / warm / hot baselines under **Node and Bun** | §19.5, §25 | reviewed `{node,bun}-linux-x64.json` files record raw/minimal/cold/warm/legacy-prepared/compiled/compiled-prepared/unsafe-hot and bulk paths; CI gates each runtime |
+| W3 | ✅ | Hot-path targets tracked (warm cached path) | §19.3 | `bench:hotpath` classifies `point.warm` against ≤2 µs and `point.compiledPrepared` against a ≤1 µs ideal boundary; human and structured JSON reports include value, target, ratio, excess, and MET/OVER status |
+| W4 | ✅ | Benchmark gates stabilized | §19.6, beta | pure validated gate policy is unit-tested; 2.25× reviewed limit, 500 ns timer floor, cold→warm invariant, environment-class validation, and separate Node/Bun CI gates |
+| W5 | ✅ | v1 docs pass | §23 | README/package docs and focused guides cover compiled queries, relations, introspection, observability, skills, stability, errors, tests, performance, and safety boundaries |
 
-**Release-work record:** W1/W3 are complete. The canonical stage matrix makes
+**Release-work record:** W1–W5 are complete. The canonical stage matrix makes
 the required own-code boundaries independently executable under Node and Bun,
 while the existing cache benchmark retains cache-layer counters. Target tracking
-now evaluates the specified warm cached path and reports misses without turning
-the aspirational target into W4's future release gate. ✅
+evaluates the specified warm cached path honestly; reviewed Node/Bun baselines,
+stabilized gates, and the final v1 documentation set complete the beta benchmark
+and docs scope. ✅
 
 ---
 
@@ -660,7 +648,7 @@ the aspirational target into W4's future release gate. ✅
 **Wave 0 — Unblockers (start now, parallel)**
 
 1. **Q1** ✅ — `column.references()` FK metadata (feeds P2 drift **and** Q2)
-2. **P1** 🟡 + **P3** ✅ — core `Introspector.currentSchema()` + per-dialect introspection queries landed; indexes/views/enums/routines/extensions remain
+2. **P1, P3** ✅ — structural `Introspector.currentSchema()` + per-dialect queries; broader catalog objects remain explicit follow-up scope
 3. **P2** ✅ — `Introspector.drift(expectedSchema)` (⟵ P1 core, Q1)
 4. **V1** ✅ — tag `@stable`/`@experimental`/`@internal` + convention (stable surface settled: K/M/O/S✅)
 
@@ -682,14 +670,14 @@ the aspirational target into W4's future release gate. ✅
 
 **Wave 3 — Stabilize + baselines**
 
-15. **W2** — Node+Bun cold/warm/hot baselines (⟵ W1 + N)
-16. **W4** — gate stabilization (⟵ W2)
-17. **V2** — document stability boundaries (⟵ V1)
-18. **V3 → V4** — freeze error set + completeness pass (V4 ⟵ Q)
+15. **W2** ✅ — Node+Bun cold/warm/hot baselines (⟵ W1 + N)
+16. **W4** ✅ — gate stabilization (⟵ W2)
+17. **V2** ✅ — document stability boundaries (⟵ V1)
+18. **V3 → V4** ✅ — freeze error set + completeness pass (V4 ⟵ Q)
 
 **Wave 4 — Final**
 
-19. **W5** — v1 docs pass over the whole surface (⟵ Q, P, U, V, S)
+19. **W5** ✅ — v1 docs pass over the whole surface (⟵ Q, P, U, V, S)
 
 **Critical path** (gates the finish):
 
@@ -700,7 +688,5 @@ U1 → U2 → U3 → U4 → T5 ───────┤
 V1 → V3 → V4 ─────────────────┘
 ```
 
-**W5 (docs) is terminal** — it waits on Q, P, U, and V. The pace-setter is
-**P → T → P4/P5** (introspection gates the CLI); **Q** runs fully in parallel and
-only rejoins at V4/W5. Milestones: Wave 0–1 close **alpha.3 (N)**, **alpha.4 (P)**,
-**alpha.5 (Q)**; Waves 2–4 are **beta (R, T, U, V, W)**.
+**W5 is complete.** All alpha milestones and the R/U/V/W beta scopes are closed;
+T4 remains the final CLI convenience command over the shipped benchmark groups.

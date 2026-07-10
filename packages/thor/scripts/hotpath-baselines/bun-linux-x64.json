@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "environment": {
+    "runtime": "bun",
+    "version": "1.3.14",
+    "platform": "linux",
+    "architecture": "x64"
+  },
+  "measurement": {
+    "statistic": "median",
+    "samples": 5
+  },
+  "metrics": {
+    "point.raw": 137,
+    "point.minimal": 3,
+    "point.cold": 23093,
+    "point.warm": 3656,
+    "point.prepared": 3753,
+    "point.compiled": 3276,
+    "point.compiledPrepared": 3452,
+    "point.unsafeHot": 3005,
+    "advanced.prepared": 3862,
+    "routine.prepared": 3180,
+    "bulk.safe": 39102,
+    "bulk.unsafe": 3244
+  }
+}

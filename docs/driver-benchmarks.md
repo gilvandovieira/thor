@@ -246,12 +246,17 @@ Both own-code benchmarks run under Node (`node:sqlite`) and Bun (`bun:sqlite`) �
 the SQLite bench selects the runtime's driver via a variable dynamic import.
 `pnpm bench:overhead:bun` / `pnpm bench:sqlite:bun` run them under Bun.
 
-Latest run — µs, smaller = faster:
+Reviewed W2 run on Linux x64 (Node 26.4, Bun 1.3.14) — µs, smaller = faster:
 
 | Metric | Node 26.4 | Bun 1.3 |
 |---|--:|--:|
-| `point.prepared` handle (no I/O) | ~2.24 µs | ~2.05 µs |
-| `point.cold` (rebuilt each call) | ~33 µs | ~19 µs |
+| raw constant-driver Effect | 0.10 µs | 0.14 µs |
+| minimal object construction | 0.01 µs | <0.01 µs |
+| `point.cold` (rebuilt each call) | 39.1 µs | 23.1 µs |
+| `point.warm` (stable query caches) | 4.39 µs | 3.66 µs |
+| `point.compiled` | 3.89 µs | 3.28 µs |
+| `point.compiledPrepared` | 3.81 µs | 3.45 µs |
+| `point.unsafeHot` | 3.74 µs | 3.00 µs |
 | decode (precompiled) | ~0.26 µs/row | ~0.17 µs/row |
 | SQLite point select, Thor prepared on | ~3.8 µs | ~3.4 µs |
 | raw in-memory SQLite point select | ~0.63 µs | ~0.44 µs |
@@ -277,27 +282,28 @@ driver time.
 
 ## Hot-path axes & staged regression gate (`bench:hotpath`)
 
-`scripts/bench-hotpath.mts` isolates the wins from the optimization work (cache
-memoization, `.prepare()` handles, execution modes) against a constant no-op
-driver + shared runtime. Latest run (Node 26.4, no I/O) — µs/op, smaller = faster:
+`scripts/bench-hotpath.mts` isolates raw/minimal floors, cache memoization,
+legacy `.prepare()`, stable compiled handles, and execution modes against a
+constant no-op driver + shared runtime. The full reviewed values live in
+`scripts/hotpath-baselines/{node,bun}-linux-x64.json`.
 
 | Scenario | µs/op | what it isolates |
 |---|--:|---|
-| `point.cold` | ~33 µs | query rebuilt every call — compile + guard run each time |
-| `point.warm` | ~3.3 µs | stable IR reused → compile/guard **memoized** (I2 cache hit) |
-| `point.prepared` | **~2.3 µs** | `.prepare()` handle → precompiled decoder + per-dialect compile (I3) |
-| `advanced.prepared` | **~2.4 µs** | Epic J left join + grouped aggregate through a static handle |
-| `routine.prepared` | **~1.63 µs** | Declared scalar routine with capability check + return codec |
-| `bulk.safe` (100 rows) | ~37 µs | strict schema decode of every row |
-| `bulk.unsafe` (100 rows) | ~2.5 µs | `unsafe` mode skips decode (Epic E) |
+| `point.cold` | 39.1 µs | query rebuilt every call — compile + guard run each time |
+| `point.warm` | 4.39 µs | stable IR reused → compile/guard memoized |
+| `point.compiled` | 3.89 µs | stable `.compile()` handle without preparation |
+| `point.compiledPrepared` | 3.81 µs | stable `.compilePrepared()` handle |
+| `point.unsafeHot` | 3.74 µs | explicit compiled decode-skip path |
+| `bulk.safe` (100 rows) | 39.6 µs | strict schema decode of every row |
+| `bulk.unsafe` (100 rows) | 3.03 µs | unsafe-hot mode skips decode |
 
 Derived (× faster, bigger = better):
-- **cold → warm: ~10–11× faster** — "compile cache hit must be much faster than cold compile" (§15.16). ✅
-- **warm → prepared: ~1.4× faster** — the handle shaves the last µs off the hot path.
-- **bulk safe → unsafe: ~14–16× faster** — the decode-skip lever, opt-in only.
-- `point.warm` ≈ **3.3 µs** currently reports **OVER** against the ≤2 µs warm
+- **cold → warm: ~9× faster** — the gate also requires warm to remain at least 2× faster than cold. ✅
+- **warm → compiled: ~1.1× faster** — precompilation removes remaining shape work.
+- **bulk safe → unsafe: ~13× faster** — the decode-skip lever, opt-in only.
+- `point.warm` = **4.39 µs** currently reports **OVER** against the ≤2 µs warm
   cached target (§19.3). This is tracked honestly as a target, not a release promise.
-- `point.prepared` ≈ **2.3 µs** (Node), **~2.05 µs** (Bun) is reported separately
+- `point.compiledPrepared` = **3.81 µs** (Node), **3.45 µs** (Bun) is reported separately
   against a ≤1 µs boundary for the aspirational sub-microsecond smallest-path
   ideal; the residual is largely the Effect runtime floor.
 - The join + aggregate handle (`advanced.prepared` ~2.4 µs) stays in the **same
@@ -305,14 +311,19 @@ Derived (× faster, bigger = better):
 - Declared routine execution (`routine.prepared` ~1.63 µs) also stays inside the
   target envelope, including capability lookup and return-codec decoding.
 
-**Staged CI gate (§15.16).** `pnpm bench:baseline` records a reviewed,
-runtime/platform/architecture-specific file under `scripts/hotpath-baselines/`.
-`pnpm bench:gate` compares the median of five samples and **fails only on a >2.5×
-regression** (generous for CI noise). A missing baseline is an error: a clean CI
-checkout can no longer measure the changed code, save those numbers as its own
-baseline, and immediately pass. The Node CI job invokes the gate after build,
-typecheck, and tests. This is a catastrophic-regression guardrail, not a claim
-that smaller regressions are harmless.
+**Stabilized CI gate (§19.6).** `pnpm bench:baseline:node` and
+`bench:baseline:bun` record reviewed runtime/platform/architecture files under
+`scripts/hotpath-baselines/`. Both CI gates validate the baseline schema,
+environment class, sample metadata, and every metric, then fail above **2.25×**
+the reviewed median. Metrics below 500 ns remain recorded but are excluded from
+multiplicative gating because timer noise dominates them. The gate also requires
+warm execution to stay at least 2× faster than cold execution.
+
+Runtime versions are recorded as metadata but are not required to match exactly;
+one reviewed file covers the supported runtime versions on the same
+runtime/platform/architecture class. Missing baselines never self-create in gate
+mode. W3's ≤2 µs target remains informational and separate from this regression
+policy.
 
 ### Performance contribution checklist (§18.9)
 
@@ -323,7 +334,7 @@ performance-sensitive change:
 - [ ] Confirm the compile/guard **cache hit** stays ≫ cold (`bench:hotpath`).
 - [ ] Track `point.warm` against the **≤2 µs** target and explain movement; do not
   substitute the faster prepared path for the warm-cache metric.
-- [ ] Run `pnpm bench:gate` locally; update the baseline (`pnpm bench:baseline`) only with a deliberate, reviewed change.
+- [ ] Run `pnpm bench:gate:node` and `pnpm bench:gate:bun`; update either baseline only with a deliberate, reviewed change.
 - [ ] Record notable numbers here.
 
 ## Reproduce
@@ -334,7 +345,8 @@ pnpm bench:e2e        # per-driver, prepared off vs on (real Postgres)
 pnpm bench:overhead   # own-code overhead, no database
 pnpm bench:sqlite     # Thor vs raw in-memory SQLite (fast-DB stress test)
 pnpm bench:hotpath    # cold vs warm vs prepared vs mode axes (no database)
-pnpm bench:gate       # local/CI gate: fail on >2.5× regression vs baseline
+pnpm bench:gate:node  # Node gate against the reviewed machine-class baseline
+pnpm bench:gate:bun   # Bun gate against the reviewed machine-class baseline
 # or against your own database:
 DATABASE_URL=postgres://user:pass@host:5432/db pnpm bench:drivers
 ```

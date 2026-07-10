@@ -9,7 +9,7 @@
  *   - decode    : bulk read in `safe` vs `unsafe` mode → decode-skip win (Epic E)
  *
  *   pnpm bench:hotpath            # print results
- *   BENCH_GATE=1 pnpm bench:hotpath   # compare to baseline, fail on catastrophic regression
+ *   BENCH_GATE=1 pnpm bench:hotpath   # compare to the reviewed runtime baseline
  *   BENCH_UPDATE_BASELINE=1 ...   # (re)record the baseline
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
@@ -25,10 +25,16 @@ import {
   formatThroughput,
   measureSync,
   assessBenchmarkTarget,
+  BENCHMARK_REGRESSION_LIMIT,
+  BENCHMARK_GATE_MIN_NS,
+  benchmarkInvariantViolations,
+  benchmarkRegressions,
   noiseLabel,
   percentFaster,
   runtimeName,
   timingLegend,
+  validateBenchmarkBaseline,
+  type BenchmarkBaseline,
   type Timing
 } from "./bench-report.mts"
 
@@ -50,14 +56,16 @@ const lowerRoutine = defineFunction("lower", {
 })
 
 /** Constant, zero-I/O driver returning fixed rows synchronously. */
+const driverFor = (rows: ReadonlyArray<Record<string, unknown>>) => ({
+  runtime: { adapter: "bench/constant", required: [] },
+  query: () => Effect.succeed(rows),
+  execute: () => Effect.succeed({ rowCount: rows.length }),
+  executeScript: () => Effect.succeed({ rowCount: 0 })
+})
 const layerFor = (rows: ReadonlyArray<Record<string, unknown>>) =>
   Layer.succeed(Database, {
     dialect: PostgresDialect,
-    driver: {
-      query: () => Effect.succeed(rows),
-      execute: () => Effect.succeed({ rowCount: rows.length }),
-      executeScript: () => Effect.succeed({ rowCount: 0 })
-    },
+    driver: driverFor(rows),
     allowEmulation: false,
     preparedStatements: true
   } as never)
@@ -71,15 +79,20 @@ const bulkRows = Array.from({ length: 100 }, (_, i) => ({
 }))
 
 const pointRt = ManagedRuntime.make(layerFor(pointRows))
+const rawPointDriver = driverFor(pointRows)
 const bulkLayer = layerFor(bulkRows)
 const bulkRt = ManagedRuntime.make(bulkLayer)
-const bulkUnsafeRt = ManagedRuntime.make(withMode(bulkLayer, "unsafe"))
+const bulkUnsafeRt = ManagedRuntime.make(withMode(bulkLayer, "unsafe-hot"))
 const advancedRt = ManagedRuntime.make(layerFor([{ email: "a@b.c", total: 1 }]))
 const routineRt = ManagedRuntime.make(layerFor([{ lowered: "a@b.c" }]))
 
 const pointQuery = () => db.select({ id: users.id, name: users.name }).from(users).where(eq(users.email, emailParam))
 const warmPoint = pointQuery()
 const preparedPoint = warmPoint.prepare("point")
+const pointTerminal = warmPoint.one()
+const compiledPoint = pointTerminal.compile(PostgresDialect, { prepare: false })
+const compiledPreparedPoint = pointTerminal.compilePrepared(PostgresDialect)
+const unsafeHotPoint = pointTerminal.compileUnsafeHot(PostgresDialect)
 const bulkQuery = db.select({ id: users.id, email: users.email, name: users.name, age: users.age }).from(users)
 const advancedQuery = db
   .select({ email: users.email, total: count() })
@@ -103,6 +116,8 @@ const time = (label: string, description: string, iters: number, fn: () => void)
 })
 
 const samples: Sample[] = [
+  time("point.raw", "constant raw-driver Effect", 100_000, () => void pointRt.runSync(rawPointDriver.query("select", []))),
+  time("point.minimal", "construct a minimal result object", 500_000, () => void ({ id: pointRows[0]!.id, name: pointRows[0]!.name })),
   time("point.cold", "rebuild the query every time", 100_000, () =>
     void pointRt.runSync(pointQuery().one({ email: "a@b.c" }))
   ),
@@ -110,6 +125,9 @@ const samples: Sample[] = [
   time("point.prepared", "reuse a prepared handle", 100_000, () =>
     void pointRt.runSync(preparedPoint.one({ email: "a@b.c" }))
   ),
+  time("point.compiled", "stable compiled query", 100_000, () => void pointRt.runSync(compiledPoint.execute({ email: "a@b.c" }))),
+  time("point.compiledPrepared", "compiled + prepared query", 100_000, () => void pointRt.runSync(compiledPreparedPoint.execute({ email: "a@b.c" }))),
+  time("point.unsafeHot", "compiled unsafe-hot query", 100_000, () => void pointRt.runSync(unsafeHotPoint.execute({ email: "a@b.c" }))),
   time("advanced.prepared", "join + group through a handle", 100_000, () => void advancedRt.runSync(advancedQuery.all())),
   time("routine.prepared", "declared routine through a handle", 100_000, () => void routineRt.runSync(routineQuery.all())),
   time("bulk.safe", "read and check 100 rows", 20_000, () => void bulkRt.runSync(bulkQuery.all())),
@@ -121,7 +139,7 @@ const repeatedSavingsNs = (slowerNs: number, fasterNs: number, operations = 100_
   (slowerNs - fasterNs) * operations
 const targets = {
   "point.warm": assessBenchmarkTarget(by["point.warm"]!, 2_000),
-  "point.prepared": assessBenchmarkTarget(by["point.prepared"]!, 1_000)
+  "point.compiledPrepared": assessBenchmarkTarget(by["point.compiledPrepared"]!, 1_000)
 } as const
 
 console.log("\nThor hot-path overhead — Thor's cost only, with no database or network\n" + "-".repeat(100))
@@ -150,7 +168,7 @@ console.log(
   `  • Warm cached target (≤ 2 µs): ${targets["point.warm"].status.toUpperCase()} at ${formatDuration(targets["point.warm"].valueNs)} (${targets["point.warm"].ratio.toFixed(2)}× target).`
 )
 console.log(
-  `  • Smallest prepared-path ideal boundary (≤ 1 µs): ${targets["point.prepared"].status.toUpperCase()} at ${formatDuration(targets["point.prepared"].valueNs)}.`
+  `  • Smallest compiled-prepared ideal boundary (≤ 1 µs): ${targets["point.compiledPrepared"].status.toUpperCase()} at ${formatDuration(targets["point.compiledPrepared"].valueNs)}.`
 )
 console.log(`\nJSON:${JSON.stringify({ runtime: runtimeName(), metrics: by, targets })}`)
 
@@ -165,7 +183,6 @@ if (process.env.BENCH_GATE || process.env.BENCH_UPDATE_BASELINE) {
   const runtime = runtimeName()
   const baselineFile = `${runtime}-${process.platform}-${process.arch}.json`
   const baselinePath = fileURLToPath(new URL(`./hotpath-baselines/${baselineFile}`, import.meta.url))
-  const THRESHOLD = 2.5 // generous: fail only on catastrophic regression while baselines stabilize
   const environment = {
     runtime,
     version: runtime === "node" ? process.versions.node : process.versions.bun ?? "unknown",
@@ -173,20 +190,10 @@ if (process.env.BENCH_GATE || process.env.BENCH_UPDATE_BASELINE) {
     architecture: process.arch
   }
 
-  interface Baseline {
-    readonly schemaVersion: 1
-    readonly environment: typeof environment
-    readonly measurement: {
-      readonly statistic: "median"
-      readonly samples: number
-    }
-    readonly metrics: Record<string, number>
-  }
-
   if (process.env.BENCH_UPDATE_BASELINE) {
     mkdirSync(dirname(baselinePath), { recursive: true })
     const metrics = Object.fromEntries(samples.map((sample) => [sample.label, Math.round(sample.nsPerOp)]))
-    const baseline: Baseline = {
+    const baseline: BenchmarkBaseline = {
       schemaVersion: 1,
       environment,
       measurement: { statistic: "median", samples: samples[0]!.sampleCount },
@@ -199,28 +206,32 @@ if (process.env.BENCH_GATE || process.env.BENCH_UPDATE_BASELINE) {
     console.error("[gate] Record and review it deliberately with `pnpm bench:baseline`; the gate will never baseline itself.")
     process.exit(1)
   } else {
-    const baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as Baseline
-    if (baseline.schemaVersion !== 1 || !baseline.metrics) {
-      console.error(`\n[gate] FAIL — unsupported baseline format: ${baselinePath}`)
-      process.exit(1)
-    }
-    const missing = samples.filter((s) => baseline.metrics[s.label] === undefined).map((s) => s.label)
-    if (missing.length > 0) {
-      console.error(`\n[gate] FAIL — baseline is missing metrics: ${missing.join(", ")}`)
-      console.error("[gate] Update it deliberately with `pnpm bench:baseline` and review the changed numbers.")
-      process.exit(1)
-    }
-    const regressions = samples
-      .filter((s) => s.nsPerOp > baseline.metrics[s.label]! * THRESHOLD)
-      .map(
-        (s) =>
-          `${s.label}: ${formatDuration(s.nsPerOp)} now vs ${formatDuration(baseline.metrics[s.label]!)} baseline (${(s.nsPerOp / baseline.metrics[s.label]!).toFixed(2)}× slower)`
+    let baseline: BenchmarkBaseline
+    try {
+      baseline = validateBenchmarkBaseline(
+        JSON.parse(readFileSync(baselinePath, "utf8")),
+        { runtime, platform: process.platform, architecture: process.arch },
+        samples.map((sample) => sample.label)
       )
-    if (regressions.length > 0) {
-      console.error(`\n[gate] FAIL — catastrophic regression:\n  ${regressions.join("\n  ")}`)
+    } catch (error) {
+      console.error(`\n[gate] FAIL — invalid baseline ${baselinePath}: ${(error as Error).message}`)
       process.exit(1)
     }
-    console.log(`\n[gate] OK — no metric is ${THRESHOLD}× slower than the reviewed ${baselineFile} baseline.`)
-    console.log("[gate] This is a catastrophic-regression guardrail, not proof that small changes are harmless.")
+    const regressions = benchmarkRegressions(by, baseline!, BENCHMARK_REGRESSION_LIMIT).map(
+      (regression) =>
+        `${regression.metric}: ${formatDuration(regression.currentNs)} now vs ${formatDuration(regression.baselineNs)} baseline (${regression.ratio.toFixed(2)}× slower)`
+    )
+    const invariantViolations = benchmarkInvariantViolations(by)
+    if (regressions.length > 0) {
+      console.error(`\n[gate] FAIL — regression above ${BENCHMARK_REGRESSION_LIMIT}×:\n  ${regressions.join("\n  ")}`)
+      process.exit(1)
+    }
+    if (invariantViolations.length > 0) {
+      console.error(`\n[gate] FAIL — benchmark invariant:\n  ${invariantViolations.join("\n  ")}`)
+      process.exit(1)
+    }
+    console.log(`\n[gate] OK — no metric is more than ${BENCHMARK_REGRESSION_LIMIT}× slower than ${baselineFile}.`)
+    console.log(`[gate] Metrics below ${formatDuration(BENCHMARK_GATE_MIN_NS)} are recorded but excluded from multiplicative gating.`)
+    console.log("[gate] Runtime version is informational; runtime/platform/architecture and metric shape are enforced.")
   }
 }

@@ -30,12 +30,13 @@ pnpm add @gilvandovieira/thor effect
 
 Thor supports maintained Node.js releases starting at Node 22. The native
 `node:sqlite` adapter requires Node 22.5 or newer; SQLite also has a Bun-native
-contract-test lane.
+runtime lane.
 
 Everything ships from one package. The common things (`db`, `pg`, `eq`, `param`,
 …) come from the top level; deeper surfaces live under subpaths like
 `@gilvandovieira/thor/postgres`, `/sqlite`, `/mysql`, `/migrate`,
-`/observability`, and `/testing`.
+`/relations`, `/introspect`, `/observability`, `/skills`, `/capabilities`, and
+`/testing`.
 
 ## A quick tour
 
@@ -54,7 +55,7 @@ const authors = pg.table("authors", {
 
 const posts = pg.table("posts", {
   id: pg.uuid("id").primaryKey().defaultRandom(),
-  authorId: pg.uuid("author_id").notNull(),
+  authorId: pg.uuid("author_id").notNull().references(() => authors.id),
   title: pg.text("title").notNull(),
   createdAt: pg.timestamp("created_at").notNull().defaultNow()
 })
@@ -111,6 +112,13 @@ hot path, bounded LRU caches (`withQueryCache`), precompilation modes
 Effect spans, metrics, structured query metadata, and safe SQL/parameter logging
 are opt-in through `db.withObservability(...)`. Raw values are omitted by
 default; see [the observability guide](docs/observability.md).
+
+Relations remain explicit about loading: declare `one`/`many` edges and choose
+`join`, batched `query`, or `manual` per included edge. See the
+[relations guide](docs/relations.md). Live schema inspection and structural drift
+are available through `@gilvandovieira/thor/introspect` and the `thor` CLI; see
+[introspection](docs/introspection.md). Thor also ships 11 agent guidance files
+through `/skills` and `thor skills export`; see [LLM skills](docs/skills.md).
 
 ### 4. Run it
 
@@ -356,6 +364,10 @@ pnpm db:up        # or start postgres@5433 + mysql@3307 yourself
 
 - [`docs/advanced-queries.md`](docs/advanced-queries.md) — joins, subqueries, aggregation, CTEs, upserts
 - [`docs/compiled-queries.md`](docs/compiled-queries.md) - stable compiled handles, metadata, and hot-path invariants
+- [`docs/relations.md`](docs/relations.md) — explicit relation graphs, loading strategies, and no-hidden-N+1 behavior
+- [`docs/introspection.md`](docs/introspection.md) — live Schema IR, structural drift, and connected CLI workflows
+- [`docs/observability.md`](docs/observability.md) — Effect spans, metrics, structured events, and safe logging
+- [`docs/skills.md`](docs/skills.md) — the 11 LLM skills, programmatic rendering, and CLI export
 - [`docs/query-cache.md`](docs/query-cache.md) — named cache layers, bounded LRU caches, precompilation modes, and safety modes
 - [`docs/migrations.md`](docs/migrations.md) — reviewable planning, policies, expand/contract staging, and typed backfills
 - [`docs/routines.md`](docs/routines.md) — declared functions, table-valued sources, procedures, and capability behavior
@@ -366,5 +378,3 @@ pnpm db:up        # or start postgres@5433 + mysql@3307 yourself
 - [`docs/api-stability.md`](docs/api-stability.md) — `@stable`/`@experimental`/`@internal` boundaries
 - [`docs/api-documentation.md`](docs/api-documentation.md) — JSDoc conventions
 - [`docs/thor-project-v1-spec.md`](docs/thor-project-v1-spec.md) — the specification · [`docs/roadmap.md`](docs/roadmap.md) — progress by epic
-</content>
-</invoke>
