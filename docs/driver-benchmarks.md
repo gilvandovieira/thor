@@ -1,5 +1,23 @@
 # Driver benchmarks: prepared, unprepared, and static-handle paths
 
+## The 30-second version
+
+- **Look at time first; smaller is better.** `1 ms` is one thousandth of a
+  second. `1 µs` is one millionth of a second.
+- **“Typical” is the middle result from five samples.** One lucky or unlucky
+  timing pass no longer becomes the headline number.
+- **Check the range.** If two results overlap or the run says `noisy`, rerun it
+  before claiming a win. A tiny difference inside the range is not meaningful.
+- **`ops/s` is an equivalent, not a promise.** It answers “how many could fit in
+  one second if this were the only work?” It is not production capacity.
+- **Use the benchmark that matches the question.** `bench:hotpath` measures Thor
+  alone, `bench:sqlite` makes library overhead easy to see, and `bench:e2e`
+  includes a real local PostgreSQL server.
+
+The executable reports end with an **“In everyday terms”** summary and retain a
+`JSON:` line for tools. Absolute numbers vary by computer; comparisons made in
+the same run are usually more useful.
+
 > **Scope and caveat:** cross-driver throughput below compares the two Postgres
 > adapters. The historical postgres.js write advantage is an **unprepared-path**
 > result; the adapters converge when preparation is enabled. SQLite is measured
@@ -51,7 +69,11 @@ Per adapter:
 - `postgres:17-alpine` in Docker, `tmpfs` storage, over localhost (network ≈ 0).
 - Each (driver × mode) runs on its **own fresh single connection**, re-seeded to
   1 point row + 200 bulk rows, so prepared-statement caches never leak across runs.
-- Per scenario: 30-iteration warmup (registers the prepared statement), then a timed loop.
+- Read scenarios run before writes, and the bulk query has an explicit 200-row
+  limit. Inserts can no longer silently turn `select.bulk200` into a much larger
+  workload.
+- Per scenario: 30-iteration warmup (registers the prepared statement), then
+  five timed samples. The report uses their median and shows the full range.
 - **Not a production benchmark** — see caveats.
 
 Scenarios: `insert`, `insert.returning` (decode 1 row), `select.point` (unique-key
@@ -60,9 +82,9 @@ lookup with a bound param), `select.bulk200` (param-free, decode 200 rows),
 
 ## Prepared statements: OFF vs ON (per driver)
 
-> **Latest run:** Node 26.4, PG 17 (Docker, `tmpfs`, loopback). Single
-> representative run per `pnpm bench:e2e` — bigger `ops/s` = faster; speedup >1×
-> means preparation helps. Microbenchmark variance ±15–20% (see caveats).
+> **Recorded snapshot:** Node 26.4, PG 17 (Docker, `tmpfs`, loopback). These
+> historical tables use `ops/s` (bigger = faster). Current executable output
+> leads with median latency (smaller = faster) and prints its sample range.
 
 Speedup = ops/s with preparation ÷ ops/s without:
 
@@ -267,10 +289,14 @@ Derived (× faster, bigger = better):
 - Declared routine execution (`routine.prepared` ~1.63 µs) also stays inside the
   target envelope, including capability lookup and return-codec decoding.
 
-**Staged CI gate (§15.16).** `pnpm bench:baseline` records `scripts/hotpath-baseline.json`;
-`pnpm bench:gate` re-runs the bench and **fails only on a >2.5× regression** (generous
-for CI noise) — auto-recording the baseline on first run. **Latest gate: OK** (within
-2.5× of baseline). The Node CI job invokes the gate after build, typecheck, and tests.
+**Staged CI gate (§15.16).** `pnpm bench:baseline` records a reviewed,
+runtime/platform/architecture-specific file under `scripts/hotpath-baselines/`.
+`pnpm bench:gate` compares the median of five samples and **fails only on a >2.5×
+regression** (generous for CI noise). A missing baseline is an error: a clean CI
+checkout can no longer measure the changed code, save those numbers as its own
+baseline, and immediately pass. The Node CI job invokes the gate after build,
+typecheck, and tests. This is a catastrophic-regression guardrail, not a claim
+that smaller regressions are harmless.
 
 ### Performance contribution checklist (§18.9)
 
@@ -286,6 +312,7 @@ performance-sensitive change:
 ## Reproduce
 
 ```sh
+pnpm bench:report     # recommended start: all no-Docker reports with plain-language summaries
 pnpm bench:e2e        # per-driver, prepared off vs on (real Postgres)
 pnpm bench:overhead   # own-code overhead, no database
 pnpm bench:sqlite     # Thor vs raw in-memory SQLite (fast-DB stress test)

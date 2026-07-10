@@ -45,6 +45,8 @@ const results = [
 ]
 
 // eslint-disable-next-line no-console
-console.log("\nThor micro-benchmarks (Postgres)\n" + "-".repeat(60))
+console.log("\nThor query-building microbenchmarks (Postgres)\n" + "-".repeat(105))
+console.log("Smaller time is faster. Typical = median of 5 samples; range = fastest–slowest. 1 µs is one millionth of a second.\n")
 for (const r of results) console.log(formatResult(r))
+console.log("\nThese measure in-memory query construction and SQL compilation, not database or network time.")
 console.log()

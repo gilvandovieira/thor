@@ -12,7 +12,6 @@
  *   BENCH_GATE=1 pnpm bench:hotpath   # compare to baseline, fail on catastrophic regression
  *   BENCH_UPDATE_BASELINE=1 ...   # (re)record the baseline
  */
-import { performance } from "node:perf_hooks"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -20,6 +19,17 @@ import { Effect, Layer, ManagedRuntime, Schema } from "effect"
 import { Database, count, db, eq, param, pg, withMode } from "@gilvandovieira/thor"
 import { PostgresDialect } from "@gilvandovieira/thor/postgres"
 import { defineFunction } from "@gilvandovieira/thor/routine"
+import {
+  formatDuration,
+  formatRange,
+  formatThroughput,
+  measureSync,
+  noiseLabel,
+  percentFaster,
+  runtimeName,
+  timingLegend,
+  type Timing
+} from "./bench-report.mts"
 
 const users = pg.table("bench_users", {
   id: pg.uuid("id").primaryKey().defaultRandom(),
@@ -81,37 +91,59 @@ const routineQuery = db
   .from(users)
   .prepare("routine-lower")
 
-interface Sample {
+interface Sample extends Timing {
   readonly label: string
-  readonly nsPerOp: number
+  readonly description: string
 }
-const time = (label: string, iters: number, fn: () => void): Sample => {
-  for (let i = 0; i < Math.min(iters, 3000); i++) fn()
-  const start = performance.now()
-  for (let i = 0; i < iters; i++) fn()
-  return { label, nsPerOp: ((performance.now() - start) * 1e6) / iters }
-}
+const time = (label: string, description: string, iters: number, fn: () => void): Sample => ({
+  label,
+  description,
+  ...measureSync({ iterationsPerSample: Math.ceil(iters / 5), warmupIterations: 2_000 }, fn)
+})
 
 const samples: Sample[] = [
-  time("point.cold", 100_000, () => void pointRt.runSync(pointQuery().one({ email: "a@b.c" }))),
-  time("point.warm", 100_000, () => void pointRt.runSync(warmPoint.one({ email: "a@b.c" }))),
-  time("point.prepared", 100_000, () => void pointRt.runSync(preparedPoint.one({ email: "a@b.c" }))),
-  time("advanced.prepared", 100_000, () => void advancedRt.runSync(advancedQuery.all())),
-  time("routine.prepared", 100_000, () => void routineRt.runSync(routineQuery.all())),
-  time("bulk.safe", 20_000, () => void bulkRt.runSync(bulkQuery.all())),
-  time("bulk.unsafe", 20_000, () => void bulkUnsafeRt.runSync(bulkQuery.all()))
+  time("point.cold", "rebuild the query every time", 100_000, () =>
+    void pointRt.runSync(pointQuery().one({ email: "a@b.c" }))
+  ),
+  time("point.warm", "reuse the same query", 100_000, () => void pointRt.runSync(warmPoint.one({ email: "a@b.c" }))),
+  time("point.prepared", "reuse a prepared handle", 100_000, () =>
+    void pointRt.runSync(preparedPoint.one({ email: "a@b.c" }))
+  ),
+  time("advanced.prepared", "join + group through a handle", 100_000, () => void advancedRt.runSync(advancedQuery.all())),
+  time("routine.prepared", "declared routine through a handle", 100_000, () => void routineRt.runSync(routineQuery.all())),
+  time("bulk.safe", "read and check 100 rows", 20_000, () => void bulkRt.runSync(bulkQuery.all())),
+  time("bulk.unsafe", "read 100 rows without checks", 20_000, () => void bulkUnsafeRt.runSync(bulkQuery.all()))
 ]
 
 const by = Object.fromEntries(samples.map((s) => [s.label, s.nsPerOp]))
-const us = (ns: number) => (ns / 1000).toFixed(3)
+const repeatedSavingsNs = (slowerNs: number, fasterNs: number, operations = 100_000) =>
+  (slowerNs - fasterNs) * operations
 
-console.log("\nThor hot-path overhead (no I/O, shared runtime)\n" + "-".repeat(56))
-for (const s of samples) console.log(`  ${s.label.padEnd(20)} ${us(s.nsPerOp).padStart(9)} µs/op`)
-console.log("\n  derived:")
-console.log(`  cold → warm (compile/guard cache hit) : ${(by["point.cold"]! / by["point.warm"]!).toFixed(2)}× faster`)
-console.log(`  warm → prepared (handle)              : ${(by["point.warm"]! / by["point.prepared"]!).toFixed(2)}× faster`)
-console.log(`  bulk safe → unsafe (skip decode)      : ${(by["bulk.safe"]! / by["bulk.unsafe"]!).toFixed(2)}× faster`)
-console.log(`\n  hot-path target: point.prepared ≤ 2 µs — ${by["point.prepared"]! <= 2000 ? "MET" : "over"} (${us(by["point.prepared"]!)} µs)`)
+console.log("\nThor hot-path overhead — Thor's cost only, with no database or network\n" + "-".repeat(100))
+console.log(timingLegend(samples[0]!.sampleCount))
+console.log("Throughput is an equivalent for comparison, not promised production capacity.\n")
+console.log(
+  `  ${"path".padEnd(20)} ${"what it does".padEnd(35)} ${"typical".padStart(10)} ${"range".padStart(19)} ${"equivalent".padStart(17)}  consistency`
+)
+for (const s of samples) {
+  console.log(
+    `  ${s.label.padEnd(20)} ${s.description.padEnd(35)} ${formatDuration(s.nsPerOp).padStart(10)} ${formatRange(s).padStart(19)} ${formatThroughput(s.opsPerSec).padStart(17)}  ${noiseLabel(s)}`
+  )
+}
+
+console.log("\nIn everyday terms:")
+console.log(
+  `  • Reusing a query removes ${percentFaster(by["point.cold"]!, by["point.warm"]!).toFixed(0)}% of Thor's work and saves about ${formatDuration(repeatedSavingsNs(by["point.cold"]!, by["point.warm"]!))} over 100,000 calls.`
+)
+console.log(
+  `  • A prepared handle removes another ${percentFaster(by["point.warm"]!, by["point.prepared"]!).toFixed(0)}% versus ordinary reuse.`
+)
+console.log(
+  `  • Checking 100 returned rows costs ${formatDuration(by["bulk.safe"]! - by["bulk.unsafe"]!)} here; unsafe mode skips those checks and is opt-in.`
+)
+console.log(
+  `  • Prepared point target (≤ 2 µs): ${by["point.prepared"]! <= 2000 ? "MET" : "OVER"} at ${formatDuration(by["point.prepared"]!)}.`
+)
 console.log(`\nJSON:${JSON.stringify(by)}`)
 
 await pointRt.dispose()
@@ -122,22 +154,65 @@ await routineRt.dispose()
 
 // --- staged CI gate (spec §15.16) -------------------------------------------
 if (process.env.BENCH_GATE || process.env.BENCH_UPDATE_BASELINE) {
-  const baselinePath = fileURLToPath(new URL("./hotpath-baseline.json", import.meta.url))
+  const runtime = runtimeName()
+  const baselineFile = `${runtime}-${process.platform}-${process.arch}.json`
+  const baselinePath = fileURLToPath(new URL(`./hotpath-baselines/${baselineFile}`, import.meta.url))
   const THRESHOLD = 2.5 // generous: fail only on catastrophic regression while baselines stabilize
+  const environment = {
+    runtime,
+    version: runtime === "node" ? process.versions.node : process.versions.bun ?? "unknown",
+    platform: process.platform,
+    architecture: process.arch
+  }
 
-  if (process.env.BENCH_UPDATE_BASELINE || !existsSync(baselinePath)) {
+  interface Baseline {
+    readonly schemaVersion: 1
+    readonly environment: typeof environment
+    readonly measurement: {
+      readonly statistic: "median"
+      readonly samples: number
+    }
+    readonly metrics: Record<string, number>
+  }
+
+  if (process.env.BENCH_UPDATE_BASELINE) {
     mkdirSync(dirname(baselinePath), { recursive: true })
-    writeFileSync(baselinePath, JSON.stringify(by, null, 2) + "\n")
+    const metrics = Object.fromEntries(samples.map((sample) => [sample.label, Math.round(sample.nsPerOp)]))
+    const baseline: Baseline = {
+      schemaVersion: 1,
+      environment,
+      measurement: { statistic: "median", samples: samples[0]!.sampleCount },
+      metrics
+    }
+    writeFileSync(baselinePath, JSON.stringify(baseline, null, 2) + "\n")
     console.log(`\n[gate] baseline recorded → ${baselinePath}`)
+  } else if (!existsSync(baselinePath)) {
+    console.error(`\n[gate] FAIL — required baseline is missing: ${baselinePath}`)
+    console.error("[gate] Record and review it deliberately with `pnpm bench:baseline`; the gate will never baseline itself.")
+    process.exit(1)
   } else {
-    const baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as Record<string, number>
+    const baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as Baseline
+    if (baseline.schemaVersion !== 1 || !baseline.metrics) {
+      console.error(`\n[gate] FAIL — unsupported baseline format: ${baselinePath}`)
+      process.exit(1)
+    }
+    const missing = samples.filter((s) => baseline.metrics[s.label] === undefined).map((s) => s.label)
+    if (missing.length > 0) {
+      console.error(`\n[gate] FAIL — baseline is missing metrics: ${missing.join(", ")}`)
+      console.error("[gate] Update it deliberately with `pnpm bench:baseline` and review the changed numbers.")
+      process.exit(1)
+    }
     const regressions = samples
-      .filter((s) => baseline[s.label] !== undefined && s.nsPerOp > baseline[s.label]! * THRESHOLD)
-      .map((s) => `${s.label}: ${us(s.nsPerOp)}µs vs baseline ${us(baseline[s.label]!)}µs (>${THRESHOLD}×)`)
+      .filter((s) => s.nsPerOp > baseline.metrics[s.label]! * THRESHOLD)
+      .map(
+        (s) =>
+          `${s.label}: ${formatDuration(s.nsPerOp)} now vs ${formatDuration(baseline.metrics[s.label]!)} baseline (${(s.nsPerOp / baseline.metrics[s.label]!).toFixed(2)}× slower)`
+      )
     if (regressions.length > 0) {
       console.error(`\n[gate] FAIL — catastrophic regression:\n  ${regressions.join("\n  ")}`)
       process.exit(1)
     }
-    console.log(`\n[gate] OK — all metrics within ${THRESHOLD}× of baseline`)
+    console.log(`\n[gate] OK — no metric is ${THRESHOLD}× slower than the reviewed ${baselineFile} baseline.`)
+    console.log("[gate] This is a catastrophic-regression guardrail, not proof that small changes are harmless.")
   }
 }

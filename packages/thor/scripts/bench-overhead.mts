@@ -8,12 +8,20 @@
  *
  *   pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-overhead.mts
  */
-import { performance } from "node:perf_hooks"
 import { Effect, Either, Layer, ManagedRuntime, Schema } from "effect"
 import { Database, db, eq, param, pg } from "@gilvandovieira/thor"
 import { PostgresCapabilities } from "@gilvandovieira/thor/capabilities"
 import { PostgresDialect } from "@gilvandovieira/thor/postgres"
 import { expectGuardViolations } from "@gilvandovieira/thor/testing"
+import {
+  formatDuration,
+  formatRange,
+  formatThroughput,
+  measureSync,
+  noiseLabel,
+  timingLegend,
+  type Timing
+} from "./bench-report.mts"
 
 const users = pg.table("bench_users", {
   id: pg.uuid("id").primaryKey().defaultRandom(),
@@ -63,42 +71,47 @@ const decode100 = () => {
   }
 }
 
-interface Row {
+interface Row extends Timing {
   readonly label: string
-  readonly nsPerOp: number
-  readonly perUnit?: string
 }
-const timeSync = (label: string, iters: number, fn: () => void, perUnit?: string): Row => {
-  for (let i = 0; i < Math.min(iters, 2000); i++) fn()
-  const start = performance.now()
-  for (let i = 0; i < iters; i++) fn()
-  return { label, nsPerOp: ((performance.now() - start) * 1e6) / iters, ...(perUnit ? { perUnit } : {}) }
-}
+const timeSync = (label: string, iters: number, fn: () => void): Row => ({
+  label,
+  ...measureSync({ iterationsPerSample: Math.ceil(iters / 5), warmupIterations: 2_000 }, fn)
+})
 
 const rows: Row[] = [
   timeSync("build (point select)", 300_000, () => void pointQuery()),
   timeSync("compile → SQL+params", 300_000, () => void builtPoint.toSql(PostgresDialect)),
   timeSync("guard (scope+caps)", 300_000, () => void expectGuardViolations(builtPoint.ir, PostgresCapabilities)),
-  timeSync("decode 100 rows (precompiled)", 30_000, decode100, "→ per row"),
+  timeSync("decode 100 rows (precompiled)", 30_000, decode100),
   timeSync("Effect run floor (shared runtime)", 200_000, () => void oneRt.runSync(Effect.succeed(0))),
   timeSync("execute point .one() [1 row]", 100_000, () => void oneRt.runSync(builtPoint.one({ email: "a@b.c" }))),
   timeSync("execute bulk .all() [100 rows]", 30_000, () => void bulkRt.runSync(builtBulk.all()))
 ]
 
-const us = (ns: number) => (ns / 1000).toFixed(3)
-console.log("\nThor own-code overhead (no database I/O, shared runtime)\n" + "-".repeat(66))
+console.log("\nThor own-code overhead — what Thor adds before the database\n" + "-".repeat(105))
+console.log(timingLegend(rows[0]!.sampleCount))
+console.log("No database, disk, or network time is included. Throughput is only an equivalent for comparison.\n")
+console.log(
+  `  ${"work".padEnd(48)} ${"typical".padStart(10)} ${"range".padStart(19)} ${"equivalent".padStart(17)}  consistency`
+)
 for (const r of rows) {
-  const line = `  ${r.label.padEnd(38)} ${us(r.nsPerOp).padStart(9)} µs`
-  if (r.label.startsWith("decode 100")) console.log(`${line}   (${us(r.nsPerOp / 100)} µs/row)`)
-  else console.log(line)
+  const label = r.label.startsWith("decode 100")
+    ? `${r.label} (${formatDuration(r.nsPerOp / 100)}/row)`
+    : r.label
+  console.log(
+    `  ${label.padEnd(48)} ${formatDuration(r.nsPerOp).padStart(10)} ${formatRange(r).padStart(19)} ${formatThroughput(r.opsPerSec).padStart(17)}  ${noiseLabel(r)}`
+  )
 }
 
-const point = rows.find((r) => r.label.startsWith("execute point"))!.nsPerOp / 1e6
-const REAL_DB_POINT_MS = 0.15
-console.log("\nShare of a real prepared point-select round-trip (loopback)")
-console.log(`  Thor own code:  ${(point * 1000).toFixed(1)} µs/query`)
-console.log(`  DB round-trip:  ~${REAL_DB_POINT_MS * 1000} µs/query (prepared)`)
-console.log(`  Thor ≈ ${((point / REAL_DB_POINT_MS) * 100).toFixed(1)}% of the total.`)
+const pointNs = rows.find((r) => r.label.startsWith("execute point"))!.nsPerOp
+const illustrativeDbNs = 150_000
+console.log("\nIn everyday terms:")
+console.log(`  • A complete one-row trip through Thor takes ${formatDuration(pointNs)} before real database waiting time.`)
+console.log(
+  `  • Against an illustrative 150 µs local database round-trip, that is about ${((pointNs / illustrativeDbNs) * 100).toFixed(1)}% of the total; a real network usually makes the percentage smaller.`
+)
+console.log("  • The range matters: if it is wide or marked noisy, rerun before drawing conclusions from a small difference.")
 console.log()
 
 await oneRt.dispose()

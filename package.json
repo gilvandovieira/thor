@@ -20,6 +20,7 @@
     "test:contract:sqlite": "pnpm test:contract:sqlite:node && pnpm test:contract:sqlite:bun",
     "bench": "pnpm --filter @gilvandovieira/thor run bench",
     "bench:builders": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec prisma generate --schema prisma/benchmark.prisma && pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-query-builders.mts",
+    "bench:report": "pnpm --filter @gilvandovieira/thor run build && pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-hotpath.mts && pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-overhead.mts && pnpm --filter @gilvandovieira/thor exec tsx scripts/bench-sqlite.mts",
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down -v",
     "test:e2e": "pnpm --filter @gilvandovieira/thor run build && vitest run --no-file-parallelism e2e",

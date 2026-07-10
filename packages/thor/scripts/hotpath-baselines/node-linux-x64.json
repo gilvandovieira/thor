@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "environment": {
+    "runtime": "node",
+    "version": "26.4.0",
+    "platform": "linux",
+    "architecture": "x64"
+  },
+  "measurement": {
+    "statistic": "median",
+    "samples": 5
+  },
+  "metrics": {
+    "point.cold": 32956,
+    "point.warm": 3272,
+    "point.prepared": 2443,
+    "advanced.prepared": 2612,
+    "routine.prepared": 1943,
+    "bulk.safe": 35099,
+    "bulk.unsafe": 2356
+  }
+}

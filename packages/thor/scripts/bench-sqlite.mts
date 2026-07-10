@@ -19,10 +19,18 @@
  *   pnpm bench:sqlite        (Node — runs node:sqlite + better-sqlite3)
  *   pnpm bench:sqlite:bun    (Bun  — runs bun:sqlite + better-sqlite3 if built)
  */
-import { performance } from "node:perf_hooks"
 import { ManagedRuntime, Schema } from "effect"
 import { db, eq, param, sqlite } from "@gilvandovieira/thor"
 import { SQLiteLayer } from "@gilvandovieira/thor/sqlite"
+import {
+  formatDuration,
+  formatRange,
+  formatTimeChange,
+  measureSync,
+  noiseLabel,
+  timingLegend,
+  type Timing
+} from "./bench-report.mts"
 
 const IS_BUN = typeof (globalThis as { Bun?: unknown }).Bun !== "undefined"
 
@@ -114,25 +122,16 @@ const seed = (open: OpenDb): Client => {
   return client
 }
 
-/**
- * @param iters - Measured iterations (warmup runs first, capped).
- * @param fn - The operation under test.
- * @returns Nanoseconds per operation.
- */
-const timeSync = (iters: number, fn: (i: number) => void): number => {
-  for (let i = 0; i < Math.min(iters, 2000); i++) fn(-1 - i)
-  const start = performance.now()
-  for (let i = 0; i < iters; i++) fn(i)
-  return ((performance.now() - start) * 1e6) / iters
-}
+const timeSync = (iters: number, fn: (i: number) => void): Timing =>
+  measureSync({ iterationsPerSample: Math.ceil(iters / 5), warmupIterations: 2_000 }, fn)
 
 /** One measured driver+scenario row: raw floor vs Thor prepared off/on (ns/op). */
 interface Line {
   readonly driver: string
   readonly scenario: string
-  readonly raw: number
-  readonly off: number
-  readonly on: number
+  readonly raw: Timing
+  readonly off: Timing
+  readonly on: Timing
 }
 
 /**
@@ -140,7 +139,7 @@ interface Line {
  * @param open - Factory for a fresh in-memory database.
  * @returns The point and bulk measurements for this driver.
  */
-const benchDriver = (name: string, open: OpenDb): Line[] => {
+const benchDriver = async (name: string, open: OpenDb): Promise<Line[]> => {
   // Raw floor: prepare once, reuse.
   const rawClient = seed(open)
   const rawPoint = rawClient.prepare("select id, body from bench_notes where id = ?")
@@ -150,24 +149,23 @@ const benchDriver = (name: string, open: OpenDb): Line[] => {
   rawClient.close()
 
   // Thor, prepared OFF vs ON (fresh DB + runtime per mode).
-  const thor = (prepared: boolean) => {
+  const thor = async (prepared: boolean) => {
     const client = seed(open)
     const rt = ManagedRuntime.make(SQLiteLayer(client as never, { preparedStatements: prepared }))
     const point = timeSync(150_000, () => void rt.runSync(pointQ.one({ id: 1 })))
     const bulk = timeSync(20_000, () => void rt.runSync(bulkQ.all()))
+    await rt.dispose()
     client.close()
     return { point, bulk }
   }
-  const off = thor(false)
-  const on = thor(true)
+  const off = await thor(false)
+  const on = await thor(true)
 
   return [
     { driver: name, scenario: "select.point", raw: rawPointNs, off: off.point, on: on.point },
     { driver: name, scenario: "select.bulk200", raw: rawBulkNs, off: off.bulk, on: on.bulk }
   ]
 }
-
-const us = (ns: number) => (ns / 1000).toFixed(3)
 
 const available: Array<{ name: string; open: OpenDb }> = []
 for (const provider of providers) {
@@ -180,34 +178,37 @@ if (available.length === 0) {
   process.exit(1)
 }
 
-const lines = available.flatMap(({ name, open }) => benchDriver(name, open))
+const lines: Line[] = []
+for (const { name, open } of available) lines.push(...(await benchDriver(name, open)))
 
-console.log(`\nThor over in-memory SQLite (runtime=${IS_BUN ? "bun" : "node"}) — µs/op\n` + "-".repeat(86))
+console.log(`\nThor over in-memory SQLite (runtime=${IS_BUN ? "bun" : "node"}) — a deliberately harsh stress test\n` + "-".repeat(116))
+console.log(timingLegend(lines[0]!.on.sampleCount))
+console.log("SQLite runs in this process with no network, so Thor's few microseconds are unusually visible.\n")
 console.log(
-  `  ${"driver".padEnd(15)} ${"scenario".padEnd(15)} ${"raw".padStart(9)} ${"Thor off".padStart(10)} ${"Thor on".padStart(10)} ${"overhead".padStart(10)} ${"Thor share".padStart(11)}`
+  `  ${"driver".padEnd(15)} ${"scenario".padEnd(15)} ${"raw driver".padStart(11)} ${"Thor off".padStart(10)} ${"Thor on".padStart(10)} ${"on range".padStart(19)} ${"Thor adds".padStart(10)} ${"share".padStart(7)}  consistency`
 )
 for (const l of lines) {
-  const overhead = l.on - l.raw
-  const share = (l.on - l.raw) / l.on
+  const overhead = l.on.nsPerOp - l.raw.nsPerOp
+  const share = overhead / l.on.nsPerOp
   console.log(
-    `  ${l.driver.padEnd(15)} ${l.scenario.padEnd(15)} ${us(l.raw).padStart(9)} ${us(l.off).padStart(10)} ${us(l.on).padStart(10)} ${us(overhead).padStart(10)} ${(share * 100).toFixed(0).padStart(9)} %`
+    `  ${l.driver.padEnd(15)} ${l.scenario.padEnd(15)} ${formatDuration(l.raw.nsPerOp).padStart(11)} ${formatDuration(l.off.nsPerOp).padStart(10)} ${formatDuration(l.on.nsPerOp).padStart(10)} ${formatRange(l.on).padStart(19)} ${formatDuration(overhead).padStart(10)} ${(share * 100).toFixed(0).padStart(5)} %  ${noiseLabel(l.on)}`
   )
 }
 
 // Cross-driver comparison of the raw point-select floor.
 const points = lines.filter((l) => l.scenario === "select.point")
-const fastestRaw = points.reduce((a, b) => (b.raw < a.raw ? b : a))
-console.log("\nWhat this hits home:")
+const fastestRaw = points.reduce((a, b) => (b.raw.nsPerOp < a.raw.nsPerOp ? b : a))
+console.log("\nIn everyday terms:")
 for (const l of points) {
-  const rel = l.raw / fastestRaw.raw
+  const rel = l.raw.nsPerOp / fastestRaw.raw.nsPerOp
   console.log(
-    `  • ${l.driver.padEnd(15)} raw point ~${us(l.raw)} µs${
+    `  • ${l.driver}: the driver alone takes ${formatDuration(l.raw.nsPerOp)}${
       l === fastestRaw ? " (fastest native)" : ` (${rel.toFixed(2)}× slower than ${fastestRaw.driver})`
-    }; Thor on ~${us(l.on)} µs, ~${(((l.on - l.raw) / l.on) * 100).toFixed(0)}% Thor.`
+    }; with Thor it takes ${formatDuration(l.on.nsPerOp)}, of which about ${(((l.on.nsPerOp - l.raw.nsPerOp) / l.on.nsPerOp) * 100).toFixed(0)}% is Thor.`
   )
 }
 console.log(
-  `  • Prepared statements matter even for SQLite: ${(points[0].off / points[0].on).toFixed(2)}× faster on than off (skips re-prepare).`
+  `  • Preparation uses ${formatTimeChange(points[0]!.off.nsPerOp, points[0]!.on.nsPerOp)} point-query time for ${points[0]!.driver} by avoiding repeated setup.`
 )
-console.log("  • With a µs-fast DB the abstraction is visible — decode + compile/guard memoization are why it's a few µs, not more.")
-console.log("  • Over a networked Postgres (~150 µs) that same few-µs of Thor is <2%.\n")
+console.log("  • This is close to a worst case for library overhead. A network database adds far more waiting time, shrinking Thor's percentage.")
+console.log("  • Compare the absolute time and the sample range; percentages alone can sound dramatic when the total is only a few microseconds.\n")

@@ -12,12 +12,20 @@
  *   DATABASE_URL=postgres://thor:thor@localhost:5433/thor pnpm bench:drivers
  *   # or: pnpm bench:e2e   (manages Docker)
  */
-import { performance } from "node:perf_hooks"
 import pgLib from "pg"
 import postgres from "postgres"
 import { Effect, Schema, type Layer } from "effect"
 import { Database, db, eq, param, pg } from "@gilvandovieira/thor"
 import { PostgresJsLayer, PostgresLayer } from "@gilvandovieira/thor/postgres"
+import {
+  formatDuration,
+  formatRange,
+  formatTimeChange,
+  measureAsync,
+  noiseLabel,
+  timingLegend,
+  type Timing
+} from "./bench-report.mts"
 
 const url = process.env.DATABASE_URL
 if (!url) {
@@ -35,18 +43,13 @@ const users = pg.table("bench_users", {
 const emailParam = param("email", Schema.String)
 const BULK_ROWS = 200
 
-interface Sample {
+interface Sample extends Timing {
   readonly scenario: string
-  readonly opsPerSec: number
-  readonly msPerOp: number
 }
 
 const time = async (scenario: string, iterations: number, fn: (i: number) => Promise<unknown>): Promise<Sample> => {
-  for (let i = 0; i < Math.min(iterations, 30); i++) await fn(-1 - i) // warmup (registers prepared stmt)
-  const start = performance.now()
-  for (let i = 0; i < iterations; i++) await fn(i)
-  const totalMs = performance.now() - start
-  return { scenario, opsPerSec: (iterations / totalMs) * 1000, msPerOp: totalMs / iterations }
+  const timing = await measureAsync({ iterationsPerSample: iterations, warmupIterations: 30 }, fn)
+  return { scenario, ...timing }
 }
 
 const CREATE = `create table bench_users (
@@ -56,15 +59,16 @@ const CREATE = `create table bench_users (
 
 /** Identical workload set for every driver/mode. `run` executes an Effect against the layer. */
 const runScenarios = async (run: <A, E>(e: Effect.Effect<A, E, Database>) => Promise<A>): Promise<Sample[]> => [
-  await time("insert", 400, (i) => run(db.insert(users).values({ email: `ins${i}@bench`, name: "x" }).run())),
-  await time("insert.returning", 400, (i) =>
-    run(db.insert(users).values({ email: `insr${i}@bench` }).returning({ id: users.id }).one())
-  ),
+  // Reads run before writes so the bulk fixture stays exactly 200 rows.
   await time("select.point", 600, () =>
     run(db.select({ id: users.id, name: users.name }).from(users).where(eq(users.email, emailParam)).one({ email: "point@bench" }))
   ),
   await time("select.bulk200", 150, () =>
-    run(db.select({ id: users.id, email: users.email, name: users.name, age: users.age }).from(users).all())
+    run(db.select({ id: users.id, email: users.email, name: users.name, age: users.age }).from(users).limit(BULK_ROWS).all())
+  ),
+  await time("insert", 400, (i) => run(db.insert(users).values({ email: `ins${i}@bench`, name: "x" }).run())),
+  await time("insert.returning", 400, (i) =>
+    run(db.insert(users).values({ email: `insr${i}@bench` }).returning({ id: users.id }).one())
   ),
   await time("update.point", 400, (i) =>
     run(db.update(users).set({ name: `n${i}` }).where(eq(users.email, emailParam)).run({ email: "point@bench" }))
@@ -115,30 +119,47 @@ const benchCombo = async (driver: "node-postgres" | "postgres.js", prepared: boo
   return samples
 }
 
-const fmt = (n: number, w: number, d = 0) => n.toFixed(d).padStart(w)
-
 const main = async () => {
   const results: Record<string, { off: Sample[]; on: Sample[] }> = {}
+  console.log("\nThor with a real local PostgreSQL database\n" + "-".repeat(105))
+  console.log("Smaller time is faster. The database runs over loopback; production network, disk, pooling, and concurrency will differ.")
   for (const driver of ["node-postgres", "postgres.js"] as const) {
     const off = await benchCombo(driver, false)
     const on = await benchCombo(driver, true)
     results[driver] = { off, on }
-    console.log(`\n== ${driver} — prepared statements OFF vs ON ==`)
-    console.log(`  ${"scenario".padEnd(18)} ${"off ops/s".padStart(10)} ${"on ops/s".padStart(10)}   speedup`)
+    console.log(`\n${driver} — preparation OFF versus ON`)
+    console.log(timingLegend(on[0]!.sampleCount))
+    console.log(
+      `  ${"work".padEnd(18)} ${"off typical".padStart(12)} ${"on typical".padStart(12)} ${"on range".padStart(19)} ${"time change".padStart(14)}  consistency`
+    )
     off.forEach((o, i) => {
       const p = on[i]!
-      console.log(`  ${o.scenario.padEnd(18)} ${fmt(o.opsPerSec, 10)} ${fmt(p.opsPerSec, 10)}   ${(p.opsPerSec / o.opsPerSec).toFixed(2)}x`)
+      console.log(
+        `  ${o.scenario.padEnd(18)} ${formatDuration(o.nsPerOp).padStart(12)} ${formatDuration(p.nsPerOp).padStart(12)} ${formatRange(p).padStart(19)} ${formatTimeChange(o.nsPerOp, p.nsPerOp).padStart(14)}  ${noiseLabel(p)}`
+      )
     })
   }
 
-  console.log(`\n== driver comparison (prepared ON; ops/s; ratio pg / postgres.js) ==`)
+  console.log("\nDriver comparison with preparation ON")
   const pg2 = results["node-postgres"]!.on
   const js2 = new Map(results["postgres.js"]!.on.map((s) => [s.scenario, s]))
-  console.log(`  ${"scenario".padEnd(18)} ${"node-postgres".padStart(14)} ${"postgres.js".padStart(14)}   ratio`)
+  console.log(`  ${"work".padEnd(18)} ${"node-postgres".padStart(14)} ${"postgres.js".padStart(14)}  plain reading`)
   for (const a of pg2) {
     const b = js2.get(a.scenario)!
-    console.log(`  ${a.scenario.padEnd(18)} ${fmt(a.opsPerSec, 14)} ${fmt(b.opsPerSec, 14)}   ${(a.opsPerSec / b.opsPerSec).toFixed(2)}x`)
+    const ratio = a.nsPerOp / b.nsPerOp
+    const reading = ratio >= 0.9 && ratio <= 1.1 ? "roughly even" : ratio < 1 ? "node-postgres faster" : "postgres.js faster"
+    console.log(
+      `  ${a.scenario.padEnd(18)} ${formatDuration(a.nsPerOp).padStart(14)} ${formatDuration(b.nsPerOp).padStart(14)}  ${reading}`
+    )
   }
+
+  const preparedPoints = [results["node-postgres"]!.on[0]!, results["postgres.js"]!.on[0]!]
+  console.log("\nIn everyday terms:")
+  console.log("  • Preparation mainly helps repeated parameterized work by letting PostgreSQL reuse setup it has already done.")
+  console.log(
+    `  • A prepared one-row lookup takes ${formatDuration(preparedPoints[0]!.nsPerOp)} with node-postgres and ${formatDuration(preparedPoints[1]!.nsPerOp)} with postgres.js on this local setup.`
+  )
+  console.log("  • Differences inside a wide sample range are noise, not a reason to switch drivers.")
 
   console.log(`\nJSON:${JSON.stringify(results)}`)
 }
