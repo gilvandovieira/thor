@@ -22,9 +22,9 @@ const anchors = [
   ["packages/thor/src/mysql/index.ts", "mysql", Stable],
   ["packages/thor/src/sql/query-builder.ts", "db", Stable],
   ["packages/thor/src/sql/query-builder.ts", "SelectQuery", Stable],
-  ["packages/thor/src/sql/query-builder.ts", "ReturningQuery", Stable],
+  ["packages/thor/src/sql/mutation-builder.ts", "ReturningQuery", Stable],
   ["packages/thor/src/sql/query-builder.ts", "QueryReference", Stable],
-  ["packages/thor/src/sql/query-builder.ts", "PreparedQuery", Experimental],
+  ["packages/thor/src/sql/query-builder-support.ts", "PreparedQuery", Experimental],
   ["packages/thor/src/execution/compiled-query.ts", "CompiledQuery", Stable],
   ["packages/thor/src/execution/compiled-query.ts", "CompileOptions", Stable],
   ["packages/thor/src/execution/plan.ts", "withMode", Experimental],
@@ -94,21 +94,29 @@ for (const [file, name, expected] of anchors) {
   }
 }
 
-const queryBuilder = sourceFor("packages/thor/src/sql/query-builder.ts")
-for (const statement of queryBuilder.statements) {
-  if (!ts.isClassDeclaration(statement)) continue
-  for (const member of statement.members) {
-    if (!ts.isMethodDeclaration(member) || !member.name || !ts.isIdentifier(member.name)) continue
-    const name = member.name.text
-    const expected = ["all", "one", "maybeOne", "run"].includes(name)
-      ? Stable
-      : name === "inspect" || name === "prepare"
-      ? Experimental
-      : undefined
-    if (!expected) continue
-    const tags = stabilityTags(member)
-    if (tags.length !== 1 || tags[0] !== expected) {
-      errors.push(`packages/thor/src/sql/query-builder.ts: ${statement.name?.text ?? "anonymous"}.${name} must have exactly @${expected}`)
+// The builder classes are split across three files; the terminal-method
+// stability contract is audited in each so a move never drops coverage.
+const builderFiles = [
+  "packages/thor/src/sql/query-builder.ts",
+  "packages/thor/src/sql/mutation-builder.ts",
+  "packages/thor/src/sql/query-builder-support.ts"
+]
+for (const file of builderFiles) {
+  for (const statement of sourceFor(file).statements) {
+    if (!ts.isClassDeclaration(statement)) continue
+    for (const member of statement.members) {
+      if (!ts.isMethodDeclaration(member) || !member.name || !ts.isIdentifier(member.name)) continue
+      const name = member.name.text
+      const expected = ["all", "one", "maybeOne", "run"].includes(name)
+        ? Stable
+        : name === "inspect" || name === "prepare"
+        ? Experimental
+        : undefined
+      if (!expected) continue
+      const tags = stabilityTags(member)
+      if (tags.length !== 1 || tags[0] !== expected) {
+        errors.push(`${file}: ${statement.name?.text ?? "anonymous"}.${name} must have exactly @${expected}`)
+      }
     }
   }
 }

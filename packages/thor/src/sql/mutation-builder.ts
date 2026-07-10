@@ -1,0 +1,577 @@
+/**
+ * The fluent insert/update/delete builders (spec §4.1, §6).
+ *
+ * Like the select builder, these assemble immutable data-modification IR and
+ * never touch the database until a terminal method (`run`, or `all`/`one`/
+ * `maybeOne` on a `RETURNING` query) returns an `Effect`. Shared parameter and
+ * selection typing, the selection helpers, and the reusable prepared handle come
+ * from {@link module:sql/query-builder-support}.
+ *
+ * @module sql/mutation-builder
+ */
+import { Effect, Option } from "effect"
+import type { AnyColumn } from "../schema/column.js"
+import { type AnyTable, type Insert as InsertInput, type Update as UpdateInput, tableMeta } from "../schema/table.js"
+import {
+  type ExprNode,
+  type InsertConflict,
+  type QueryIR,
+  type SelectionField,
+  type SelectIR,
+  queryCapabilityBits,
+  nextId
+} from "../ir/query-ir.js"
+import { capabilityBit, type Capability, bitsToCapabilities, noCapabilities } from "../capabilities/capability.js"
+import type { Dialect } from "../dialect.js"
+import { PostgresDialect } from "../postgres/dialect.js"
+import type { QueryError, NotFoundError, TooManyRowsError } from "../errors/index.js"
+import { Database } from "../execution/database.js"
+import {
+  atMostOne,
+  exactlyOne,
+  executeCommand,
+  executeCompiledCommand,
+  executeCompiledRows,
+  executeRows
+} from "../execution/run.js"
+import type { CommandResult, CompiledStatement } from "../execution/driver.js"
+import { compilableEffect } from "../execution/compiled-query.js"
+import {
+  type Expr,
+  type MergeParameterMaps,
+  type Param,
+  type ParamsOf,
+  toValueNode
+} from "./expressions.js"
+import {
+  argsFrom,
+  inspectIr,
+  PreparedQuery,
+  selectionFrom,
+  starSelection,
+  type ExactTerminalArguments,
+  type MergeParams,
+  type NamedParams,
+  type SelectFields,
+  type SelectResult,
+  type TerminalArguments,
+  type TerminalCallResult
+} from "./query-builder-support.js"
+
+const NO_SELECTION: ReadonlyArray<SelectionField> = Object.freeze([])
+
+type ParameterizedValue<A> = A | Param<string, Exclude<A, undefined>> | Expr<Exclude<A, undefined>>
+type ParameterizedInput<T> = { [K in keyof T]: ParameterizedValue<T[K]> }
+type InputParams<T> = T extends ReadonlyArray<infer R>
+  ? InputParams<R>
+  : T extends Record<string, unknown>
+    ? MergeParameterMaps<ParamsOf<T[keyof T]>>
+    : {}
+
+// --- INSERT ------------------------------------------------------------------
+
+/**
+ * Maps an application insert object to physical columns and parameter nodes.
+ *
+ * @param table - Target table definition.
+ * @param input - Application-level insert values.
+ * @returns Ordered column names and their parameter expressions.
+ */
+const valuesToRow = (table: AnyTable, input: Record<string, unknown>): { columns: string[]; row: ExprNode[] } => {
+  const meta = tableMeta(table)
+  const columns: string[] = []
+  const row: ExprNode[] = []
+  for (const [key, value] of Object.entries(input)) {
+    const column = meta.columns[key]
+    if (!column) continue
+    columns.push(column.def.name)
+    row.push(inputValueNode(meta.name, column, value))
+  }
+  return { columns, row }
+}
+
+/**
+ * Converts a mutation input to either a named expression or an inline-bound parameter.
+ *
+ * @param table - Physical table name used for inline parameter diagnostics.
+ * @param column - Target schema column and codec.
+ * @param value - Application value, named parameter, or expression.
+ * @returns Runtime expression used by insert and update IR.
+ */
+const inputValueNode = (table: string, column: AnyColumn, value: unknown): ExprNode => {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    (("_tag" in value && value._tag === "Param") || "node" in value)
+  ) {
+    return toValueNode(value, column)
+  }
+  return { _tag: "Param", name: `${table}.${column.def.name}`, codec: column.def.codec, value }
+}
+
+/**
+ * Converts application update input into physical assignments.
+ *
+ * @param table - Target table.
+ * @param input - Application-keyed update values.
+ * @returns Ordered physical assignments.
+ */
+const assignmentsFrom = (
+  table: AnyTable,
+  input: Record<string, unknown>
+): ReadonlyArray<{ readonly column: string; readonly value: ExprNode }> => {
+  const meta = tableMeta(table)
+  return Object.entries(input).flatMap(([key, value]) => {
+    const column = meta.columns[key]
+    return column
+      ? [{ column: column.def.name, value: inputValueNode(meta.name, column, value) }]
+      : []
+  })
+}
+
+/** @stable Insert, update, or delete query with a decoded `RETURNING` selection. */
+export class ReturningQuery<A, P extends NamedParams = {}> {
+  /**
+   * @param ir - Data-modification representation containing `RETURNING`.
+   * @param fields - Runtime fields used to decode returned rows.
+   */
+  constructor(
+    readonly ir: Exclude<QueryIR, SelectIR>,
+    private readonly fields: SelectionField[]
+  ) {}
+
+  /**
+   * @experimental Debugging shape only.
+   * @returns Stable query-shape metadata without compiling or executing.
+   */
+  inspect() {
+    return inspectIr(this.ir)
+  }
+
+  /**
+   * @param dialect - Target SQL dialect; defaults to PostgreSQL.
+   * @returns Compiled query data.
+   */
+  toSql(dialect: Dialect = PostgresDialect): CompiledStatement {
+    return dialect.compileQuery(this.ir)
+  }
+
+  /**
+   * @returns Capabilities required to execute this returning query.
+   */
+  requiredCapabilities(): ReadonlyArray<Capability> {
+    return bitsToCapabilities(queryCapabilityBits(this.ir))
+  }
+
+  /**
+   * @stable
+   * @typeParam Args - Omitted for compilation or no-param execution; otherwise named values.
+   * @param args - Named parameter values.
+   * @returns An Effect yielding every returned row.
+   */
+  all<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, ReadonlyArray<A>, QueryError, "all", Args> {
+    const effect = Effect.flatMap(Database, (db) => executeRows<A>(this.ir, this.fields, db, argsFrom(args)))
+    return compilableEffect(effect, this.ir, this.fields, "all", executeCompiledRows<A>) as TerminalCallResult<P, ReadonlyArray<A>, QueryError, "all", Args>
+  }
+
+  /**
+   * @stable
+   * @typeParam Args - Omitted for compilation or no-param execution; otherwise named values.
+   * @param args - Named parameter values.
+   * @returns An Effect yielding exactly one returned row.
+   * @throws {NotFoundError} Through the Effect error channel when no row is returned.
+   * @throws {TooManyRowsError} Through the Effect error channel when multiple rows are returned.
+   */
+  one<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, A, QueryError | NotFoundError | TooManyRowsError, "one", Args> {
+    const operation = `${this.ir._tag}.one`
+    const effect = Effect.flatMap(
+      Effect.flatMap(Database, (db) => executeRows<A>(this.ir, this.fields, db, argsFrom(args))),
+      (rows) => exactlyOne(rows, operation)
+    )
+    return compilableEffect(effect, this.ir, this.fields, "one", (plan, statement, service, values) =>
+      Effect.flatMap(executeCompiledRows<A>(plan, statement, service, values), (rows) => exactlyOne(rows, operation))
+    ) as TerminalCallResult<P, A, QueryError | NotFoundError | TooManyRowsError, "one", Args>
+  }
+
+  /**
+   * @stable
+   * @typeParam Args - Omitted for compilation or no-param execution; otherwise named values.
+   * @param args - Named parameter values.
+   * @returns An Effect yielding zero or one returned row.
+   * @throws {TooManyRowsError} Through the Effect error channel when multiple rows are returned.
+   */
+  maybeOne<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, Option.Option<A>, QueryError | TooManyRowsError, "maybeOne", Args> {
+    const operation = `${this.ir._tag}.maybeOne`
+    const effect = Effect.flatMap(
+      Effect.flatMap(Database, (db) => executeRows<A>(this.ir, this.fields, db, argsFrom(args))),
+      (rows) => atMostOne(rows, operation)
+    )
+    return compilableEffect(effect, this.ir, this.fields, "maybeOne", (plan, statement, service, values) =>
+      Effect.flatMap(executeCompiledRows<A>(plan, statement, service, values), (rows) => atMostOne(rows, operation))
+    ) as TerminalCallResult<P, Option.Option<A>, QueryError | TooManyRowsError, "maybeOne", Args>
+  }
+
+  /**
+   * @stable
+   * @typeParam Args - Omitted for compilation or no-param execution; otherwise named values.
+   * @param args - Named parameter values.
+   * @returns An Effect yielding the affected-row count.
+   */
+  run<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
+    const effect = Effect.flatMap(Database, (db) => executeCommand(this.ir, db, argsFrom(args)))
+    return compilableEffect(effect, this.ir, this.fields, "run", executeCompiledCommand) as TerminalCallResult<P, CommandResult, QueryError, "run", Args>
+  }
+
+  /**
+   * Freeze this returning mutation into a reusable precompiled handle (spec §15.15).
+   *
+   * @experimental Prefer terminal `.compile()` for the v1 stable API.
+   * @param name - Stable handle name (defaults to a generated id).
+   * @returns A `PreparedQuery` exposing `all`/`one`/`maybeOne`/`run`.
+   */
+  prepare(name?: string): PreparedQuery<A, P> {
+    return new PreparedQuery<A, P>(name ?? nextId("prepared"), this.ir, this.fields)
+  }
+}
+
+/**
+ * Resolves an explicit `RETURNING` selection or the table's star selection.
+ *
+ * @param table - Target table.
+ * @param fields - Optional explicit return fields.
+ * @returns Runtime selection metadata.
+ */
+const returningFields = (table: AnyTable, fields?: SelectFields): SelectionField[] =>
+  fields ? selectionFrom(fields) : starSelection(table)
+
+/** @stable Begins an `INSERT` for a table; call `values()` to supply rows. */
+export class InsertBuilder<T extends AnyTable> {
+  /**
+   * @param table - Target table.
+   */
+  constructor(private readonly table: T) {}
+
+  /**
+   * Adds one or more rows to an insert.
+   *
+   * @param input - A single insert value or homogeneous array of values.
+   * @returns An insert builder ready for `returning()` or `run()`.
+   */
+  values<I extends ParameterizedInput<InsertInput<T>> | ReadonlyArray<ParameterizedInput<InsertInput<T>>>>(
+    input: I
+  ): InsertValues<T, InputParams<I>> {
+    const list = (Array.isArray(input) ? input : [input]) as ReadonlyArray<Record<string, unknown>>
+    const first = valuesToRow(this.table, list[0] ?? {})
+    const rows = list.map((r) => valuesToRow(this.table, r).row)
+    return new InsertValues<T, InputParams<I>>(this.table, first.columns, rows)
+  }
+}
+
+/** @stable A populated `INSERT` awaiting `returning()`, conflict policy, or `run()`. */
+export class InsertValues<T extends AnyTable, P extends NamedParams = {}> {
+  /**
+   * @param table - Target table.
+   * @param columns - Physical columns included by the insert.
+   * @param rows - Parameter expressions for every inserted row.
+   * @param conflict - Optional dialect-specific conflict policy.
+   */
+  constructor(
+    private readonly table: T,
+    private readonly columns: string[],
+    private readonly rows: ExprNode[][],
+    private readonly conflict?: InsertConflict
+  ) {}
+
+  /**
+   * @param returning - Optional returned-field metadata.
+   * @returns Insert runtime representation.
+   */
+  private ir(returning?: SelectionField[]): Exclude<QueryIR, SelectIR> {
+    const meta = tableMeta(this.table)
+    return {
+      _tag: "Insert",
+      id: nextId("Insert"),
+      into: { name: meta.name },
+      columns: this.columns,
+      rows: this.rows,
+      ...(this.conflict ? { conflict: this.conflict } : {}),
+      ...(returning ? { returning } : {}),
+      capabilities:
+        (returning ? capabilityBit("insert.returning") : noCapabilities) |
+        (this.conflict?.kind === "onConflict" ? capabilityBit("insert.onConflict") : noCapabilities) |
+        (this.conflict?.kind === "onDuplicateKey" ? capabilityBit("insert.onDuplicateKey") : noCapabilities),
+      cardinality: this.rows.length === 1 ? "one" : "many",
+      annotations: { tableNames: [meta.name], idempotency: "non-idempotent" }
+    }
+  }
+
+  /** @experimental Debugging shape only. @returns Stable insert-shape metadata without executing. */
+  inspect() {
+    return inspectIr(this.ir())
+  }
+
+  /**
+   * @param dialect - Target SQL dialect; defaults to PostgreSQL.
+   * @returns Compiled insert SQL and parameter metadata.
+   */
+  toSql(dialect: Dialect = PostgresDialect): CompiledStatement {
+    return dialect.compileQuery(this.ir())
+  }
+
+  /** @returns Capabilities required by this insert. */
+  requiredCapabilities(): ReadonlyArray<Capability> {
+    return bitsToCapabilities(queryCapabilityBits(this.ir()))
+  }
+
+  /**
+   * Adds a PostgreSQL/SQLite-style `ON CONFLICT DO NOTHING` policy.
+   *
+   * @param target - Optional conflict-target columns.
+   * @returns A new insert builder guarded by `insert.onConflict`.
+   */
+  onConflictDoNothing(target: ReadonlyArray<AnyColumn> = []): InsertValues<T, P> {
+    return new InsertValues<T, P>(this.table, this.columns, this.rows, {
+      kind: "onConflict",
+      target: target.map((column) => column.def.name),
+      action: "nothing",
+      set: []
+    })
+  }
+
+  /**
+   * Adds a PostgreSQL/SQLite-style `ON CONFLICT DO UPDATE` policy.
+   *
+   * @param target - Conflict-target columns.
+   * @param input - Assignments applied to the conflicting row.
+   * @returns A new insert builder guarded by `insert.onConflict`.
+   */
+  onConflictDoUpdate<I extends ParameterizedInput<UpdateInput<T>>>(
+    target: ReadonlyArray<AnyColumn>,
+    input: I
+  ): InsertValues<T, MergeParams<P, InputParams<I>>> {
+    return new InsertValues<T, MergeParams<P, InputParams<I>>>(this.table, this.columns, this.rows, {
+      kind: "onConflict",
+      target: target.map((column) => column.def.name),
+      action: "update",
+      set: assignmentsFrom(this.table, input as Record<string, unknown>)
+    })
+  }
+
+  /**
+   * Adds a MySQL-style `ON DUPLICATE KEY UPDATE` policy.
+   *
+   * @param input - Assignments applied to the conflicting row.
+   * @returns A new insert builder guarded by `insert.onDuplicateKey`.
+   */
+  onDuplicateKeyUpdate<I extends ParameterizedInput<UpdateInput<T>>>(input: I): InsertValues<T, MergeParams<P, InputParams<I>>> {
+    return new InsertValues<T, MergeParams<P, InputParams<I>>>(this.table, this.columns, this.rows, {
+      kind: "onDuplicateKey",
+      set: assignmentsFrom(this.table, input as Record<string, unknown>)
+    })
+  }
+
+  /**
+   * Adds a `RETURNING` clause.
+   *
+   * @param fields - Optional selected fields; omit to return every table column.
+   * @returns A row-returning query guarded by dialect capabilities.
+   */
+  returning<F extends SelectFields>(fields?: F): ReturningQuery<F extends SelectFields ? SelectResult<F> : Record<string, unknown>, P> {
+    const selection = returningFields(this.table, fields)
+    return new ReturningQuery(this.ir(selection), selection)
+  }
+
+  /**
+   * @stable
+   * @typeParam Args - Omitted for compilation or no-param execution; otherwise named values.
+   * @param args - Named parameter values.
+   * @returns An Effect yielding the affected-row count.
+   */
+  run<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
+    const ir = this.ir()
+    const effect = Effect.flatMap(Database, (db) => executeCommand(ir, db, argsFrom(args)))
+    return compilableEffect(effect, ir, NO_SELECTION, "run", executeCompiledCommand) as TerminalCallResult<P, CommandResult, QueryError, "run", Args>
+  }
+}
+
+// --- UPDATE ------------------------------------------------------------------
+
+/** @stable Begins an `UPDATE` for a table; call `set()` to supply assignments. */
+export class UpdateBuilder<T extends AnyTable> {
+  /**
+   * @param table - Target table.
+   */
+  constructor(private readonly table: T) {}
+
+  /**
+   * @param input - Partial non-generated column values.
+   * @returns An update builder with assignments.
+   */
+  set<I extends ParameterizedInput<UpdateInput<T>>>(input: I): UpdateValues<T, InputParams<I>> {
+    return new UpdateValues<T, InputParams<I>>(this.table, assignmentsFrom(this.table, input as Record<string, unknown>))
+  }
+}
+
+/** @stable A populated `UPDATE` awaiting `where()`, `returning()`, or `run()`. */
+export class UpdateValues<T extends AnyTable, P extends NamedParams = {}> {
+  private whereNode?: ExprNode
+
+  /**
+   * @param table - Target table.
+   * @param assignments - Physical column assignments.
+   * @param whereNode - Optional predicate retained by an immutable clone.
+   */
+  constructor(
+    private readonly table: T,
+    private readonly assignments: ReadonlyArray<{ column: string; value: ExprNode }>,
+    whereNode?: ExprNode
+  ) {
+    if (whereNode !== undefined) this.whereNode = whereNode
+  }
+
+  /**
+   * @param predicate - Predicate replacing the current `WHERE` clause.
+   * @returns This update builder.
+   */
+  where<E extends ExprNode>(predicate: E): UpdateValues<T, MergeParams<P, ParamsOf<E>>> {
+    return new UpdateValues<T, MergeParams<P, ParamsOf<E>>>(this.table, this.assignments, predicate)
+  }
+
+  /**
+   * @param returning - Optional returned-field metadata.
+   * @returns Update runtime representation.
+   */
+  private ir(returning?: SelectionField[]): Exclude<QueryIR, SelectIR> {
+    const meta = tableMeta(this.table)
+    return {
+      _tag: "Update",
+      id: nextId("Update"),
+      table: { name: meta.name },
+      set: this.assignments,
+      ...(this.whereNode ? { where: this.whereNode } : {}),
+      ...(returning ? { returning } : {}),
+      capabilities: returning ? capabilityBit("update.returning") : noCapabilities,
+      cardinality: "many",
+      annotations: { tableNames: [meta.name], idempotency: "unknown" }
+    }
+  }
+
+  /** @experimental Debugging shape only. @returns Stable update-shape metadata without executing. */
+  inspect() {
+    return inspectIr(this.ir())
+  }
+
+  /**
+   * @param dialect - Target SQL dialect; defaults to PostgreSQL.
+   * @returns Compiled update SQL and parameter metadata.
+   */
+  toSql(dialect: Dialect = PostgresDialect): CompiledStatement {
+    return dialect.compileQuery(this.ir())
+  }
+
+  /** @returns Capabilities required by this update. */
+  requiredCapabilities(): ReadonlyArray<Capability> {
+    return bitsToCapabilities(queryCapabilityBits(this.ir()))
+  }
+
+  /**
+   * @param fields - Optional fields to return; omit for all columns.
+   * @returns A row-returning update query.
+   */
+  returning<F extends SelectFields>(fields?: F): ReturningQuery<F extends SelectFields ? SelectResult<F> : Record<string, unknown>, P> {
+    const selection = returningFields(this.table, fields)
+    return new ReturningQuery(this.ir(selection), selection)
+  }
+
+  /**
+   * @stable
+   * @typeParam Args - Omitted for compilation or no-param execution; otherwise named values.
+   * @param args - Named parameter values.
+   * @returns An Effect yielding the affected-row count.
+   */
+  run<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
+    const ir = this.ir()
+    const effect = Effect.flatMap(Database, (db) => executeCommand(ir, db, argsFrom(args)))
+    return compilableEffect(effect, ir, NO_SELECTION, "run", executeCompiledCommand) as TerminalCallResult<P, CommandResult, QueryError, "run", Args>
+  }
+}
+
+// --- DELETE ------------------------------------------------------------------
+
+/** @stable A `DELETE` for a table awaiting `where()`, `returning()`, or `run()`. */
+export class DeleteBuilder<T extends AnyTable, P extends NamedParams = {}> {
+  private whereNode?: ExprNode
+
+  /**
+   * @param table - Target table.
+   * @param whereNode - Optional predicate retained by an immutable clone.
+   */
+  constructor(private readonly table: T, whereNode?: ExprNode) {
+    if (whereNode !== undefined) this.whereNode = whereNode
+  }
+
+  /**
+   * @param predicate - Predicate replacing the current `WHERE` clause.
+   * @returns This delete builder.
+   */
+  where<E extends ExprNode>(predicate: E): DeleteBuilder<T, MergeParams<P, ParamsOf<E>>> {
+    return new DeleteBuilder<T, MergeParams<P, ParamsOf<E>>>(this.table, predicate)
+  }
+
+  /**
+   * @param returning - Optional returned-field metadata.
+   * @returns Delete runtime representation.
+   */
+  private ir(returning?: SelectionField[]): Exclude<QueryIR, SelectIR> {
+    const meta = tableMeta(this.table)
+    return {
+      _tag: "Delete",
+      id: nextId("Delete"),
+      from: { name: meta.name },
+      ...(this.whereNode ? { where: this.whereNode } : {}),
+      ...(returning ? { returning } : {}),
+      capabilities: returning ? capabilityBit("delete.returning") : noCapabilities,
+      cardinality: "many",
+      annotations: { tableNames: [meta.name], idempotency: "idempotent" }
+    }
+  }
+
+  /** @experimental Debugging shape only. @returns Stable delete-shape metadata without executing. */
+  inspect() {
+    return inspectIr(this.ir())
+  }
+
+  /**
+   * @param dialect - Target SQL dialect; defaults to PostgreSQL.
+   * @returns Compiled delete SQL and parameter metadata.
+   */
+  toSql(dialect: Dialect = PostgresDialect): CompiledStatement {
+    return dialect.compileQuery(this.ir())
+  }
+
+  /** @returns Capabilities required by this delete. */
+  requiredCapabilities(): ReadonlyArray<Capability> {
+    return bitsToCapabilities(queryCapabilityBits(this.ir()))
+  }
+
+  /**
+   * @param fields - Optional fields to return; omit for all columns.
+   * @returns A row-returning delete query.
+   */
+  returning<F extends SelectFields>(fields?: F): ReturningQuery<F extends SelectFields ? SelectResult<F> : Record<string, unknown>, P> {
+    const selection = returningFields(this.table, fields)
+    return new ReturningQuery(this.ir(selection), selection)
+  }
+
+  /**
+   * @stable
+   * @typeParam Args - Omitted for compilation or no-param execution; otherwise named values.
+   * @param args - Named parameter values.
+   * @returns An Effect yielding the affected-row count.
+   */
+  run<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
+    const ir = this.ir()
+    const effect = Effect.flatMap(Database, (db) => executeCommand(ir, db, argsFrom(args)))
+    return compilableEffect(effect, ir, NO_SELECTION, "run", executeCompiledCommand) as TerminalCallResult<P, CommandResult, QueryError, "run", Args>
+  }
+}
