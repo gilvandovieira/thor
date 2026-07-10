@@ -23,7 +23,7 @@ import type { Capability } from "../capabilities/capability.js"
 import { isSatisfied } from "../capabilities/matrix.js"
 import type { Dialect } from "../dialect.js"
 import { CapabilityError } from "../errors/index.js"
-import type { CompiledQuery, RawRow } from "../execution/driver.js"
+import type { CompiledStatement, RawRow } from "../execution/driver.js"
 import { Database } from "../execution/database.js"
 import type { QueryArgs } from "../execution/run.js"
 import {
@@ -93,7 +93,7 @@ interface RunnableQuery {
    * @param dialect - Target SQL dialect.
    * @returns Compiled SQL and parameter metadata.
    */
-  readonly toSql?: (dialect: Dialect) => CompiledQuery
+  readonly toSql?: (dialect: Dialect) => CompiledStatement
   /** @returns Capabilities collected from the query IR. */
   readonly requiredCapabilities?: () => ReadonlyArray<Capability>
   /**

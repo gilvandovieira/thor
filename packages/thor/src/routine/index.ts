@@ -17,7 +17,7 @@ import {
 } from "../capabilities/capability.js"
 import type { Dialect } from "../dialect.js"
 import { Database } from "../execution/database.js"
-import type { CommandResult, CompiledQuery } from "../execution/driver.js"
+import type { CommandResult, CompiledStatement } from "../execution/driver.js"
 import { executeCommand, type QueryArgs } from "../execution/run.js"
 import type { QueryError } from "../errors/index.js"
 import { internIdentifier } from "../ir/identifiers.js"
@@ -244,7 +244,7 @@ export class ProcedureCall {
    * @param dialect - Target SQL dialect; defaults to PostgreSQL.
    * @returns Compiled `CALL` statement and parameters.
    */
-  toSql(dialect: Dialect = PostgresDialect): CompiledQuery {
+  toSql(dialect: Dialect = PostgresDialect): CompiledStatement {
     return dialect.compileQuery(this.ir)
   }
 

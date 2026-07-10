@@ -113,7 +113,14 @@ export {
 
 // Execution
 export { Database, type DatabaseService } from "./execution/database.js"
-export { type Driver, type CompiledQuery, type CommandResult, type RawRow } from "./execution/driver.js"
+export { type Driver, type CompiledStatement, type CommandResult, type RawRow } from "./execution/driver.js"
+export type {
+  CompiledQuery,
+  CompiledCardinality,
+  CompilableEffect,
+  CompilableTerminal,
+  TerminalResult
+} from "./execution/compiled-query.js"
 export {
   transaction,
   type TransactionIsolationLevel,

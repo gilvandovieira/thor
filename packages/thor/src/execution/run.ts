@@ -17,7 +17,7 @@ import type { CapabilityBits } from "../capabilities/capability.js"
 import { queryStructuralHash } from "../ir/structural-hash.js"
 import { normalizeQuery } from "../ir/normalize.js"
 import { DecodeError, GuardError, NotFoundError, ParameterError, type QueryError, TooManyRowsError } from "../errors/index.js"
-import type { CommandResult, CompiledQuery, RawRow } from "./driver.js"
+import type { CommandResult, CompiledStatement, RawRow } from "./driver.js"
 import { type DatabaseService } from "./database.js"
 import { DEFAULT_EXECUTION_MODE, resolveDecodeMode } from "./plan.js"
 
@@ -132,7 +132,7 @@ const parameterPlanFor = (ir: QueryIR): ParameterPlan => {
  * (with different bound values each time) pays the compile + guard cost once —
  * every later execution is just bind + drive + decode.
  */
-const compileCache = new WeakMap<QueryIR, WeakMap<Dialect, CompiledQuery>>()
+const compileCache = new WeakMap<QueryIR, WeakMap<Dialect, CompiledStatement>>()
 
 /**
  * Compiles a query once for each IR and dialect object pair.
@@ -141,7 +141,7 @@ const compileCache = new WeakMap<QueryIR, WeakMap<Dialect, CompiledQuery>>()
  * @param dialect - Target SQL dialect.
  * @returns The cached or newly compiled query.
  */
-const compileCached = (ir: QueryIR, dialect: Dialect): CompiledQuery => {
+const compileCached = (ir: QueryIR, dialect: Dialect): CompiledStatement => {
   let byDialect = compileCache.get(ir)
   if (byDialect === undefined) {
     byDialect = new WeakMap()
@@ -267,7 +267,7 @@ const bindValues = (
  * @param compiled - Compiled query metadata.
  * @returns Prepared statement name, or `undefined` for direct execution.
  */
-const preparedNameFor = (db: DatabaseService, compiled: CompiledQuery): string | undefined =>
+const preparedNameFor = (db: DatabaseService, compiled: CompiledStatement): string | undefined =>
   db.preparedStatements && compiled.paramOrder.length > 0 ? compiled.cacheKey : undefined
 
 type RowDecoder = (raw: RawRow) => Either.Either<Record<string, unknown>, ParseResult.ParseError>
@@ -384,7 +384,7 @@ export interface PreparedPlanInspection {
 
 interface CachedCompilation {
   readonly profileHash: string
-  readonly compiled: CompiledQuery
+  readonly compiled: CompiledStatement
 }
 
 interface CachedGuard {
@@ -496,7 +496,7 @@ export class PreparedExecutionPlan {
    * @param dialect - Target SQL dialect.
    * @returns Cached or newly compiled query data.
    */
-  compile(dialect: Dialect): CompiledQuery {
+  compile(dialect: Dialect): CompiledStatement {
     const profileHash = dialect.profileHash
     const cached = this.compilations.get(dialect)
     if (cached?.profileHash === profileHash) return cached.compiled
@@ -643,6 +643,52 @@ export const executePreparedCommand = (
     db.driver.execute(compiled.sql, values, preparedNameFor(db, compiled))
   )
 }
+
+/**
+ * Executes rows through an already compiled plan without guard traversal or SQL
+ * compilation. Public compiled-query handles perform their cheap dialect-profile
+ * check before entering this path.
+ *
+ * @typeParam A - Decoded row shape.
+ * @param plan - Precomputed shape, parameter, and decoder plan.
+ * @param compiled - SQL compiled when the public handle was created.
+ * @param db - Active database service.
+ * @param args - Named values supplied for this execution only.
+ * @returns An Effect yielding decoded rows.
+ */
+export const executeCompiledRows = <A>(
+  plan: PreparedExecutionPlan,
+  compiled: CompiledStatement,
+  db: DatabaseService,
+  args: QueryArgs
+): Effect.Effect<ReadonlyArray<A>, QueryError> => {
+  const trusted = resolveDecodeMode(db.mode ?? DEFAULT_EXECUTION_MODE, db.decodeMode) === "trusted"
+  return Effect.flatMap(plan.bind(compiled.paramOrder, args), (values) =>
+    Effect.flatMap(db.driver.query(compiled.sql, values, preparedNameFor(db, compiled)), (rows) =>
+      trusted ? Effect.succeed(rows as ReadonlyArray<A>) : (plan.decode(rows) as Effect.Effect<ReadonlyArray<A>, DecodeError>)
+    )
+  )
+}
+
+/**
+ * Executes a command through an already compiled plan without guard traversal
+ * or SQL compilation.
+ *
+ * @param plan - Precomputed shape and parameter plan.
+ * @param compiled - SQL compiled when the public handle was created.
+ * @param db - Active database service.
+ * @param args - Named values supplied for this execution only.
+ * @returns An Effect yielding the affected-row count.
+ */
+export const executeCompiledCommand = (
+  plan: PreparedExecutionPlan,
+  compiled: CompiledStatement,
+  db: DatabaseService,
+  args: QueryArgs
+): Effect.Effect<CommandResult, QueryError> =>
+  Effect.flatMap(plan.bind(compiled.paramOrder, args), (values) =>
+    db.driver.execute(compiled.sql, values, preparedNameFor(db, compiled))
+  )
 
 /**
  * Guards, compiles, binds, executes, and decodes a row-returning query.

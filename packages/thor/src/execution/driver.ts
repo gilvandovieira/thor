@@ -2,7 +2,7 @@
  * Low-level driver contract and compiled-query shape (spec §16).
  *
  * A `Driver` is the thin seam between Thor and a real database client (or the
- * fake driver used in tests). Thor compiles IR to a `CompiledQuery`, binds
+ * fake driver used in tests). Thor compiles IR to a `CompiledStatement`, binds
  * values separately, and hands both to the driver.
  *
  * @module execution/driver
@@ -21,8 +21,8 @@ export interface CommandResult {
   readonly rowCount: number
 }
 
-/** A query compiled to dialect SQL with its parameters separated (spec §16). */
-export interface CompiledQuery {
+/** A query shape lowered to dialect SQL with its parameters separated (spec §16). */
+export interface CompiledStatement {
   /** Dialect-specific SQL text. */
   readonly sql: string
   /** Parameters in positional bind order. */

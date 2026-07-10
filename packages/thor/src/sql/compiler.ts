@@ -6,7 +6,7 @@
  *
  * @module sql/compiler
  */
-import type { CompiledQuery } from "../execution/driver.js"
+import type { CompiledStatement } from "../execution/driver.js"
 import type {
   CallIR,
   DeleteIR,
@@ -306,7 +306,7 @@ const compileCall = (context: CompileContext, ir: CallIR): string => {
  * @param dialect - Backend syntax and capability implementation.
  * @returns SQL text, positional parameter order, and a value-independent cache key.
  */
-export const compileQuery = (ir: QueryIR, dialect: Dialect): CompiledQuery => {
+export const compileQuery = (ir: QueryIR, dialect: Dialect): CompiledStatement => {
   const normalized = normalizeQuery(ir)
   const context: CompileContext = { dialect, params: [] }
   let sql: string

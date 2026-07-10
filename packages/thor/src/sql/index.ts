@@ -8,3 +8,10 @@ export * from "./advanced-expressions.js"
 export * from "./predicates.js"
 export * from "./query-builder.js"
 export { rawExpr, unsafeSql, type RawInterpolation } from "./raw.js"
+export type {
+  CompiledQuery,
+  CompiledCardinality,
+  CompilableEffect,
+  CompilableTerminal,
+  TerminalResult
+} from "../execution/compiled-query.js"

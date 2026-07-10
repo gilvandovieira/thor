@@ -322,10 +322,9 @@ exactly what unblocks **G6b** (Levels 3–5, 9) and **H5b** (join/subquery fuzzi
 
 # Part II — v1 milestone
 
-> **Deferred until Part 0 (P0 production-correctness) lands.** Widening the surface
-> before the query core, migrations, CLI, and CI gate are demonstrably correct is
-> the main project risk flagged by the independent review. No public release may
-> occur until the P1 release gate is also green.
+> **Resumed after Part 0 P0 and the P1 release gate landed.** Epic K is the first
+> resumed v1 expansion. P2-11/P2-12 remain beta gates, so alpha work may proceed
+> but no beta/public release may bypass those maintenance and documentation tasks.
 
 Source of truth: [`thor-project-v1-spec.md`](./thor-project-v1-spec.md) (the
 production-readiness release). v1 keeps the v0 foundation (typed/runtime IR,
@@ -342,7 +341,7 @@ relation layer's `join` strategy and the feature matrix's advanced levels.
 
 | Epic | Theme | v1 spec | Milestone | Builds on | Status |
 |---|---|---|---|---|---|
-| K | Compiled Query API (`.compile()` → executable handle) | §8 | alpha.1 | D (`.prepare`) | ❌ |
+| K | Compiled Query API (`.compile()` → executable handle) | §8 | alpha.1 | D (`.prepare`) | ✅ K1–K5 |
 | L | Query caches + precompilation modes | §9, §10 | alpha.1 | F, D, E | ❌ |
 | M | Dialect hardening v1 (full contract, MySQL/Postgres) | §11 | alpha.2 | B | 🟡 (v0 suites pass) |
 | N | Runtime lanes v1 (Node + Bun) | §12 | alpha.3 | C | 🟡 (caps + Bun harness) |
@@ -375,13 +374,19 @@ v1-beta     Observability, skills, API stability → R, S, T, U, V, W
 > compiled-query value that bypasses fluent rebuild / normalization / guard
 > traversal / recompilation / decoder reconstruction on the hot path.
 
-| # | Task | Spec | Acceptance |
-|---|---|---|---|
-| K1 | `.compile()` on terminal queries → `CompiledQuery` value | §8.2 | `query.one().compile()` returns a handle with `.execute(params)` |
-| K2 | `CompiledQuery<Params, Output, Error, Requirements, Dialect, Cardinality>` type | §8.3 | exposes `cacheKey`, `dialect`, `cardinality`, `capabilities: ReadonlySet<Capability>` |
-| K3 | `.execute(params)` binds values separately; never bakes values | §8.4 | compiled-query invariant: params supplied at execute time; cache key/SQL value-independent (reuse Epic D `PreparedExecutionPlan`) |
-| K4 | Cheap per-execute validation only (capability/version, param-by-mode) | §8.1 | warm path skips guard traversal; still does capability/version check + prepared lookup + decode-by-mode |
-| K5 | Docs + `@stable` marking (part of §6) | §6.1 | compiled query API listed stable and documented |
+| # | Status | Task | Spec | Acceptance |
+|---|---|---|---|---|
+| K1 | ✅ | `.compile()` on terminal queries → `CompiledQuery` value | §8.2 | All/one/maybeOne/run terminals expose shape-only compilation; parameterized no-argument terminals are compile-only, while param-free terminals remain directly executable Effects |
+| K2 | ✅ | `CompiledQuery<Params, Output, Error, Requirements, Dialect, Cardinality>` type | §8.3 | Public exports retain all six axes and expose `cacheKey`, `dialect`, `cardinality`, and `capabilities: ReadonlySet<Capability>`; `parameters.types.ts` covers inference and negatives |
+| K3 | ✅ | `.execute(params)` binds values separately; never bakes values | §8.4 | `PreparedExecutionPlan` rejects inline values; `compiled-query.test.ts` proves different values reuse identical SQL/cache/prepared identity |
+| K4 | ✅ | Cheap per-execute validation only (capability/version, param-by-mode) | §8.1 | Compilation snapshots/normalizes/guards/compiles/builds decoder once; execution checks the dialect profile and cached capability outcome, then binds, looks up prepared identity, drives, and decodes by mode |
+| K5 | ✅ | Docs + `@stable` marking (part of §6) | §6.1 | `CompiledQuery` is marked `@stable`; `docs/compiled-queries.md`, root README, and package README document usage and invariants |
+
+**Release-work record:** prerequisite Epic D ✅; owner Thor maintainers; required
+tests `compiled-query.test.ts`, `parameters.types.ts`, full unit/type/docs/quality
+checks; closes the alpha.1 claim that applications can hoist a stable executable
+query shape without retaining user values. **Definition of done:** K1–K5 are
+implemented and verified. ✅
 
 ## Epic L — Query caches + precompilation modes (§9, §10, alpha.1)
 

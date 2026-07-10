@@ -15,7 +15,7 @@
  * @module execution/plan
  */
 import { Effect, Layer } from "effect"
-import type { CompiledQuery } from "./driver.js"
+import type { CompiledStatement } from "./driver.js"
 import { Database, type DatabaseService } from "./database.js"
 
 /**
@@ -44,7 +44,7 @@ export const DEFAULT_DECODE_MODE: DecodeMode = "strict"
  * @returns A stable, value-independent plan identity.
  */
 export const planKey = (
-  compiled: CompiledQuery,
+  compiled: CompiledStatement,
   mode: ExecutionMode = DEFAULT_EXECUTION_MODE,
   decodeMode: DecodeMode = DEFAULT_DECODE_MODE
 ): string => `${compiled.cacheKey}:${mode}:${decodeMode}`

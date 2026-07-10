@@ -16,13 +16,26 @@ const posts = pg.table("posts", {
 })
 
 const byId = db.select({ email: users.email }).from(users).where(eq(users.id, param("id", Schema.String)))
+const compiledById = byId.one().compile()
+compiledById.execute({ id: "u1" })
+// @ts-expect-error compiled execution requires the named parameter
+compiledById.execute()
+// @ts-expect-error compiled execution retains the parameter schema
+compiledById.execute({ id: 1 })
+// @ts-expect-error compiled execution rejects extra named parameters
+compiledById.execute({ id: "u1", extra: true })
+type CompiledByIdOutput = Effect.Effect.Success<ReturnType<typeof compiledById.execute>>
+export type CompiledQueryRetainsOutput = Expect<Equal<CompiledByIdOutput, { email: string }>>
+export type CompiledQueryRetainsCardinality = Expect<Equal<typeof compiledById.cardinality, "one">>
 const idParam = param("id", Schema.String)
 export type ParamCarriesString = Expect<Equal<import("../src/sql/expressions.js").ParamsOf<typeof idParam>, { readonly id: string }>>
 const idPredicate = eq(users.id, idParam)
 export type PredicateCarriesString = Expect<Equal<import("../src/sql/expressions.js").ParamsOf<typeof idPredicate>, { readonly id: string }>>
 byId.all({ id: "u1" })
-// @ts-expect-error named arguments are required
-byId.all()
+const byIdTerminal = byId.all()
+byIdTerminal.compile()
+// @ts-expect-error a parameterized no-argument terminal is compile-only, not executable
+Effect.runPromise(byIdTerminal)
 // @ts-expect-error named argument types come from param()'s schema
 byId.all({ id: 1 })
 // @ts-expect-error extra named arguments are rejected

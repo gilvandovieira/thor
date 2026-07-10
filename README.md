@@ -87,7 +87,23 @@ Notice `param("authorId", …)` — queries carry *named holes*, not baked-in
 values. You fill them in at run time, and the same compiled SQL is reused for
 every author.
 
-### 3. Run it
+### 3. Compile a hot path
+
+Terminal queries expose the stable `CompiledQuery` API. Compilation validates
+the shape and target dialect once; values remain separate and are supplied to
+each execution:
+
+```ts
+const FirstPostByAuthor = postsByAuthor.one().compile()
+
+const program = FirstPostByAuthor.execute({ authorId: "ada-id" })
+// cacheKey, dialect, cardinality, and capabilities are available as metadata
+```
+
+See [compiled queries](docs/compiled-queries.md) for dialect targeting, safety
+invariants, and the full stable surface.
+
+### 4. Run it
 
 Only now does Effect enter. `.one()` expects exactly one row and gives you a
 typed result; `.all()` returns every match; `.run()` is for writes.
@@ -112,7 +128,7 @@ const DatabaseLive = PostgresScopedLayer({
 Effect.runPromise(program.pipe(Effect.provide(DatabaseLive)))
 ```
 
-### 4. Ask a real question — a join and a count
+### 5. Ask a real question — a join and a count
 
 Now the payoff. Which authors are most prolific? Join posts to their author and
 count per name — the same fluent builder, still fully typed:
@@ -306,6 +322,7 @@ pnpm db:up        # or start postgres@5433 + mysql@3307 yourself
 ## Learn more
 
 - [`docs/advanced-queries.md`](docs/advanced-queries.md) — joins, subqueries, aggregation, CTEs, upserts
+- [`docs/compiled-queries.md`](docs/compiled-queries.md) - stable compiled handles, metadata, and hot-path invariants
 - [`docs/routines.md`](docs/routines.md) — declared functions, table-valued sources, procedures, and capability behavior
 - [`docs/driver-benchmarks.md`](docs/driver-benchmarks.md) — plain-language benchmark guide, prepared vs unprepared drivers, and hot-path cost
 - [`docs/query-builder-benchmarks.md`](docs/query-builder-benchmarks.md) — Thor versus Drizzle and Prisma query construction, method, results, and caveats

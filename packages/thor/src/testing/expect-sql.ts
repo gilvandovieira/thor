@@ -5,7 +5,7 @@
  *
  * @module testing/expect-sql
  */
-import type { CompiledQuery } from "../execution/driver.js"
+import type { CompiledStatement } from "../execution/driver.js"
 import type { Dialect } from "../dialect.js"
 import { PostgresDialect } from "../postgres/dialect.js"
 
@@ -15,7 +15,7 @@ export interface Compilable {
    * @param dialect - Optional compilation dialect.
    * @returns Compiled SQL and parameter metadata.
    */
-  readonly toSql: (dialect?: Dialect) => CompiledQuery
+  readonly toSql: (dialect?: Dialect) => CompiledStatement
 }
 
 /** Stable, serializable view of a compiled query. */

@@ -9,7 +9,7 @@
  * @module dialect
  */
 import type { CapabilityMatrix, DialectId } from "./capabilities/matrix.js"
-import type { CompiledQuery } from "./execution/driver.js"
+import type { CompiledStatement } from "./execution/driver.js"
 import type { QueryIR } from "./ir/query-ir.js"
 import type { ComparisonOp } from "./ir/query-ir.js"
 import type { MigrationOperation } from "./migrate/migration-ir.js"
@@ -111,7 +111,7 @@ export interface Dialect {
    * @param ir - Runtime query representation.
    * @returns SQL, parameter order, and structural cache key.
    */
-  readonly compileQuery: (ir: QueryIR) => CompiledQuery
+  readonly compileQuery: (ir: QueryIR) => CompiledStatement
   /** Migration compiler and lifecycle behavior for this backend. */
   readonly migrations: MigrationDialect
 }
