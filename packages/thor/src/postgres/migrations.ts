@@ -5,7 +5,7 @@
  */
 import type { MigrationDialect } from "../dialect.js"
 import type { MigrationOperation } from "../migrate/migration-ir.js"
-import type { ColumnDefault, DefaultLiteral } from "../migrate/migration-ir.js"
+import { type ColumnDefault, type DefaultLiteral, unsafeSyntax } from "../migrate/migration-ir.js"
 
 /**
  * @param name - Identifier to escape.
@@ -26,10 +26,14 @@ const literal = (value: DefaultLiteral): string => {
 /** @param value - Dialect-neutral default. @returns PostgreSQL default SQL. */
 const defaultSql = (value: ColumnDefault): string => {
   switch (value.kind) {
-    case "value": return literal(value.value)
-    case "sql": return value.sql
-    case "now": return "now()"
-    case "random": return "gen_random_uuid()"
+    case "value":
+      return literal(value.value)
+    case "sql":
+      return value.sql
+    case "now":
+      return "now()"
+    case "random":
+      return "gen_random_uuid()"
   }
 }
 
@@ -56,17 +60,22 @@ const compilePostgresOperation = (operation: MigrationOperation): string => {
         columns.push(`  primary key (${operation.primaryKey.map(quote).join(", ")})`)
       }
       for (const constraint of operation.uniqueConstraints ?? []) {
-        columns.push(`  ${constraint.name ? `constraint ${quote(constraint.name)} ` : ""}unique (${constraint.columns.map(quote).join(", ")})`)
+        columns.push(
+          `  ${constraint.name ? `constraint ${quote(constraint.name)} ` : ""}unique (${constraint.columns.map(quote).join(", ")})`
+        )
       }
       for (const check of operation.checks ?? []) {
         columns.push(`  ${check.name ? `constraint ${quote(check.name)} ` : ""}check (${check.expression})`)
       }
       for (const foreignKey of operation.foreignKeys ?? []) {
-        columns.push(`  ${foreignKey.name ? `constraint ${quote(foreignKey.name)} ` : ""}foreign key (${foreignKey.columns.map(quote).join(", ")}) references ${quote(foreignKey.references.table)} (${foreignKey.references.columns.map(quote).join(", ")})${foreignKey.onDelete ? ` on delete ${foreignKey.onDelete}` : ""}${foreignKey.onUpdate ? ` on update ${foreignKey.onUpdate}` : ""}`)
+        columns.push(
+          `  ${foreignKey.name ? `constraint ${quote(foreignKey.name)} ` : ""}foreign key (${foreignKey.columns.map(quote).join(", ")}) references ${quote(foreignKey.references.table)} (${foreignKey.references.columns.map(quote).join(", ")})${foreignKey.onDelete ? ` on delete ${foreignKey.onDelete}` : ""}${foreignKey.onUpdate ? ` on update ${foreignKey.onUpdate}` : ""}`
+        )
       }
       const create = `create table ${quote(operation.table)} (\n${columns.join(",\n")}\n);`
-      const indexes = (operation.indexes ?? []).map((index) =>
-        `create ${index.unique ? "unique " : ""}index ${quote(index.name)} on ${quote(operation.table)} (${index.columns.map(quote).join(", ")});`
+      const indexes = (operation.indexes ?? []).map(
+        (index) =>
+          `create ${index.unique ? "unique " : ""}index ${quote(index.name)} on ${quote(operation.table)} (${index.columns.map(quote).join(", ")});`
       )
       return [create, ...indexes].join("\n")
     }
@@ -89,13 +98,20 @@ const compilePostgresOperation = (operation: MigrationOperation): string => {
     case "DropNotNull":
       return `alter table ${quote(operation.table)} alter column ${quote(operation.column)} drop not null;`
     case "CreateRoutine": {
-      const args = operation.args.map((arg) => `${arg.name ? `${quote(arg.name)} ` : ""}${arg.type}`).join(", ")
+      const args = operation.args
+        .map((arg) => `${arg.name ? `${quote(arg.name)} ` : ""}${unsafeSyntax(arg.type, "argument type")}`)
+        .join(", ")
       const header = `create ${operation.replace ? "or replace " : ""}${operation.routine} ${quote(operation.name)}(${args})`
-      const returns = operation.routine === "function" && operation.returns ? ` returns ${operation.returns}` : ""
-      return `${header}${returns} language ${operation.language} as $$${operation.body}$$;`
+      const returns =
+        operation.routine === "function" && operation.returns
+          ? ` returns ${unsafeSyntax(operation.returns, "return type")}`
+          : ""
+      return `${header}${returns} language ${unsafeSyntax(operation.language, "language")} as $$${unsafeSyntax(operation.body, "body")}$$;`
     }
     case "DropRoutine": {
-      const args = operation.args ? `(${operation.args.map((arg) => arg.type).join(", ")})` : ""
+      const args = operation.args
+        ? `(${operation.args.map((arg) => unsafeSyntax(arg.type, "argument type")).join(", ")})`
+        : ""
       return `drop ${operation.routine} ${operation.ifExists ? "if exists " : ""}${quote(operation.name)}${args};`
     }
     case "RawSql":

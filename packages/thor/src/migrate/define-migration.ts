@@ -28,8 +28,9 @@ export type MigrationStep = SqlStatement | Effect.Effect<void, MigrationError, D
  * infer safety from opaque `sql`/`rawSql` text, so authors declare it: an
  * `"additive"` migration passes `safe-only`; a `"destructive"` migration is
  * blocked under `safe-only`/`expand-only` and requires an explicitly reviewed
- * `allow-reviewed-destructive` run. When omitted, the migration is treated as
- * author-trusted additive (see the migration policy docs for the trade-off).
+ * `allow-reviewed-destructive` run. When **omitted**, the migration is treated
+ * as *unchecked* and blocked under `safe-only`/`expand-only` unless the run is
+ * reviewed — opaque SQL is never silently treated as safe (Finding 2).
  */
 export type MigrationSafety = "additive" | "destructive"
 
@@ -44,12 +45,23 @@ interface MigrationDefinitionBase {
   /** Explicitly marks the migration as impossible to roll back. */
   readonly irreversible?: boolean
   /**
-   * Declared risk class governing which policy permits this manual migration
-   * (spec §15.4). Defaults to author-trusted additive when omitted.
+   * Declared risk class of the **forward** (`up`) step, governing which policy
+   * permits it (spec §15.4). When omitted the migration is "unchecked" and
+   * blocked under `safe-only`/`expand-only` unless the run is reviewed — Thor
+   * cannot prove opaque SQL is additive (Finding 2).
    */
   readonly safety?: MigrationSafety
-  /** Declared expand/contract phase, enforced under the `expand-only` policy. */
+  /** Declared expand/contract phase of the `up` step, enforced under `expand-only`. */
   readonly phase?: MigrationPhase
+  /**
+   * Declared risk class of the **rollback** (`down`) step. Rolling an additive
+   * change back is often destructive (e.g. dropping the column it added), so the
+   * `down` direction is guarded independently (Finding 3). When omitted the
+   * `down` is "unchecked" and reviewed-only under `safe-only`.
+   */
+  readonly downSafety?: MigrationSafety
+  /** Declared expand/contract phase of the `down` step, enforced under `expand-only`. */
+  readonly downPhase?: MigrationPhase
 }
 
 /**
@@ -230,16 +242,18 @@ export const checksum = (definition: MigrationDefinition): string =>
       ["id", definition.id],
       ["name", definition.name],
       ["up.kind", isSqlStatement(definition.up) ? "sql" : "effect"],
-      ["up.value", isSqlStatement(definition.up) ? definition.up.sql : definition.revision],
+      ["up.value", isSqlStatement(definition.up) ? definition.up.sql : (definition.revision ?? null)],
       ["down.kind", definition.down ? (isSqlStatement(definition.down) ? "sql" : "effect") : "none"],
       [
         "down.value",
-        definition.down ? (isSqlStatement(definition.down) ? definition.down.sql : definition.revision) : null
+        definition.down ? (isSqlStatement(definition.down) ? definition.down.sql : (definition.revision ?? null)) : null
       ],
       ["revision", definition.revision ?? null],
       ["irreversible", definition.irreversible ?? false],
       ["safety", definition.safety ?? null],
-      ["phase", definition.phase ?? null]
+      ["phase", definition.phase ?? null],
+      ["downSafety", definition.downSafety ?? null],
+      ["downPhase", definition.downPhase ?? null]
     ])
   )
 

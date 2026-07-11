@@ -7,7 +7,7 @@
  *
  * @module routine
  */
-import { Effect, type Schema } from "effect"
+import { Effect, Schema } from "effect"
 import {
   bitsToCapabilities,
   capabilitiesToBits,
@@ -20,13 +20,13 @@ import { Database } from "../execution/database.js"
 import type { CommandResult, CompiledStatement } from "../execution/driver.js"
 import { executeCommand, type QueryArgs } from "../execution/run.js"
 import { isInTransaction } from "../execution/transaction.js"
-import { GuardError, type QueryError } from "../errors/index.js"
+import { GuardError, RoutineError, type QueryError } from "../errors/index.js"
 import { internIdentifier } from "../ir/identifiers.js"
-import { nextId, queryCapabilityBits, type CallIR, type SelectionField } from "../ir/query-ir.js"
+import { nextId, queryCapabilityBits, type CallIR, type ExprNode, type SelectionField } from "../ir/query-ir.js"
 import { PostgresDialect } from "../postgres/dialect.js"
 import type { SqlDataType } from "../schema/column.js"
 import { windowable, type WindowableExpr } from "../sql/advanced-expressions.js"
-import { toValueNode } from "../sql/expressions.js"
+import { toValueNodeWithCodec } from "../sql/expressions.js"
 import { QueryReference } from "../sql/query-builder.js"
 
 /** Volatility class (spec §12.2). Affects optimization and retry behavior. */
@@ -104,10 +104,7 @@ export interface TableFunctionRoutine extends TableFunctionDescriptor {
    * @param alias - Required query-local relation alias; defaults to the function name.
    * @returns A relation reference accepted by `from`, `join`, or `lateralJoin`.
    */
-  readonly call: (
-    args: Readonly<Record<string, unknown>>,
-    alias?: string
-  ) => QueryReference<Record<string, unknown>>
+  readonly call: (args: Readonly<Record<string, unknown>>, alias?: string) => QueryReference<Record<string, unknown>>
 }
 
 /** Shared declaration options for external capability requirements. */
@@ -143,6 +140,36 @@ const routineCapabilities = (base: Capability, extras: ReadonlyArray<Capability>
   capabilityBit(base) | capabilitiesToBits(extras)
 
 /**
+ * Binds named routine arguments to expression nodes in declared order, applying
+ * each declared argument's codec and rejecting missing or unknown keys (Finding
+ * 6) — so a missing argument never becomes a silent `undefined` and a typo is
+ * not ignored.
+ *
+ * @param routine - Qualified routine name (for diagnostics).
+ * @param declared - Declared argument specs keyed by name.
+ * @param values - Application values keyed by argument name.
+ * @returns Argument expression nodes in declared order.
+ * @throws {RoutineError} When a declared argument is missing or an unknown key is supplied.
+ */
+const bindNamedArgs = (
+  routine: string,
+  declared: Readonly<Record<string, RoutineArg>>,
+  values: Readonly<Record<string, unknown>>
+): ExprNode[] => {
+  for (const key of Object.keys(values)) {
+    if (!Object.prototype.hasOwnProperty.call(declared, key)) {
+      throw new RoutineError({ routine, message: `Unknown argument "${key}" for routine "${routine}"` })
+    }
+  }
+  return Object.entries(declared).map(([key, arg]) => {
+    if (!Object.prototype.hasOwnProperty.call(values, key)) {
+      throw new RoutineError({ routine, message: `Missing argument "${key}" for routine "${routine}"` })
+    }
+    return toValueNodeWithCodec(values[key], arg.codec)
+  })
+}
+
+/**
  * Builds a callable scalar or aggregate function descriptor.
  *
  * @typeParam A - Decoded function return type.
@@ -163,17 +190,21 @@ const makeFunction = <A>(
   const name = parseName(qualifiedName)
   const volatility = spec.volatility ?? "volatile"
   const capabilities = routineCapabilities("routine.functionCall", spec.capabilities)
-  const call = ((...args: ReadonlyArray<unknown>): WindowableExpr<A> => windowable<A>({
-    _tag: "FunctionCall",
-    ...(name.schema ? { schema: name.schema } : {}),
-    name: name.name,
-    args: args.map((arg) => toValueNode(arg)),
-    aggregate,
-    star: false,
-    declared: true,
-    volatility,
-    capabilities
-  }, spec.returns.codec)) as FunctionRoutine<A>
+  const call = ((...args: ReadonlyArray<unknown>): WindowableExpr<A> =>
+    windowable<A>(
+      {
+        _tag: "FunctionCall",
+        ...(name.schema ? { schema: name.schema } : {}),
+        name: name.name,
+        args: args.map((arg, i) => toValueNodeWithCodec(arg, spec.args[i]?.codec ?? Schema.Unknown)),
+        aggregate,
+        star: false,
+        declared: true,
+        volatility,
+        capabilities
+      },
+      spec.returns.codec
+    )) as FunctionRoutine<A>
   Object.assign(call, {
     kind: "function" as const,
     aggregate,
@@ -264,10 +295,12 @@ export class ProcedureCall {
   run(args: QueryArgs = {}): Effect.Effect<CommandResult, QueryError, Database> {
     return Effect.flatMap(Database, (database) => {
       if (this.ir.annotations.requiresTransaction && !isInTransaction(database)) {
-        return Effect.fail(new GuardError({
-          guard: "procedure-requires-transaction",
-          message: `Procedure "${this.ir.schema ? `${this.ir.schema}.` : ""}${this.ir.procedure}" must be called inside a transaction (db.transaction)`
-        }))
+        return Effect.fail(
+          new GuardError({
+            guard: "procedure-requires-transaction",
+            message: `Procedure "${this.ir.schema ? `${this.ir.schema}.` : ""}${this.ir.procedure}" must be called inside a transaction (db.transaction)`
+          })
+        )
       }
       return executeCommand(this.ir, database, args)
     })
@@ -303,20 +336,21 @@ export const defineProcedure = (
     safeForPreparedStatement: false
   }
   return Object.assign(descriptor, {
-    call: (values: Readonly<Record<string, unknown>>): ProcedureCall => new ProcedureCall({
-      _tag: "Call",
-      id: nextId("Call"),
-      ...(name.schema ? { schema: name.schema } : {}),
-      procedure: name.name,
-      args: Object.keys(spec.args).map((key) => toValueNode(values[key])),
-      capabilities,
-      cardinality: "zero",
-      annotations: {
-        tableNames: [...spec.effects.mutates],
-        idempotency: spec.effects.idempotency,
-        requiresTransaction: spec.effects.requiresTransaction
-      }
-    })
+    call: (values: Readonly<Record<string, unknown>>): ProcedureCall =>
+      new ProcedureCall({
+        _tag: "Call",
+        id: nextId("Call"),
+        ...(name.schema ? { schema: name.schema } : {}),
+        procedure: name.name,
+        args: bindNamedArgs(name.name, spec.args, values),
+        capabilities,
+        cardinality: "zero",
+        annotations: {
+          tableNames: [...spec.effects.mutates],
+          idempotency: spec.effects.idempotency,
+          requiresTransaction: spec.effects.requiresTransaction
+        }
+      })
   })
 }
 
@@ -366,7 +400,7 @@ export const defineTableFunction = (
           _tag: "TableFunctionSource",
           ...(name.schema ? { schema: name.schema } : {}),
           name: name.name,
-          args: Object.keys(spec.args).map((key) => toValueNode(values[key])),
+          args: bindNamedArgs(name.name, spec.args, values),
           argTypes: Object.values(spec.args).map((argument) => argument.dataType),
           alias: relationAlias,
           columns: Object.keys(spec.returns).map(internIdentifier),

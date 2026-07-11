@@ -14,7 +14,13 @@ import { collectViolations } from "../guards/query-guards.js"
 import type { Dialect } from "../dialect.js"
 import type { CapabilityMatrix } from "../capabilities/matrix.js"
 import { normalizeQuery } from "../ir/normalize.js"
-import { DecodeError, ParameterError, type QueryError } from "../errors/index.js"
+import {
+  type ConstraintError,
+  DecodeError,
+  type DriverError,
+  ParameterError,
+  type QueryError
+} from "../errors/index.js"
 import type { CompiledStatement, RawRow } from "./driver.js"
 import { type DatabaseService } from "./database.js"
 import { DEFAULT_EXECUTION_MODE, resolveDecodeMode } from "./plan.js"
@@ -343,7 +349,22 @@ export const preparedNameFor = (db: DatabaseService, compiled: CompiledStatement
 export const hasCompiled = (caches: QueryCaches, ir: QueryIR, dialect: Dialect): boolean =>
   (caches.compile.peek(ir) as Map<Dialect, CompiledStatement> | undefined)?.has(dialect) ?? false
 
-const preparedByDriver = new WeakMap<object, Set<string>>()
+const preparedByDriver = new WeakMap<object, Map<string, string>>()
+
+/**
+ * @param driver - Active driver.
+ * @returns The object owning the connection's prepared statements (the physical
+ * connection when the adapter exposes one, otherwise the driver instance).
+ */
+const preparedScopeOf = (driver: { readonly preparedScope?: object }): object => driver.preparedScope ?? driver
+
+/** Prepared identity and observation outcome selected for one execution. */
+export interface PreparedExecution {
+  /** Name passed to the driver, or undefined for unprepared execution. */
+  readonly name: string | undefined
+  /** Actual connection-scoped prepared-registry outcome. */
+  readonly outcome: QueryCacheOutcome
+}
 
 /**
  * Record prepared-shape reuse once and return its per-execution outcome.
@@ -353,22 +374,52 @@ const preparedByDriver = new WeakMap<object, Set<string>>()
  * @param compiled - Compiled query shape.
  * @returns The observed prepared-cache outcome.
  */
-export const notePrepared = (
+export const prepareForExecution = (
   db: DatabaseService,
   caches: QueryCaches,
   compiled: CompiledStatement
-): QueryCacheOutcome => {
-  if (!preparedNameFor(db, compiled) || db.recordPreparedCache === false) return "not-used"
-  let prepared = preparedByDriver.get(db.driver)
-  if (!prepared) {
-    prepared = new Set()
-    preparedByDriver.set(db.driver, prepared)
-  }
-  const hit = prepared.has(compiled.cacheKey)
-  prepared.add(compiled.cacheKey)
-  caches.notePrepared(compiled.cacheKey)
-  return hit ? "hit" : "miss"
-}
+): Effect.Effect<PreparedExecution, DriverError | ConstraintError> =>
+  Effect.gen(function* () {
+    const requested = preparedNameFor(db, compiled)
+    if (!requested) return { name: undefined, outcome: "not-used" }
+    const scope = preparedScopeOf(db.driver)
+    let prepared = preparedByDriver.get(scope)
+    if (!prepared) {
+      prepared = new Map()
+      preparedByDriver.set(scope, prepared)
+    }
+    const priorSql = prepared.get(requested)
+    if (priorSql === compiled.sql) {
+      prepared.delete(requested)
+      prepared.set(requested, compiled.sql)
+      if (db.recordPreparedCache !== false) caches.notePrepared("hit", prepared.size, false)
+      return { name: requested, outcome: db.recordPreparedCache === false ? "not-used" : "hit" }
+    }
+    if (priorSql !== undefined) {
+      if (db.recordPreparedCache !== false) caches.notePrepared("miss", prepared.size, false)
+      return { name: undefined, outcome: db.recordPreparedCache === false ? "not-used" : "miss" }
+    }
+
+    let evicted = false
+    const maxSize = caches.preparedMaxSize
+    if (maxSize !== undefined && prepared.size >= maxSize) {
+      const oldest = prepared.keys().next().value as string | undefined
+      if (!oldest || !db.driver.releasePrepared) {
+        if (db.recordPreparedCache !== false) caches.notePrepared("miss", prepared.size, false)
+        return { name: undefined, outcome: db.recordPreparedCache === false ? "not-used" : "miss" }
+      }
+      // Remove the registry entry before yielding so a concurrent fiber cannot
+      // pick the same victim; a release failure is housekeeping, not a reason to
+      // fail the user's unrelated query, so it is observed and swallowed.
+      prepared.delete(oldest)
+      yield* Effect.ignore(db.driver.releasePrepared(oldest))
+      evicted = true
+    }
+
+    prepared.set(requested, compiled.sql)
+    if (db.recordPreparedCache !== false) caches.notePrepared("miss", prepared.size, evicted)
+    return { name: requested, outcome: db.recordPreparedCache === false ? "not-used" : "miss" }
+  })
 
 /** @returns Fresh mutable facts scoped to one execution. */
 export const observationState = (): QueryObservationState => ({

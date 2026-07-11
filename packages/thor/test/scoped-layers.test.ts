@@ -3,8 +3,9 @@ import { describe, expect, it } from "vitest"
 import {
   Database,
   DriverError,
+  MySQLDedicatedPoolConnectionLayer,
   MySQLScopedLayer,
-  PostgresPoolLayer,
+  PostgresDedicatedPoolConnectionLayer,
   PostgresScopedLayer,
   SQLiteScopedLayer,
   type MySQLClient,
@@ -128,7 +129,7 @@ describe("scoped database layers", () => {
       Effect.flip(
         Effect.provide(
           Effect.as(Database, undefined),
-          PostgresPoolLayer({
+          PostgresDedicatedPoolConnectionLayer({
             connect: async () => {
               throw new Error("pool exhausted")
             }
@@ -138,6 +139,33 @@ describe("scoped database layers", () => {
     )
     expect(exhausted).toBeInstanceOf(DriverError)
     expect(exhausted.message).toContain("pool exhausted")
+  })
+
+  it("names and scopes dedicated pool connections without implying per-query pooling", async () => {
+    const pgEvents: string[] = []
+    const mysqlEvents: string[] = []
+    const pgLayer = PostgresDedicatedPoolConnectionLayer({
+      connect: async () => ({
+        ...pgClient,
+        release: () => {
+          pgEvents.push("release")
+        }
+      })
+    })
+    const mysqlLayer = MySQLDedicatedPoolConnectionLayer({
+      getConnection: async () => ({
+        ...mysqlClient,
+        release: () => {
+          mysqlEvents.push("release")
+        }
+      })
+    })
+
+    await Effect.runPromise(Effect.provide(Effect.all([Database, Database]), pgLayer))
+    await Effect.runPromise(Effect.provide(Effect.all([Database, Database]), mysqlLayer))
+
+    expect(pgEvents).toEqual(["release"])
+    expect(mysqlEvents).toEqual(["release"])
   })
 
   it("retains release failures in the Effect cause", async () => {
@@ -155,5 +183,31 @@ describe("scoped database layers", () => {
 
     expect(Exit.isFailure(exit)).toBe(true)
     if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("release failed")
+  })
+
+  it("clears prepared resources before releasing an owned SQLite connection", async () => {
+    const events: string[] = []
+    const layer = SQLiteScopedLayer({
+      acquire: () => ({
+        prepare: () => ({
+          all: () => [],
+          run: () => ({ changes: 0 }),
+          finalize: () => events.push("finalize")
+        }),
+        exec: () => undefined
+      }),
+      release: () => {
+        events.push("release")
+      }
+    })
+
+    await Effect.runPromise(
+      Effect.provide(
+        Effect.flatMap(Database, (database) => database.driver.query("select ?", [1], "sqlite:owned")),
+        layer
+      )
+    )
+
+    expect(events).toEqual(["finalize", "release"])
   })
 })

@@ -46,7 +46,7 @@ export {
   makePostgresDriver,
   PostgresDriverRuntime,
   PostgresLayer,
-  PostgresPoolLayer,
+  PostgresDedicatedPoolConnectionLayer,
   PostgresScopedLayer,
   type PgClient,
   type PgClientResource,

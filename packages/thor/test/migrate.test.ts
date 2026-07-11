@@ -38,12 +38,12 @@ const metrics = pg.table(
     id: pg.integer("id").primaryKey(),
     source: pg.text("source").notNull(),
     value: pg.integer("value").notNull(),
-    doubled: pg.integer("doubled").generatedAlwaysAs("value * 2")
+    doubled: pg.integer("doubled").generatedAlwaysAs(unsafeSql("value * 2"))
   },
   {
     indexes: [{ name: "metrics_source_idx", columns: ["source"] }],
     uniqueConstraints: [{ name: "metrics_source_value_key", columns: ["source", "value"] }],
-    checks: [{ name: "metrics_value_positive", expression: "value >= 0" }],
+    checks: [{ name: "metrics_value_positive", expression: unsafeSql("value >= 0") }],
     foreignKeys: [
       {
         name: "metrics_source_fk",
@@ -176,6 +176,27 @@ describe("migration DDL (spec §13)", () => {
       expect(compileOperation(operation)).toBe(expected)
     }
   )
+
+  it("compiles routine DDL from unsafeSql syntax and rejects forged syntax fields (P1.5)", () => {
+    const routine: MigrationOperation = {
+      _tag: "CreateRoutine",
+      routine: "function",
+      name: "add_one",
+      args: [{ name: "n", type: unsafeSql("integer") }],
+      returns: unsafeSql("integer"),
+      language: unsafeSql("sql"),
+      body: unsafeSql("return n + 1;"),
+      ...safeOperation
+    }
+    expect(compileOperation(routine)).toContain("create function")
+    expect(compileOperation(routine, MySQLDialect)).toContain("create function")
+
+    // A plain-string cast in any syntax field must throw, not interpolate.
+    const forged = { ...routine, language: "sql; drop table users; --" as never }
+    expect(() => compileOperation(forged)).toThrow(TypeError)
+    const forgedArg = { ...routine, args: [{ name: "n", type: "int); drop" as never }] }
+    expect(() => compileOperation(forgedArg)).toThrow(TypeError)
+  })
 
   it("joins a migration plan in operation order", () => {
     const operations: ReadonlyArray<MigrationOperation> = [

@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest"
-import { pg } from "@gilvandovieira/thor"
+import { pg, unsafeSql } from "@gilvandovieira/thor"
 import type { Insert, Select, Update } from "@gilvandovieira/thor"
 import { TableMeta, isTable, tableMeta } from "@gilvandovieira/thor/schema"
 
@@ -15,7 +15,7 @@ const invoices = pg.table("invoices", {
   id: pg.uuid("id").primaryKey().defaultRandom(),
   subtotal: pg.integer("subtotal").notNull(),
   tax: pg.integer("tax").notNull().default(0),
-  total: pg.integer("total").generatedAlwaysAs("subtotal + tax")
+  total: pg.integer("total").generatedAlwaysAs(unsafeSql("subtotal + tax"))
 })
 
 describe("schema-derived types (spec §5.1)", () => {
@@ -70,6 +70,19 @@ describe("schema-derived types (spec §5.1)", () => {
 })
 
 describe("column and table metadata", () => {
+  it("rejects SQL syntax strings that bypass TypeScript without an unsafe boundary", () => {
+    expect(() => pg.integer("x").defaultSql("0); drop table users; --" as never)).toThrow("unsafeSql")
+    expect(() => pg.integer("x").generatedAlwaysAs("0); drop table users; --" as never)).toThrow("unsafeSql")
+    expect(() =>
+      pg.table(
+        "unsafe",
+        { id: pg.integer("id") },
+        {
+          checks: [{ expression: "1); drop table users; --" as never }]
+        }
+      )
+    ).toThrow("unsafeSql")
+  })
   it("records constraints, defaults, SQL names, and primary keys", () => {
     const meta = tableMeta(users)
 

@@ -73,6 +73,23 @@ export interface MigrationDialect {
    */
   readonly ensureJournal: (table: string) => string
   /**
+   * Optional in-place upgrade for journals created by older Thor versions
+   * (e.g. widening a `checksum` column that cannot hold `sha256:v1` digests).
+   * The migrator runs `probe`, and executes `upgrade` only when `needsUpgrade`
+   * returns `true` — journal history rows are never rewritten.
+   *
+   * @param table - Journal table name.
+   * @returns Probe statement, decision function, and upgrade DDL.
+   */
+  readonly upgradeJournal?: (table: string) => {
+    /** Parameterized statement inspecting the live journal schema. */
+    readonly probe: DialectStatement
+    /** @param rows - Probe result rows. @returns Whether the upgrade DDL must run. */
+    readonly needsUpgrade: (rows: ReadonlyArray<Record<string, unknown>>) => boolean
+    /** DDL bringing the journal schema up to date. */
+    readonly upgrade: string
+  }
+  /**
    * @param table - Journal table name.
    * @returns SQL selecting journal entries in application order.
    */

@@ -21,16 +21,10 @@ import {
 export const SQLiteDriverRuntime = defineRuntimeRequirements("sqlite/structural", [])
 
 /** Runtime contract for Node's built-in `node:sqlite` client. */
-export const NodeSQLiteDriverRuntime = defineRuntimeRequirements("sqlite/node", [
-  "runtime.node",
-  "runtime.sqlite.node"
-])
+export const NodeSQLiteDriverRuntime = defineRuntimeRequirements("sqlite/node", ["runtime.node", "runtime.sqlite.node"])
 
 /** Runtime contract for Bun's built-in `bun:sqlite` client. */
-export const BunSQLiteDriverRuntime = defineRuntimeRequirements("sqlite/bun", [
-  "runtime.bun",
-  "runtime.sqlite.bun"
-])
+export const BunSQLiteDriverRuntime = defineRuntimeRequirements("sqlite/bun", ["runtime.bun", "runtime.sqlite.bun"])
 
 /** Minimal affected-row result returned by synchronous SQLite statements. */
 export interface SQLiteRunResult {
@@ -52,6 +46,10 @@ export interface SQLiteStatement {
    * @returns The affected-row result.
    */
   readonly run: (...params: ReadonlyArray<SQLiteValue>) => SQLiteRunResult
+  /** @returns Nothing. Optional explicit finalizer exposed by compatible SQLite runtimes. */
+  readonly finalize?: () => void
+  /** @returns Nothing. Optional explicit resource-management hook exposed by compatible runtimes. */
+  readonly [Symbol.dispose]?: () => void
 }
 
 /** Structural subset shared by node:sqlite and better-sqlite3-style clients. */
@@ -140,13 +138,13 @@ const encodeValue = (value: unknown): SQLiteValue => {
  * @returns A Thor driver with statement caching.
  * @throws {RuntimeCapabilityError} When the runtime contract is not satisfied.
  */
-const makeDriver = (
-  client: SQLiteClient,
-  runtime: RuntimeRequirements,
-  profile: RuntimeCapabilityProfile
-): Driver => {
+const makeDriver = (client: SQLiteClient, runtime: RuntimeRequirements, profile: RuntimeCapabilityProfile): Driver => {
   assertRuntimeCapabilities(runtime, profile)
   const prepared = new Map<string, { readonly sql: string; readonly statement: SQLiteStatement }>()
+  const finalize = (statement: SQLiteStatement): void => {
+    if (statement.finalize) statement.finalize()
+    else statement[Symbol.dispose]?.()
+  }
   const statementFor = (sql: string, name?: string): SQLiteStatement => {
     if (!name) return client.prepare(sql)
     const cached = prepared.get(name)
@@ -175,6 +173,24 @@ const makeDriver = (
         try: (): CommandResult => {
           client.exec(sql)
           return { rowCount: 0 }
+        },
+        catch: mapSQLiteError
+      }),
+    releasePrepared: (name) =>
+      Effect.try({
+        try: () => {
+          const cached = prepared.get(name)
+          if (!cached) return
+          prepared.delete(name)
+          finalize(cached.statement)
+        },
+        catch: mapSQLiteError
+      }),
+    clearPrepared: () =>
+      Effect.try({
+        try: () => {
+          for (const { statement } of prepared.values()) finalize(statement)
+          prepared.clear()
         },
         catch: mapSQLiteError
       })
@@ -265,10 +281,8 @@ const sqliteLayer = (driver: Driver, options: SQLiteLayerOptions): Layer.Layer<D
  * @param options - Emulation and prepared-statement settings.
  * @returns An Effect layer providing a SQLite `Database`.
  */
-export const SQLiteLayer = (
-  client: SQLiteClient,
-  options: SQLiteLayerOptions = {}
-): Layer.Layer<Database> => sqliteLayer(makeSQLiteDriver(client), options)
+export const SQLiteLayer = (client: SQLiteClient, options: SQLiteLayerOptions = {}): Layer.Layer<Database> =>
+  sqliteLayer(makeSQLiteDriver(client), options)
 
 /**
  * Creates a SQLite database layer bound to Node's built-in client.
@@ -278,10 +292,7 @@ export const SQLiteLayer = (
  * @returns An Effect layer providing `Database`.
  * @throws {RuntimeCapabilityError} When Node SQLite is unavailable.
  */
-export const NodeSQLiteLayer = (
-  client: SQLiteClient,
-  options: SQLiteLayerOptions = {}
-): Layer.Layer<Database> =>
+export const NodeSQLiteLayer = (client: SQLiteClient, options: SQLiteLayerOptions = {}): Layer.Layer<Database> =>
   sqliteLayer(makeNodeSQLiteDriver(client, options.runtime ?? detectRuntimeCapabilities()), options)
 
 /**
@@ -292,10 +303,7 @@ export const NodeSQLiteLayer = (
  * @returns An Effect layer providing `Database`.
  * @throws {RuntimeCapabilityError} When Bun SQLite is unavailable.
  */
-export const BunSQLiteLayer = (
-  client: SQLiteClient,
-  options: SQLiteLayerOptions = {}
-): Layer.Layer<Database> =>
+export const BunSQLiteLayer = (client: SQLiteClient, options: SQLiteLayerOptions = {}): Layer.Layer<Database> =>
   sqliteLayer(makeBunSQLiteDriver(client, options.runtime ?? detectRuntimeCapabilities()), options)
 
 /**
@@ -307,10 +315,7 @@ export const BunSQLiteLayer = (
  * @returns A layer carrying the selected runtime requirements on its driver.
  * @throws {RuntimeCapabilityError} When no native SQLite adapter is available.
  */
-export const RuntimeSQLiteLayer = (
-  client: SQLiteClient,
-  options: SQLiteLayerOptions = {}
-): Layer.Layer<Database> =>
+export const RuntimeSQLiteLayer = (client: SQLiteClient, options: SQLiteLayerOptions = {}): Layer.Layer<Database> =>
   sqliteLayer(makeRuntimeSQLiteDriver(client, options.runtime ?? detectRuntimeCapabilities()), options)
 
 /**
@@ -322,15 +327,26 @@ export const RuntimeSQLiteLayer = (
 export const SQLiteScopedLayer = (
   resource: SQLiteClientResource,
   options: SQLiteLayerOptions = {}
-): Layer.Layer<Database, DriverError | ConstraintError> => Layer.scoped(
-  Database,
-  Effect.acquireRelease(
-    Effect.try({ try: resource.acquire, catch: mapSQLiteError }),
-    (client) => Effect.try({ try: () => resource.release(client), catch: mapSQLiteError }).pipe(Effect.orDie)
-  ).pipe(Effect.map((client): DatabaseService => ({
-    dialect: SQLiteDialect,
-    driver: makeSQLiteDriver(client),
-    allowEmulation: options.allowEmulation ?? false,
-    preparedStatements: options.preparedStatements ?? true
-  })))
-)
+): Layer.Layer<Database, DriverError | ConstraintError> =>
+  Layer.scoped(
+    Database,
+    Effect.acquireRelease(
+      Effect.try({ try: resource.acquire, catch: mapSQLiteError }).pipe(
+        Effect.map((client) => ({ client, driver: makeSQLiteDriver(client) }))
+      ),
+      ({ client, driver }) =>
+        (driver.clearPrepared?.() ?? Effect.void).pipe(
+          Effect.orDie,
+          Effect.ensuring(Effect.try({ try: () => resource.release(client), catch: mapSQLiteError }).pipe(Effect.orDie))
+        )
+    ).pipe(
+      Effect.map(
+        ({ driver }): DatabaseService => ({
+          dialect: SQLiteDialect,
+          driver,
+          allowEmulation: options.allowEmulation ?? false,
+          preparedStatements: options.preparedStatements ?? true
+        })
+      )
+    )
+  )

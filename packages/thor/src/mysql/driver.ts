@@ -37,6 +37,8 @@ export interface MySQLClient {
    * @returns Result and field metadata.
    */
   readonly execute: (sql: string, params?: ReadonlyArray<unknown>) => Promise<MySQLQueryResult>
+  /** @param sql - SQL text used as mysql2's cache key. @returns Nothing. */
+  readonly unprepare?: (sql: string) => void
 }
 
 /** Acquisition/release hooks for an owned MySQL connection. */
@@ -64,10 +66,7 @@ export interface MySQLPool {
  * @param code - Symbolic MySQL error code.
  * @returns Normalized constraint kind.
  */
-const constraintKind = (
-  errno: number | undefined,
-  code: string | undefined
-): ConstraintError["kind"] | undefined => {
+const constraintKind = (errno: number | undefined, code: string | undefined): ConstraintError["kind"] | undefined => {
   if (errno === 1062 || code === "ER_DUP_ENTRY") return "unique"
   if (errno === 1451 || errno === 1452 || code === "ER_NO_REFERENCED_ROW_2" || code === "ER_ROW_IS_REFERENCED_2") {
     return "foreignKey"
@@ -82,12 +81,14 @@ const constraintKind = (
  * @returns A normalized constraint or driver error.
  */
 export const mapMySQLDriverError = (cause: unknown): DriverError | ConstraintError => {
-  const error = cause as {
-    readonly errno?: number
-    readonly code?: string
-    readonly sqlState?: string
-    readonly message?: string
-  } | undefined
+  const error = cause as
+    | {
+        readonly errno?: number
+        readonly code?: string
+        readonly sqlState?: string
+        readonly message?: string
+      }
+    | undefined
   const kind = constraintKind(error?.errno, error?.code)
   if (kind) {
     return new ConstraintError({
@@ -105,12 +106,18 @@ export const mapMySQLDriverError = (cause: unknown): DriverError | ConstraintErr
  * @returns mysql2-compatible scalar or serialized JSON.
  */
 const encodeValue = (value: unknown): unknown => {
+  // mysql2 `execute()` rejects `undefined` binds while `query()` escapes them
+  // as NULL; normalize so both call paths behave identically.
+  if (value === undefined) return null
   if (typeof value === "boolean") return value ? 1 : 0
   if (value !== null && typeof value === "object" && !(value instanceof Date) && !(value instanceof Uint8Array)) {
     return JSON.stringify(value)
   }
   return value
 }
+
+/** Per-connection prepared-name → SQL registry (survives driver re-creation on pool leases). */
+const preparedByClient = new WeakMap<object, Map<string, string>>()
 
 /**
  * @param result - First mysql2 result tuple element.
@@ -141,25 +148,58 @@ const rowCountOf = (result: unknown): number => {
  */
 export const makeMySQLDriver = (client: MySQLClient): Driver => {
   assertRuntimeCapabilities(MySQLDriverRuntime)
-  const call = (sql: string, params: ReadonlyArray<unknown>, prepared: boolean) =>
-    prepared || params.length > 0 ? client.execute(sql, params.map(encodeValue)) : client.query(sql)
+  let registry = preparedByClient.get(client)
+  if (!registry) {
+    registry = new Map<string, string>()
+    preparedByClient.set(client, registry)
+  }
+  const prepared = registry
+  const call = (sql: string, params: ReadonlyArray<unknown>, name?: string) => {
+    const priorSql = name ? prepared.get(name) : undefined
+    const usePrepared = name !== undefined && (priorSql === undefined || priorSql === sql)
+    if (name && priorSql === undefined) prepared.set(name, sql)
+    return usePrepared
+      ? client.execute(sql, params.map(encodeValue))
+      : params.length > 0
+        ? client.query(sql, params.map(encodeValue))
+        : client.query(sql)
+  }
   return {
     runtime: MySQLDriverRuntime,
+    preparedScope: client,
     query: (sql, params, name) =>
       Effect.tryPromise({
-        try: async () => rowsOf((await call(sql, params, name !== undefined))[0]),
+        try: async () => rowsOf((await call(sql, params, name))[0]),
         catch: mapMySQLDriverError
       }),
     execute: (sql, params, name) =>
       Effect.tryPromise({
         try: async (): Promise<CommandResult> => ({
-          rowCount: rowCountOf((await call(sql, params, name !== undefined))[0])
+          rowCount: rowCountOf((await call(sql, params, name))[0])
         }),
         catch: mapMySQLDriverError
       }),
     executeScript: (sql) =>
       Effect.tryPromise({
         try: async (): Promise<CommandResult> => ({ rowCount: rowCountOf((await client.query(sql))[0]) }),
+        catch: mapMySQLDriverError
+      }),
+    releasePrepared: (name) =>
+      Effect.try({
+        try: () => {
+          const sql = prepared.get(name)
+          if (!sql) return
+          prepared.delete(name)
+          client.unprepare?.(sql)
+        },
+        catch: mapMySQLDriverError
+      }),
+    clearPrepared: () =>
+      Effect.try({
+        try: () => {
+          if (client.unprepare) for (const sql of prepared.values()) client.unprepare(sql)
+          prepared.clear()
+        },
         catch: mapMySQLDriverError
       })
   }
@@ -190,32 +230,51 @@ export const MySQLLayer = (
 export const MySQLScopedLayer = (
   resource: MySQLClientResource,
   options: { readonly allowEmulation?: boolean; readonly preparedStatements?: boolean } = {}
-): Layer.Layer<Database, DriverError | ConstraintError> => Layer.scoped(
-  Database,
-  Effect.acquireRelease(
-    Effect.tryPromise({ try: resource.acquire, catch: mapMySQLDriverError }),
-    (client) => Effect.tryPromise({
-      try: async () => resource.release(client),
-      catch: mapMySQLDriverError
-    }).pipe(Effect.orDie)
-  ).pipe(Effect.map((client): DatabaseService => ({
-    dialect: MySQLDialect,
-    driver: makeMySQLDriver(client),
-    allowEmulation: options.allowEmulation ?? false,
-    preparedStatements: options.preparedStatements ?? true
-  })))
-)
+): Layer.Layer<Database, DriverError | ConstraintError> =>
+  Layer.scoped(
+    Database,
+    Effect.acquireRelease(
+      Effect.tryPromise({ try: resource.acquire, catch: mapMySQLDriverError }).pipe(
+        Effect.map((client) => ({ client, driver: makeMySQLDriver(client) }))
+      ),
+      ({ client, driver }) =>
+        (driver.clearPrepared?.() ?? Effect.void).pipe(
+          Effect.orDie,
+          Effect.ensuring(
+            Effect.tryPromise({
+              try: async () => resource.release(client),
+              catch: mapMySQLDriverError
+            }).pipe(Effect.orDie)
+          )
+        )
+    ).pipe(
+      Effect.map(
+        ({ driver }): DatabaseService => ({
+          dialect: MySQLDialect,
+          driver,
+          allowEmulation: options.allowEmulation ?? false,
+          preparedStatements: options.preparedStatements ?? true
+        })
+      )
+    )
+  )
 
 /**
- * Acquires one dedicated mysql2 pool connection for the layer lifetime.
+ * Acquires one dedicated mysql2 pool connection for the layer lifetime. This is
+ * intentionally not an application-wide per-operation pool: all queries and
+ * nested transactions provided by the layer share this one physical connection.
  * @param pool - mysql2-compatible pool.
  * @param options - Emulation and prepared-statement settings.
  * @returns A scoped Database layer.
  */
-export const MySQLPoolLayer = (
+export const MySQLDedicatedPoolConnectionLayer = (
   pool: MySQLPool,
   options: { readonly allowEmulation?: boolean; readonly preparedStatements?: boolean } = {}
-) => MySQLScopedLayer({
-  acquire: () => pool.getConnection(),
-  release: (client) => (client as MySQLPoolConnection).release()
-}, options)
+) =>
+  MySQLScopedLayer(
+    {
+      acquire: () => pool.getConnection(),
+      release: (client) => (client as MySQLPoolConnection).release()
+    },
+    options
+  )

@@ -185,7 +185,10 @@ export class BoundedLruCache<K extends object, V> implements CacheLayer<K, V> {
    * @param maxSize - Maximum retained entries; must be a positive integer.
    * @throws {RangeError} When `maxSize` is not a positive integer.
    */
-  constructor(readonly name: string, private readonly maxSize: number) {
+  constructor(
+    readonly name: string,
+    private readonly maxSize: number
+  ) {
     if (!Number.isInteger(maxSize) || maxSize <= 0) {
       throw new RangeError(`Query cache maxSize must be a positive integer, received ${maxSize}`)
     }
@@ -227,7 +230,14 @@ export class BoundedLruCache<K extends object, V> implements CacheLayer<K, V> {
 
   /** @returns A snapshot of this layer's counters. */
   stats(): CacheLayerStats {
-    return { name: this.name, hits: this.hits, misses: this.misses, evictions: this.evictions, size: this.store.size, maxSize: this.maxSize }
+    return {
+      name: this.name,
+      hits: this.hits,
+      misses: this.misses,
+      evictions: this.evictions,
+      size: this.store.size,
+      maxSize: this.maxSize
+    }
   }
 
   /**
@@ -312,10 +322,13 @@ export class QueryCaches {
    * same LRU bound as the object-keyed layers (the statement itself lives in the
    * driver/connection; this only observes reuse).
    */
-  private preparedNames = new Set<string>()
   private preparedHits = 0
   private preparedMisses = 0
   private preparedEvictions = 0
+  private preparedSize = 0
+
+  /** Configured bound for each physical connection's prepared registry. */
+  readonly preparedMaxSize: number | undefined
 
   /**
    * @param options - Cache options; omit `maxSize` for unbounded (default) layers.
@@ -325,36 +338,22 @@ export class QueryCaches {
     this.compile = makeLayer("compile", options)
     this.decoder = makeLayer("decoder", options)
     this.capability = makeLayer("capability", options)
+    this.preparedMaxSize = options.maxSize
   }
 
   /**
-   * Record that a compiled shape is eligible for prepared-statement reuse and
-   * report whether its identity was already seen (a prepared "hit"). Honors the
-   * registry's `maxSize` bound, evicting the least-recently-registered key.
+   * Record the result of one connection-scoped prepared-registry lookup.
    *
-   * @param key - Value-independent compiled cache key.
-   * @returns `true` when this identity was already registered.
+   * @param outcome - Whether the physical connection registry hit or missed.
+   * @param size - Current physical connection registry size.
+   * @param evicted - Whether an actual prepared resource was evicted.
+   * @returns Nothing.
    */
-  notePrepared(key: string): boolean {
-    if (this.preparedNames.has(key)) {
-      this.preparedHits++
-      // Refresh recency so a reused shape is not the next eviction victim.
-      this.preparedNames.delete(key)
-      this.preparedNames.add(key)
-      return true
-    }
-    this.preparedMisses++
-    this.preparedNames.add(key)
-    const { maxSize } = this.options
-    if (maxSize !== undefined) {
-      while (this.preparedNames.size > maxSize) {
-        const oldest = this.preparedNames.values().next().value as string | undefined
-        if (oldest === undefined) break
-        this.preparedNames.delete(oldest)
-        this.preparedEvictions++
-      }
-    }
-    return false
+  notePrepared(outcome: "hit" | "miss", size: number, evicted: boolean): void {
+    if (outcome === "hit") this.preparedHits++
+    else this.preparedMisses++
+    if (evicted) this.preparedEvictions++
+    this.preparedSize = size
   }
 
   /** @returns A snapshot of every layer's counters (spec §9, §19). */
@@ -367,7 +366,7 @@ export class QueryCaches {
         hits: this.preparedHits,
         misses: this.preparedMisses,
         evictions: this.preparedEvictions,
-        size: this.preparedNames.size,
+        size: this.preparedSize,
         maxSize: this.options.maxSize
       },
       this.decoder.stats(),
@@ -385,10 +384,10 @@ export class QueryCaches {
     this.compile.reset()
     this.decoder.reset()
     this.capability.reset()
-    this.preparedNames = new Set<string>()
     this.preparedHits = 0
     this.preparedMisses = 0
     this.preparedEvictions = 0
+    this.preparedSize = 0
   }
 }
 

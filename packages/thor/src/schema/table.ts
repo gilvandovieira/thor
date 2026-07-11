@@ -10,6 +10,7 @@
  */
 import type { AnyColumn, BoundColumn, Column } from "./column.js"
 import { internIdentifier } from "../ir/identifiers.js"
+import type { UnsafeSqlNode } from "../ir/query-ir.js"
 
 /** Non-enumerable key carrying a table's runtime metadata. */
 export const TableMeta: unique symbol = Symbol.for("thor/table-meta")
@@ -30,7 +31,7 @@ export interface TableUniqueConstraint {
 /** Table-level trusted check expression. */
 export interface TableCheckConstraint {
   readonly name?: string
-  readonly expression: string
+  readonly expression: UnsafeSqlNode
 }
 
 /** Table-level foreign key metadata. */
@@ -44,8 +45,15 @@ export interface TableForeignKey {
 
 /** Optional lossless DDL metadata accepted by `table()`. Column names are application keys. */
 export interface TableOptions<Cols extends Columns> {
-  readonly indexes?: ReadonlyArray<{ readonly name: string; readonly columns: ReadonlyArray<Extract<keyof Cols, string>>; readonly unique?: boolean }>
-  readonly uniqueConstraints?: ReadonlyArray<{ readonly name?: string; readonly columns: ReadonlyArray<Extract<keyof Cols, string>> }>
+  readonly indexes?: ReadonlyArray<{
+    readonly name: string
+    readonly columns: ReadonlyArray<Extract<keyof Cols, string>>
+    readonly unique?: boolean
+  }>
+  readonly uniqueConstraints?: ReadonlyArray<{
+    readonly name?: string
+    readonly columns: ReadonlyArray<Extract<keyof Cols, string>>
+  }>
   readonly checks?: ReadonlyArray<TableCheckConstraint>
   readonly foreignKeys?: ReadonlyArray<{
     readonly name?: string
@@ -244,7 +252,13 @@ export const defineTable = <Name extends string, Cols extends Columns>(
       ...(constraint.name ? { name: internIdentifier(constraint.name) } : {}),
       columns: constraint.columns.map((key) => columns[key]!.def.name)
     })),
-    checks: options.checks ?? [],
+    checks: (options.checks ?? []).map((check) => {
+      if (check.expression?._tag !== "UnsafeSql") throw new TypeError("Table check expressions require unsafeSql(...)")
+      return {
+        ...(check.name ? { name: internIdentifier(check.name) } : {}),
+        expression: check.expression
+      }
+    }),
     get foreignKeys() {
       return collectForeignKeys()
     }

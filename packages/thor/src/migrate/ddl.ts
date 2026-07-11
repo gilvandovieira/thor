@@ -8,7 +8,14 @@ import type { AnyColumn } from "../schema/column.js"
 import { type AnyTable, tableMeta } from "../schema/table.js"
 import type { Dialect } from "../dialect.js"
 import { PostgresDialect } from "../postgres/dialect.js"
-import type { ColumnDefault, ColumnSpec, CreateTableOp, DefaultLiteral, MigrationOperation, MigrationPlan } from "./migration-ir.js"
+import type {
+  ColumnDefault,
+  ColumnSpec,
+  CreateTableOp,
+  DefaultLiteral,
+  MigrationOperation,
+  MigrationPlan
+} from "./migration-ir.js"
 
 /**
  * Converts runtime column-default metadata to dialect-neutral SQL.
@@ -28,8 +35,12 @@ const renderDefault = (column: AnyColumn): ColumnDefault | undefined => {
       return column.def.generated ? undefined : { kind: "sql", sql: d.sql }
     case "value":
       if (
-        d.value !== null && typeof d.value !== "string" && typeof d.value !== "number" &&
-        typeof d.value !== "bigint" && typeof d.value !== "boolean" && !(d.value instanceof Date)
+        d.value !== null &&
+        typeof d.value !== "string" &&
+        typeof d.value !== "number" &&
+        typeof d.value !== "bigint" &&
+        typeof d.value !== "boolean" &&
+        !(d.value instanceof Date)
       ) {
         throw new TypeError(`Column "${column.def.table}.${column.def.name}" has a non-round-trippable default value`)
       }
@@ -67,7 +78,7 @@ export const tableToCreateOp = (table: AnyTable): CreateTableOp => {
     columns: Object.values(meta.columns).map(columnSpecOf),
     primaryKey: meta.primaryKey,
     uniqueConstraints: meta.uniqueConstraints.map((constraint) => ({ ...constraint })),
-    checks: meta.checks.map((check) => ({ ...check })),
+    checks: meta.checks.map((check) => ({ ...check, expression: check.expression.sql })),
     foreignKeys: meta.foreignKeys.map((foreignKey) => ({ ...foreignKey, references: { ...foreignKey.references } })),
     indexes: meta.indexes.map((index) => ({ ...index })),
     destructive: false,

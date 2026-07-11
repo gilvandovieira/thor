@@ -4,6 +4,7 @@ import { Database, type Driver, DriverError, type RawRow } from "@gilvandovieira
 import { PostgresDialect } from "@gilvandovieira/thor/postgres"
 import {
   type AutoMigrationPolicy,
+  checksum,
   defineMigration,
   makeMigrator,
   sql,
@@ -90,7 +91,29 @@ const harness = () => {
       )
     )
 
-  return { scripts, journal, runUp }
+  const runDown = (
+    migrations: NonNullable<Parameters<typeof makeMigrator>[0]>["migrations"],
+    policy: AutoMigrationPolicy,
+    reviewed = false
+  ) =>
+    Effect.runPromiseExit(
+      Effect.provide(
+        Effect.flatMap(makeMigrator({ migrations, policy, reviewed }), (m) => m.down()),
+        layer
+      )
+    )
+
+  return { scripts, journal, runUp, runDown }
+}
+
+const seedJournal = (journal: JournalEntry[], migration: Parameters<typeof checksum>[0]) => {
+  journal.push({
+    id: migration.id,
+    name: migration.name,
+    checksum: checksum(migration),
+    appliedAt: new Date(0),
+    executionTimeMs: 0
+  })
 }
 
 const destructive = defineMigration({
@@ -144,6 +167,52 @@ describe("migration policy governs manual execution (P0.4)", () => {
       expect(Exit.isFailure(exit)).toBe(true)
       expect(h.scripts).toEqual([])
     }
+  })
+
+  it("blocks an UNMARKED (unchecked) manual migration under safe-only (Finding 2)", async () => {
+    const unmarked = defineMigration({ id: "0001_raw", name: "raw", up: sql`drop table users` })
+    const h = harness()
+    const exit = await h.runUp([unmarked], "safe-only")
+    expect(Exit.isFailure(exit)).toBe(true)
+    expect(h.scripts).toEqual([]) // opaque SQL is not silently treated as safe
+  })
+
+  it("guards down() by its own downSafety, not the forward safety (Finding 3)", async () => {
+    // additive up, destructive down (e.g. add-column forward, drop-column rollback).
+    const migration = defineMigration({
+      id: "0001_col",
+      name: "add_col",
+      safety: "additive",
+      downSafety: "destructive",
+      up: sql`alter table users add column x int`,
+      down: sql`alter table users drop column x`
+    })
+
+    // Forward is additive → up() succeeds under safe-only.
+    const upHarness = harness()
+    expect(Exit.isSuccess(await upHarness.runUp([migration], "safe-only"))).toBe(true)
+
+    // Rollback is destructive → down() is blocked under safe-only.
+    const downHarness = harness()
+    seedJournal(downHarness.journal, migration)
+    const exit = await downHarness.runDown([migration], "safe-only")
+    expect(Exit.isFailure(exit)).toBe(true)
+    expect(downHarness.scripts).toEqual([]) // destructive rollback never reached the driver
+
+    // ...but allowed under a reviewed destructive policy.
+    const reviewedHarness = harness()
+    seedJournal(reviewedHarness.journal, migration)
+    expect(Exit.isSuccess(await reviewedHarness.runDown([migration], "allow-reviewed-destructive", true))).toBe(true)
+    expect(reviewedHarness.scripts).toEqual(["alter table users drop column x"])
+  })
+
+  it("preflights the whole pending set so nothing applies if a later migration is blocked (Finding 12)", async () => {
+    const h = harness()
+    // additive first, destructive second — the batch must be rejected wholesale.
+    const exit = await h.runUp([additive, { ...destructive, id: "0002_drop" }], "safe-only")
+    expect(Exit.isFailure(exit)).toBe(true)
+    expect(h.scripts).toEqual([]) // the additive migration was NOT applied
+    expect(h.journal).toEqual([])
   })
 
   it("blocks a contract-phase manual migration under expand-only", async () => {

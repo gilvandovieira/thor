@@ -1,16 +1,12 @@
 import { describe, expect, it } from "vitest"
 import { Effect, Layer, Schema } from "effect"
 import {
-  BoundedLruCache,
   Database,
   type DatabaseService,
   MySQLDialect,
   PostgresDialect,
-  QueryCaches,
-  WeakCacheLayer,
   db,
   eq,
-  makeQueryCaches,
   normalizeMode,
   param,
   pg,
@@ -18,6 +14,7 @@ import {
   withMode
 } from "@gilvandovieira/thor"
 import { FakeDatabaseLayer, FakeDriver } from "@gilvandovieira/thor/testing"
+import { BoundedLruCache, QueryCaches, WeakCacheLayer, makeQueryCaches } from "../src/execution/cache.js"
 
 const users = pg.table("users", {
   id: pg.uuid("id").primaryKey(),
@@ -55,7 +52,14 @@ describe("Epic L — cache layers (spec §9.1)", () => {
     expect(layer.getOrCompute(a, () => (computed++, 2))).toBe(1)
     expect(computed).toBe(1)
     const stats = layer.stats()
-    expect(stats).toMatchObject({ name: "shape", hits: 1, misses: 1, evictions: 0, size: undefined, maxSize: undefined })
+    expect(stats).toMatchObject({
+      name: "shape",
+      hits: 1,
+      misses: 1,
+      evictions: 0,
+      size: undefined,
+      maxSize: undefined
+    })
   })
 
   it("BoundedLruCache evicts least-recently-used entries and counts evictions", () => {
@@ -96,10 +100,14 @@ describe("Epic L — withQueryCache wiring (spec §9.3)", () => {
     const caches = makeQueryCaches()
     const driver = new FakeDriver().enqueue({ rows: [{ id: "u1" }] }, { rows: [{ id: "u2" }] })
     // One builder instance → one stable IR identity → cache hits on the 2nd run.
-    const query = db.select({ id: users.id }).from(users).where(eq(users.email, param("email", Schema.String)))
+    const query = db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.email, param("email", Schema.String)))
+    const layer = layerWith(caches, driver)
 
-    await run(query.all({ email: "a@example.com" }), layerWith(caches, driver))
-    await run(query.all({ email: "b@example.com" }), layerWith(caches, driver))
+    await run(query.all({ email: "a@example.com" }), layer)
+    await run(query.all({ email: "b@example.com" }), layer)
 
     // Second run is a hit on every shape-keyed layer.
     expect(statOf(caches, "compile")).toMatchObject({ hits: 1, misses: 1 })
@@ -118,6 +126,31 @@ describe("Epic L — withQueryCache wiring (spec §9.3)", () => {
     const compile = statOf(caches, "compile")
     expect(compile.size).toBe(1)
     expect(compile.evictions).toBeGreaterThanOrEqual(1)
+  })
+
+  it("bounds actual connection-scoped prepared resources and releases LRU evictions", async () => {
+    const caches = makeQueryCaches({ maxSize: 2 })
+    const driver = new FakeDriver().enqueue({ rows: [] }, { rows: [] }, { rows: [] })
+    const first = db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.email, param("email", Schema.String)))
+    const second = db
+      .select({ email: users.email })
+      .from(users)
+      .where(eq(users.id, param("id", Schema.String)))
+    const third = db
+      .select({ id: users.id, email: users.email })
+      .from(users)
+      .where(eq(users.email, param("otherEmail", Schema.String)))
+    const layer = layerWith(caches, driver)
+
+    await run(first.all({ email: "a@example.com" }), layer)
+    await run(second.all({ id: "u1" }), layer)
+    await run(third.all({ otherEmail: "b@example.com" }), layer)
+
+    expect(driver.releasedPreparedNames).toEqual([first.toSql().cacheKey])
+    expect(statOf(caches, "prepared")).toMatchObject({ misses: 3, evictions: 1, size: 2, maxSize: 2 })
   })
 
   it("default (no withQueryCache) still executes correctly", async () => {
@@ -199,7 +232,10 @@ describe("Epic L — precompilation modes (spec §9.4)", () => {
       .all()
       .compileUnsafeHot()
     const driver = new FakeDriver().enqueue({ rows: [{ at: ISO }] })
-    const [row] = await run(handle.execute({ at: new Date(ISO) }), FakeDatabaseLayer(driver, { preparedStatements: false }))
+    const [row] = await run(
+      handle.execute({ at: new Date(ISO) }),
+      FakeDatabaseLayer(driver, { preparedStatements: false })
+    )
     // unsafe-hot skips schema decode: the raw ISO string passes through.
     expect(row!.at).toBe(ISO)
     expect(driver.preparedNames[0]).toBe(handle.cacheKey)

@@ -10,9 +10,14 @@ import {
 } from "@gilvandovieira/thor/mysql"
 
 class FakeMySQLClient implements MySQLClient {
-  readonly calls: Array<{ readonly method: "query" | "execute"; readonly sql: string; readonly params?: ReadonlyArray<unknown> }> = []
+  readonly calls: Array<{
+    readonly method: "query" | "execute"
+    readonly sql: string
+    readonly params?: ReadonlyArray<unknown>
+  }> = []
   private readonly results: MySQLQueryResult[] = []
   private readonly errors: unknown[] = []
+  readonly unprepared: string[] = []
 
   enqueue(...results: ReadonlyArray<MySQLQueryResult>): this {
     this.results.push(...results)
@@ -32,6 +37,10 @@ class FakeMySQLClient implements MySQLClient {
   execute = async (sql: string, params?: ReadonlyArray<unknown>): Promise<MySQLQueryResult> => {
     this.calls.push(params ? { method: "execute", sql, params } : { method: "execute", sql })
     return this.next()
+  }
+
+  unprepare = (sql: string): void => {
+    this.unprepared.push(sql)
   }
 
   private next(): MySQLQueryResult {
@@ -58,6 +67,42 @@ describe("MySQL driver adapter", () => {
     ])
   })
 
+  it("uses mysql2 query execution for parameterized statements when preparation is disabled", async () => {
+    const client = new FakeMySQLClient().enqueue([[{ id: "u1" }], []])
+    const driver = makeMySQLDriver(client)
+
+    const rows = await Effect.runPromise(driver.query("select * from `users` where `id` = ?", ["u1"]))
+
+    expect(rows).toStrictEqual([{ id: "u1" }])
+    expect(client.calls).toStrictEqual([
+      { method: "query", sql: "select * from `users` where `id` = ?", params: ["u1"] }
+    ])
+  })
+
+  it("reuses mysql2 execute only when a prepared identity is requested", async () => {
+    const client = new FakeMySQLClient().enqueue([[{ id: "u1" }], []], [[{ id: "u2" }], []])
+    const driver = makeMySQLDriver(client)
+
+    await Effect.runPromise(driver.query("select * from `users` where `id` = ?", ["u1"], "mysql:key"))
+    await Effect.runPromise(driver.query("select * from `users` where `id` = ?", ["u2"], "mysql:key"))
+
+    expect(client.calls.map((call) => call.method)).toStrictEqual(["execute", "execute"])
+  })
+
+  it("releases and clears mysql2 connection-scoped prepared resources", async () => {
+    const client = new FakeMySQLClient().enqueue([[{ id: "u1" }], []], [[{ id: "u2" }], []])
+    const driver = makeMySQLDriver(client)
+    const firstSql = "select * from `users` where `id` = ?"
+    const secondSql = "select * from `users` where `email` = ?"
+
+    await Effect.runPromise(driver.query(firstSql, ["u1"], "mysql:first"))
+    await Effect.runPromise(driver.query(secondSql, ["a@example.com"], "mysql:second"))
+    await Effect.runPromise(driver.releasePrepared!("mysql:first"))
+    await Effect.runPromise(driver.clearPrepared!())
+
+    expect(client.unprepared).toStrictEqual([firstSql, secondSql])
+  })
+
   it("normalizes values and maps affectedRows", async () => {
     const client = new FakeMySQLClient().enqueue([{ affectedRows: 2 }, []])
     const driver = makeMySQLDriver(client)
@@ -70,15 +115,26 @@ describe("MySQL driver adapter", () => {
     expect(client.calls[0]?.params).toStrictEqual([1, '{"role":"admin"}'])
   })
 
+  it("normalizes undefined binds to null so execute() and query() agree (P1.3)", async () => {
+    const client = new FakeMySQLClient().enqueue([{ affectedRows: 1 }, []], [{ affectedRows: 1 }, []])
+    const driver = makeMySQLDriver(client)
+
+    // Prepared (execute) path
+    await Effect.runPromise(driver.execute("update `u` set `x` = ?", [undefined], "mysql:key"))
+    // Unprepared (query) path
+    await Effect.runPromise(driver.execute("update `u` set `x` = ?", [undefined]))
+
+    expect(client.calls[0]?.params).toStrictEqual([null])
+    expect(client.calls[1]?.params).toStrictEqual([null])
+  })
+
   it("runs parameter-free scripts through query()", async () => {
     const client = new FakeMySQLClient().enqueue([{ affectedRows: 0 }, []])
     const driver = makeMySQLDriver(client)
 
     await Effect.runPromise(driver.executeScript!("create table `users` (`id` int);"))
 
-    expect(client.calls).toStrictEqual([
-      { method: "query", sql: "create table `users` (`id` int);" }
-    ])
+    expect(client.calls).toStrictEqual([{ method: "query", sql: "create table `users` (`id` int);" }])
   })
 
   it("maps mysql2 constraint errors to Thor errors", async () => {

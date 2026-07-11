@@ -83,7 +83,7 @@ describe.skipIf(!DATABASE_URL)("live migrator e2e (spec §13)", () => {
   it("up() applies all pending migrations, runs SQL + Effect steps, and journals them", async () => {
     const entries = await run(mig((m) => m.up()))
     expect(entries.map((e) => e.id)).toEqual(["0001_create_users", "0002_add_created_at", "0003_backfill_names"])
-    for (const e of entries) expect(e.checksum).toMatch(/^[0-9a-f]{8}$/)
+    for (const e of entries) expect(e.checksum).toMatch(/^sha256:v1:[0-9a-f]{64}$/)
 
     // m2 added created_at; its presence proves the SQL step ran.
     const cols = await q(
@@ -124,7 +124,12 @@ describe.skipIf(!DATABASE_URL)("live migrator e2e (spec §13)", () => {
       up: sql`create table ok (id int); create table ok (id int);` // duplicate -> fails
     })
     const badApp = Layer.provideMerge(MigratorLive({ migrations: [bad] }), PostgresLayer(client))
-    const exit = await Effect.runPromiseExit(Effect.provide(mig((m) => m.up()), badApp))
+    const exit = await Effect.runPromiseExit(
+      Effect.provide(
+        mig((m) => m.up()),
+        badApp
+      )
+    )
     expect(Exit.isFailure(exit)).toBe(true)
 
     // Neither the table nor a journal row survived the rollback.
@@ -176,7 +181,11 @@ describe.skipIf(!DATABASE_URL)("live migrator e2e (spec §13)", () => {
       "create table users (id uuid primary key default gen_random_uuid(), email text not null unique, name text);"
     )
     const inserted = await run(
-      db.insert(users).values({ email: "lucas@example.com", name: "Lucas" }).returning({ id: users.id, email: users.email }).one()
+      db
+        .insert(users)
+        .values({ email: "lucas@example.com", name: "Lucas" })
+        .returning({ id: users.id, email: users.email })
+        .one()
     )
     expect(inserted.email).toBe("lucas@example.com")
 

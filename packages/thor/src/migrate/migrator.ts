@@ -22,7 +22,15 @@ import { runTransaction } from "../execution/transaction.js"
 import { observeLifecycle } from "../observability/index.js"
 import { CapabilityError, IrreversibleMigrationError, MigrationError, TransactionError } from "../errors/index.js"
 import type { MigrationOperation, MigrationPlan } from "./migration-ir.js"
-import { type MigrationDefinition, type MigrationStep, checksum, hashText, isSqlStatement } from "./define-migration.js"
+import {
+  type MigrationDefinition,
+  type MigrationStep,
+  checksum,
+  checksumText,
+  hashText,
+  isSqlStatement,
+  migrationChecksumStatus
+} from "./define-migration.js"
 import { type AutoMigrationPolicy, type JournalEntry, guardManualMigration, guardOperations } from "./journal.js"
 import { compilePlan, diffSchema, tableToCreateOp } from "./ddl.js"
 
@@ -117,7 +125,12 @@ export interface MigratorService {
    */
   readonly apply: (plan: MigrationPlan) => Effect.Effect<JournalEntry, MigrationError>
   /**
-   * @returns Operations needed to reconcile the live database with the configured schema.
+   * Legacy create-missing-table discovery: returns `CreateTable` operations for
+   * configured tables absent from the live database. It does **not** compare
+   * columns, nullability, keys, or indexes — use `Introspector.drift` for
+   * structural drift (spec §15.7).
+   *
+   * @returns `CreateTable` operations for expected tables missing live.
    */
   readonly drift: () => Effect.Effect<ReadonlyArray<MigrationOperation>, MigrationError>
 }
@@ -174,7 +187,19 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
       )
     }
 
-    const ensureJournal = exec(dialect.ensureJournal(JOURNAL))
+    // Create the journal if absent, then apply any dialect-declared in-place
+    // schema upgrade (e.g. widening a legacy checksum column) before it is
+    // read or written. History rows are never rewritten.
+    const upgradeJournal = dialect.upgradeJournal?.(JOURNAL)
+    const ensureJournal = exec(dialect.ensureJournal(JOURNAL)).pipe(
+      Effect.zipRight(
+        upgradeJournal
+          ? Effect.flatMap(queryRows(upgradeJournal.probe.sql, upgradeJournal.probe.params ?? []), (rows) =>
+              upgradeJournal.needsUpgrade(rows) ? exec(upgradeJournal.upgrade).pipe(Effect.asVoid) : Effect.void
+            )
+          : Effect.void
+      )
+    )
 
     const readApplied = queryRows(dialect.readJournal(JOURNAL)).pipe(
       Effect.map(
@@ -296,7 +321,16 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
             )
           }
           const expectedChecksum = checksum(def)
-          if (expectedChecksum !== entry.checksum) {
+          const checksumStatus = migrationChecksumStatus(def, entry.checksum)
+          if (checksumStatus === "unknown-algorithm") {
+            return yield* Effect.fail(
+              new MigrationError({
+                message: `unknown checksum algorithm for "${entry.id}": ${entry.checksum}`,
+                migrationId: entry.id
+              })
+            )
+          }
+          if (checksumStatus === "mismatch") {
             return yield* Effect.fail(
               new MigrationError({
                 message: `checksum mismatch for "${entry.id}": journal ${entry.checksum} ≠ code ${expectedChecksum}`,
@@ -314,11 +348,33 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
      * Fail before a manual migration step's SQL reaches the driver when the
      * configured policy forbids its declared risk class (spec §15.4, P0.4).
      */
-    const guardManualStep = (migration: MigrationDefinition): Effect.Effect<void, MigrationError> => {
-      const violation = guardManualMigration(migration.safety, migration.phase, policy, guardOptions)[0]
+    const manualViolation = (migration: MigrationDefinition, direction: "up" | "down") => {
+      const safety = direction === "up" ? migration.safety : migration.downSafety
+      const phase = direction === "up" ? migration.phase : migration.downPhase
+      return guardManualMigration(safety, phase, policy, guardOptions)[0]
+    }
+
+    const guardManualStep = (
+      migration: MigrationDefinition,
+      direction: "up" | "down"
+    ): Effect.Effect<void, MigrationError> => {
+      const violation = manualViolation(migration, direction)
       return violation
         ? Effect.fail(new MigrationError({ message: violation.message, migrationId: migration.id }))
         : Effect.void
+    }
+
+    /**
+     * Preflight the whole pending set under the lock before applying the first
+     * step, so an earlier allowed migration is never committed only for a later
+     * one to be rejected (Finding 12).
+     */
+    const preflightPending = (pending: ReadonlyArray<MigrationDefinition>): Effect.Effect<void, MigrationError> => {
+      for (const migration of pending) {
+        const violation = manualViolation(migration, "up")
+        if (violation) return Effect.fail(new MigrationError({ message: violation.message, migrationId: migration.id }))
+      }
+      return Effect.void
     }
 
     const status: MigratorService["status"] = () => Effect.zipRight(ensureJournal, readApplied)
@@ -343,7 +399,7 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
       ): Effect.Effect<JournalEntry, MigrationError> =>
         Effect.gen(function* () {
           const start = Date.now()
-          yield* guardManualStep(migration)
+          yield* guardManualStep(migration, "up")
           yield* runStep(migration.up, migration.id, database)
           const entry: JournalEntry = {
             id: migration.id,
@@ -365,6 +421,7 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
             yield* validateApplied(defs, appliedEntries)
             const applied = new Set(appliedEntries.map((entry) => entry.id))
             const pending = defs.filter((migration) => !applied.has(migration.id))
+            yield* preflightPending(pending)
             const entries: JournalEntry[] = []
             for (const migration of pending) {
               const scoped = migrationDatabase(migration.id)
@@ -392,6 +449,15 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
       // inside each transaction, then repeat and re-read before the next step.
       return Effect.gen(function* () {
         yield* validateDefinitions(defs)
+        // Preflight the whole pending set before applying any (Finding 12).
+        yield* withTx(
+          Effect.gen(function* () {
+            yield* ensureJournal
+            const appliedEntries = yield* readApplied
+            const applied = new Set(appliedEntries.map((item) => item.id))
+            yield* preflightPending(defs.filter((migration) => !applied.has(migration.id)))
+          })
+        )
         const entries: JournalEntry[] = []
         while (true) {
           const entry = yield* withTx(
@@ -443,7 +509,7 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
               "rollback",
               def.id,
               Effect.gen(function* () {
-                yield* guardManualStep(def)
+                yield* guardManualStep(def, "down")
                 yield* runStep(downStep, def.id, database)
                 yield* deleteJournal(def.id)
               })
@@ -532,7 +598,7 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
           const entry: JournalEntry = {
             id: plan.id,
             name: plan.name,
-            checksum: hashText(ddl),
+            checksum: checksumText(JSON.stringify(["thor-migration-plan", 1, plan.id, plan.name, ddl])),
             appliedAt: new Date(),
             executionTimeMs: 0
           }

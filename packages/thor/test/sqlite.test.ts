@@ -2,7 +2,48 @@ import { describe, expect, it } from "vitest"
 import { Effect, Schema } from "effect"
 import { db, eq, sqlite } from "@gilvandovieira/thor"
 import { makeMigrator, tableToCreateOp } from "@gilvandovieira/thor/migrate"
-import { SQLiteLayer } from "@gilvandovieira/thor/sqlite"
+import { makeSQLiteDriver, SQLiteLayer } from "@gilvandovieira/thor/sqlite"
+
+describe("SQLite prepared resource lifecycle", () => {
+  it("finalizes evicted and cleared cached statements where the runtime exposes finalization", async () => {
+    const finalized: string[] = []
+    const client = {
+      prepare: (sql: string) => ({
+        all: () => [],
+        run: () => ({ changes: 0 }),
+        finalize: () => finalized.push(sql)
+      }),
+      exec: () => undefined
+    }
+    const driver = makeSQLiteDriver(client)
+
+    await Effect.runPromise(driver.query("select ?", [1], "sqlite:first"))
+    await Effect.runPromise(driver.query("select ? + 1", [1], "sqlite:second"))
+    await Effect.runPromise(driver.releasePrepared!("sqlite:first"))
+    await Effect.runPromise(driver.clearPrepared!())
+
+    expect(finalized).toEqual(["select ?", "select ? + 1"])
+  })
+
+  it("never reuses the wrong statement when prepared identities collide", async () => {
+    const prepared: string[] = []
+    const client = {
+      prepare: (sql: string) => {
+        prepared.push(sql)
+        return { all: () => [{ sql }], run: () => ({ changes: 0 }) }
+      },
+      exec: () => undefined
+    }
+    const driver = makeSQLiteDriver(client)
+
+    const first = await Effect.runPromise(driver.query("select 1", [], "collision"))
+    const second = await Effect.runPromise(driver.query("select 2", [], "collision"))
+
+    expect(first).toEqual([{ sql: "select 1" }])
+    expect(second).toEqual([{ sql: "select 2" }])
+    expect(prepared).toEqual(["select 1", "select 2"])
+  })
+})
 
 const supportsNodeSqlite = Number(process.versions.node.split(".")[0]) >= 22
 

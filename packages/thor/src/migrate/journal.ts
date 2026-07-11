@@ -146,17 +146,32 @@ export const guardManualMigration = (
   }
 
   const destructive = safety === "destructive"
+  // Thor cannot prove an arbitrary SQL string is additive. An UNDECLARED safety
+  // is therefore treated as "unchecked" — it must not silently pass `safe-only`
+  // (Finding 2). Only an explicit `safety: "additive"` is permitted freely.
+  const unchecked = safety === undefined
+  const needsReview = destructive || unchecked
   const isContract = phase === "contract" || destructive
 
-  if (policy === "expand-only" && isContract) {
-    block("non-expand-migration", `Manual migration is a contract-phase change and blocked under policy "expand-only".`)
-  }
-  if (destructive && !(policy === "allow-reviewed-destructive" && reviewed)) {
+  if (policy === "expand-only" && (isContract || unchecked)) {
     block(
-      "destructive-migration",
-      policy === "allow-reviewed-destructive"
-        ? `Manual migration is declared destructive and requires an explicitly reviewed run.`
-        : `Manual migration is declared destructive and blocked under policy "${policy}". Use "allow-reviewed-destructive" with a reviewed run to proceed.`
+      "non-expand-migration",
+      unchecked
+        ? `Manual migration has no declared phase/safety and is blocked under policy "expand-only". Declare phase: "expand", safety: "additive".`
+        : `Manual migration is a contract-phase change and blocked under policy "expand-only".`
+    )
+  }
+  if (needsReview && !(policy === "allow-reviewed-destructive" && reviewed)) {
+    const reviewedRun = policy === "allow-reviewed-destructive"
+    block(
+      destructive ? "destructive-migration" : "unchecked-migration",
+      destructive
+        ? reviewedRun
+          ? `Manual migration is declared destructive and requires an explicitly reviewed run.`
+          : `Manual migration is declared destructive and blocked under policy "${policy}". Use "allow-reviewed-destructive" with a reviewed run to proceed.`
+        : reviewedRun
+          ? `Manual migration has no declared safety and requires an explicitly reviewed run; or declare safety: "additive".`
+          : `Manual migration has no declared safety and cannot be proven additive; it is blocked under policy "${policy}". Declare safety: "additive"/"destructive", or use a reviewed "allow-reviewed-destructive" run.`
     )
   }
   return out
