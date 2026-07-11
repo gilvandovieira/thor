@@ -10,14 +10,9 @@
  * @module sql/query-builder-support
  */
 import { Effect, Option, Schema } from "effect"
-import type { AnyColumn, Column } from "../schema/column.js"
+import { type AnyColumn, type Column, columnParamCodec } from "../schema/column.js"
 import { type AnyTable, tableMeta } from "../schema/table.js"
-import {
-  type QueryIR,
-  type SelectionField,
-  collectQueryParams,
-  queryCapabilityBits
-} from "../ir/query-ir.js"
+import { type QueryIR, type SelectionField, collectQueryParams, queryCapabilityBits } from "../ir/query-ir.js"
 import { type Capability, bitsToCapabilities } from "../capabilities/capability.js"
 import type { Dialect } from "../dialect.js"
 import { PostgresDialect } from "../postgres/dialect.js"
@@ -59,8 +54,9 @@ export type SelectResult<F extends SelectFields> = { [K in keyof F]: FieldValue<
 export type NamedParams = Record<string, unknown>
 
 /** Merges two parameter maps, with the right-hand side winning on key overlap. */
-export type MergeParams<A extends NamedParams, B extends NamedParams> = { [K in keyof A | keyof B]:
-  K extends keyof B ? B[K] : K extends keyof A ? A[K] : never }
+export type MergeParams<A extends NamedParams, B extends NamedParams> = {
+  [K in keyof A | keyof B]: K extends keyof B ? B[K] : K extends keyof A ? A[K] : never
+}
 
 /** Terminal-method argument tuple: empty when the query has no parameters. */
 export type ExecutionArguments<P extends NamedParams> = keyof P extends never
@@ -74,7 +70,9 @@ export type TerminalArguments<P extends NamedParams> = ExecutionArguments<P> | [
 export type ExactTerminalArguments<P extends NamedParams, Args extends TerminalArguments<P>> = Args extends []
   ? Args
   : Args extends [infer Input]
-    ? Exclude<keyof Input, keyof P> extends never ? Args : never
+    ? Exclude<keyof Input, keyof P> extends never
+      ? Args
+      : never
     : never
 
 /** Terminal result: a compilable value when called with `[]`, otherwise an executing Effect. */
@@ -84,9 +82,7 @@ export type TerminalCallResult<
   Error,
   Cardinality extends CompiledCardinality,
   Args extends TerminalArguments<P>
-> = Args extends []
-  ? TerminalResult<P, Output, Error, Cardinality>
-  : Effect.Effect<Output, Error, Database>
+> = Args extends [] ? TerminalResult<P, Output, Error, Cardinality> : Effect.Effect<Output, Error, Database>
 
 /**
  * @param args - Optional terminal-method argument tuple.
@@ -104,8 +100,7 @@ export const argsFrom = (args: readonly [QueryArgs?]): QueryArgs => args[0] ?? {
 const toSelectionField = (alias: string, value: AnyColumn | Expr<any>): SelectionField => {
   const outputAlias = internIdentifier(alias)
   if (isColumn(value)) {
-    const codec = value.def.notNull ? value.def.codec : Schema.NullOr(value.def.codec)
-    return { alias: outputAlias, expr: columnRef(value), codec }
+    return { alias: outputAlias, expr: columnRef(value), codec: columnParamCodec(value) }
   }
   const expression = value as Expr<any>
   return { alias: outputAlias, expr: expression.node, codec: expression.codec ?? Schema.Unknown }
@@ -182,17 +177,20 @@ export class PreparedQuery<A, P extends NamedParams = {}> {
     ir: QueryIR,
     fields: SelectionField[]
   ) {
-    this.plan = new PreparedExecutionPlan({
-      ...ir,
-      annotations: {
-        ...ir.annotations,
-        operationName: name,
-        tracing: {
-          spanName: name,
-          attributes: { "db.query.kind": ir._tag, "db.query.tables": ir.annotations.tableNames.join(",") }
+    this.plan = new PreparedExecutionPlan(
+      {
+        ...ir,
+        annotations: {
+          ...ir.annotations,
+          operationName: name,
+          tracing: {
+            spanName: name,
+            attributes: { "db.query.kind": ir._tag, "db.query.tables": ir.annotations.tableNames.join(",") }
+          }
         }
-      }
-    }, fields)
+      },
+      fields
+    )
   }
 
   /** @experimental Debugging shape only. @returns Stable query-shape metadata without compiling or executing. */

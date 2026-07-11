@@ -44,6 +44,14 @@ interface NamedParameter {
 /** Compiled validation/encoding plan for a query's named parameters. */
 export class ParameterPlan {
   private readonly named = new Map<string, NamedParameter>()
+  /**
+   * Inline-bound values, encoded once through their declared column/param codec.
+   * Keyed by node identity — the same node objects appear in the compiled
+   * `paramOrder`. This closes the P0.2 gap where inline values (e.g.
+   * `eq(users.email, "x")`) previously bypassed the codec that named
+   * `param()` values were validated and encoded through.
+   */
+  private readonly inline = new Map<ParamNode, unknown>()
   private readonly failure: ParameterError | undefined
 
   /**
@@ -52,7 +60,22 @@ export class ParameterPlan {
   constructor(params: ReadonlyArray<ParamNode>) {
     let failure: ParameterError | undefined
     for (const node of params) {
-      if (Object.prototype.hasOwnProperty.call(node, "value")) continue
+      if (Object.prototype.hasOwnProperty.call(node, "value")) {
+        // Inline literal: validate and encode through its codec, once.
+        if (this.inline.has(node)) continue
+        const result = (Schema.encodeUnknownEither(node.codec) as ParameterEncoder)(node.value)
+        if (Either.isLeft(result)) {
+          failure ??= new ParameterError({
+            parameter: node.name,
+            reason: "invalid",
+            message: `Invalid inline value for "${node.name}": ${ParseResult.TreeFormatter.formatErrorSync(result.left)}`,
+            cause: result.left
+          })
+        } else {
+          this.inline.set(node, result.right)
+        }
+        continue
+      }
       const existing = this.named.get(node.name)
       if (existing) {
         if (existing.node === node) continue
@@ -60,9 +83,10 @@ export class ParameterPlan {
         failure ??= new ParameterError({
           parameter: node.name,
           reason,
-          message: reason === "conflict"
-            ? `Named parameter "${node.name}" was declared with conflicting schemas`
-            : `Named parameter "${node.name}" was declared more than once; reuse the same param() value`
+          message:
+            reason === "conflict"
+              ? `Named parameter "${node.name}" was declared with conflicting schemas`
+              : `Named parameter "${node.name}" was declared more than once; reuse the same param() value`
         })
         continue
       }
@@ -84,20 +108,24 @@ export class ParameterPlan {
 
     for (const name of this.named.keys()) {
       if (!Object.prototype.hasOwnProperty.call(args, name)) {
-        return Effect.fail(new ParameterError({
-          parameter: name,
-          reason: "missing",
-          message: `Missing required named parameter "${name}"`
-        }))
+        return Effect.fail(
+          new ParameterError({
+            parameter: name,
+            reason: "missing",
+            message: `Missing required named parameter "${name}"`
+          })
+        )
       }
     }
     for (const name of Object.keys(args)) {
       if (!this.named.has(name)) {
-        return Effect.fail(new ParameterError({
-          parameter: name,
-          reason: "extra",
-          message: `Unexpected named parameter "${name}"`
-        }))
+        return Effect.fail(
+          new ParameterError({
+            parameter: name,
+            reason: "extra",
+            message: `Unexpected named parameter "${name}"`
+          })
+        )
       }
     }
 
@@ -105,19 +133,26 @@ export class ParameterPlan {
     for (const [name, parameter] of this.named) {
       const result = parameter.encode(args[name])
       if (Either.isLeft(result)) {
-        return Effect.fail(new ParameterError({
-          parameter: name,
-          reason: "invalid",
-          message: `Invalid value for named parameter "${name}": ${ParseResult.TreeFormatter.formatErrorSync(result.left)}`,
-          cause: result.left
-        }))
+        return Effect.fail(
+          new ParameterError({
+            parameter: name,
+            reason: "invalid",
+            message: `Invalid value for named parameter "${name}": ${ParseResult.TreeFormatter.formatErrorSync(result.left)}`,
+            cause: result.left
+          })
+        )
       }
       encoded.set(name, result.right)
     }
 
-    return Effect.succeed(paramOrder.map((node) =>
-      Object.prototype.hasOwnProperty.call(node, "value") ? node.value : encoded.get(node.name)
-    ))
+    // Inline nodes were validated and encoded at construction (a failure would
+    // have short-circuited above via `this.failure`); named nodes resolve from
+    // the just-encoded execution args. Both go through their declared codec.
+    return Effect.succeed(
+      paramOrder.map((node) =>
+        Object.prototype.hasOwnProperty.call(node, "value") ? this.inline.get(node) : encoded.get(node.name)
+      )
+    )
   }
 }
 
@@ -237,7 +272,11 @@ const guardCached = (
  * @param db - Active database service (carries dialect + execution mode).
  * @returns An Effect that fails with the first violation or succeeds with void.
  */
-export const guardForMode = (caches: QueryCaches, ir: QueryIR, db: DatabaseService): Effect.Effect<void, QueryError> => {
+export const guardForMode = (
+  caches: QueryCaches,
+  ir: QueryIR,
+  db: DatabaseService
+): Effect.Effect<void, QueryError> => {
   const matrix = db.dialect.capabilities
   if ((db.mode ?? DEFAULT_EXECUTION_MODE) === "safe") return guardCached(caches, ir, matrix, db.allowEmulation)
   if (cachedGuardResult(caches, ir, matrix, db.allowEmulation) === null) {
@@ -401,7 +440,10 @@ const describeFailure = (
       })
     }
   }
-  return new DecodeError({ message: `Failed to decode row: ${ParseResult.TreeFormatter.formatErrorSync(rowError)}`, cause: rowError })
+  return new DecodeError({
+    message: `Failed to decode row: ${ParseResult.TreeFormatter.formatErrorSync(rowError)}`,
+    cause: rowError
+  })
 }
 
 /**

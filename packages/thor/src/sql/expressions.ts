@@ -4,7 +4,7 @@
  * @module sql/expressions
  */
 import { Schema } from "effect"
-import type { AnyColumn, Column } from "../schema/column.js"
+import { type AnyColumn, type Column, columnParamCodec } from "../schema/column.js"
 import type { ColumnRefNode, ExprNode, LiteralNode, OrderByTerm, ParamNode } from "../ir/query-ir.js"
 
 declare const ParamType: unique symbol
@@ -19,15 +19,20 @@ export type Param<Name extends string, A> = ParamNode & {
 export type ParamsOf<T> = T extends { readonly [ParamType]: readonly [infer Name extends string, infer A] }
   ? { readonly [K in Name]: A }
   : T extends { readonly _Params?: infer P }
-    ? P extends Record<string, unknown> ? P : {}
+    ? P extends Record<string, unknown>
+      ? P
+      : {}
     : {}
 
 /** Runtime expression node carrying its named-parameter requirements. */
 export type Predicate<P extends Record<string, unknown> = {}> = ExprNode & { readonly _Params?: P }
 
 /** Converts a union of parameter maps to their combined intersection. */
-export type MergeParameterMaps<U> = (U extends unknown ? (value: U) => void : never) extends
-  (value: infer I) => void ? I extends Record<string, unknown> ? I : {} : {}
+export type MergeParameterMaps<U> = (U extends unknown ? (value: U) => void : never) extends (value: infer I) => void
+  ? I extends Record<string, unknown>
+    ? I
+    : {}
+  : {}
 
 /** A typed expression wrapper (currently a thin carrier around an IR node). */
 export interface Expr<A> {
@@ -57,11 +62,12 @@ export type ColumnValue<T> = T extends Column<infer C>
 export const param = <const Name extends string, S extends Schema.Schema.AnyNoContext>(
   name: Name,
   schema: S
-): Param<Name, Schema.Schema.Type<S>> => ({
-  _tag: "Param",
-  name,
-  codec: schema as Schema.Schema<any, any>
-} as Param<Name, Schema.Schema.Type<S>>)
+): Param<Name, Schema.Schema.Type<S>> =>
+  ({
+    _tag: "Param",
+    name,
+    codec: schema as Schema.Schema<any, any>
+  }) as Param<Name, Schema.Schema.Type<S>>
 
 let anonCounter = 0
 
@@ -101,8 +107,7 @@ const isExpr = (value: unknown): value is Expr<unknown> =>
  * @param value - Unknown runtime value.
  * @returns Whether `value` is runtime expression IR.
  */
-const isExprNode = (value: unknown): value is ExprNode =>
-  typeof value === "object" && value !== null && "_tag" in value
+const isExprNode = (value: unknown): value is ExprNode => typeof value === "object" && value !== null && "_tag" in value
 
 /**
  * @param value - Column, expression wrapper, parameter, node, or literal.
@@ -147,6 +152,6 @@ export const toValueNode = (value: unknown, leftColumn?: AnyColumn): ExprNode =>
   if (isColumn(value)) return columnRef(value)
   if (isParamNode(value)) return value
   if (isExpr(value)) return value.node
-  const codec = leftColumn?.def.codec ?? Schema.Unknown
+  const codec = leftColumn ? columnParamCodec(leftColumn) : Schema.Unknown
   return { _tag: "Param", name: `p${++anonCounter}`, codec, value } satisfies ParamNode
 }

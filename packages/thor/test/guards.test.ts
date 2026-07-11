@@ -45,7 +45,10 @@ describe("query guards (spec §8.1)", () => {
   })
 
   it("rejects an insert with no columns", () => {
-    const query = db.insert(users).values({} as { id: string; email: string }).returning({ id: users.id })
+    const query = db
+      .insert(users)
+      .values({} as { id: string; email: string })
+      .returning({ id: users.id })
 
     expect(expectGuardViolations(query.ir, PostgresCapabilities)).toContainEqual(
       expect.objectContaining({
@@ -56,20 +59,17 @@ describe("query guards (spec §8.1)", () => {
     )
   })
 
-  it("rejects insert rows whose values do not match the first row's columns", () => {
-    const query = db
-      .insert(users)
-      .values([
-        { id: "u1", email: "a@example.com" },
-        { id: "u2" } as { id: string; email: string }
-      ])
-      .returning({ id: users.id })
-
-    expect(expectGuardViolations(query.ir, PostgresCapabilities)).toContainEqual(
+  it("rejects insert rows whose values do not match the first row's columns at construction", () => {
+    expect(() =>
+      db
+        .insert(users)
+        .values([{ id: "u1", email: "a@example.com" }, { id: "u2" } as { id: string; email: string }])
+        .returning({ id: users.id })
+    ).toThrow(
       expect.objectContaining({
-        _tag: "GuardError",
-        guard: "insert-shape",
-        message: "Insert row 1 has 1 values but 2 columns"
+        _tag: "ParameterError",
+        reason: "missing",
+        parameter: "email"
       })
     )
   })

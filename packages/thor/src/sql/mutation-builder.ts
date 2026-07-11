@@ -10,7 +10,7 @@
  * @module sql/mutation-builder
  */
 import { Effect, Option } from "effect"
-import type { AnyColumn } from "../schema/column.js"
+import { type AnyColumn, columnParamCodec } from "../schema/column.js"
 import { type AnyTable, type Insert as InsertInput, type Update as UpdateInput, tableMeta } from "../schema/table.js"
 import {
   type ExprNode,
@@ -24,7 +24,7 @@ import {
 import { capabilityBit, type Capability, bitsToCapabilities, noCapabilities } from "../capabilities/capability.js"
 import type { Dialect } from "../dialect.js"
 import { PostgresDialect } from "../postgres/dialect.js"
-import type { QueryError, NotFoundError, TooManyRowsError } from "../errors/index.js"
+import { ParameterError, type QueryError, type NotFoundError, type TooManyRowsError } from "../errors/index.js"
 import { Database } from "../execution/database.js"
 import {
   atMostOne,
@@ -36,13 +36,7 @@ import {
 } from "../execution/run.js"
 import type { CommandResult, CompiledStatement } from "../execution/driver.js"
 import { compilableEffect } from "../execution/compiled-query.js"
-import {
-  type Expr,
-  type MergeParameterMaps,
-  type Param,
-  type ParamsOf,
-  toValueNode
-} from "./expressions.js"
+import { type Expr, type MergeParameterMaps, type Param, type ParamsOf, toValueNode } from "./expressions.js"
 import {
   argsFrom,
   inspectIr,
@@ -71,23 +65,71 @@ type InputParams<T> = T extends ReadonlyArray<infer R>
 // --- INSERT ------------------------------------------------------------------
 
 /**
- * Maps an application insert object to physical columns and parameter nodes.
+ * Canonicalizes one or more application insert objects into a single physical
+ * column list and per-row parameter nodes projected into that exact order.
+ *
+ * A multi-row `INSERT` emits one shared column list, so every row must describe
+ * the same set of application keys. The canonical column order is taken from the
+ * first row and every subsequent row is projected into it **by key**, never by
+ * JavaScript property-iteration order — so `{ email, name }` and `{ name, email }`
+ * bind identically (spec §6, P0.1 data-integrity invariant).
  *
  * @param table - Target table definition.
- * @param input - Application-level insert values.
- * @returns Ordered column names and their parameter expressions.
+ * @param list - One or more application-level insert values.
+ * @returns One canonical column list and every row's parameter expressions.
+ * @throws {ParameterError} When a key is unknown to the table, a later row is
+ *   missing a canonical column, or a later row introduces an extra column.
  */
-const valuesToRow = (table: AnyTable, input: Record<string, unknown>): { columns: string[]; row: ExprNode[] } => {
+const canonicalizeInsertRows = (
+  table: AnyTable,
+  list: ReadonlyArray<Record<string, unknown>>
+): { columns: string[]; rows: ExprNode[][] } => {
   const meta = tableMeta(table)
+  const first = list[0] ?? {}
+  // Canonical application keys, in first-row order, validated against the schema.
+  const keys: string[] = []
+  const keyColumns: AnyColumn[] = []
   const columns: string[] = []
-  const row: ExprNode[] = []
-  for (const [key, value] of Object.entries(input)) {
+  for (const key of Object.keys(first)) {
     const column = meta.columns[key]
-    if (!column) continue
+    if (!column) {
+      throw new ParameterError({
+        parameter: key,
+        reason: "extra",
+        message: `Insert into "${meta.name}" received unknown column "${key}"`
+      })
+    }
+    keys.push(key)
+    keyColumns.push(column)
     columns.push(column.def.name)
-    row.push(inputValueNode(meta.name, column, value))
   }
-  return { columns, row }
+  const keySet = new Set(keys)
+  const rows = list.map((row, i) => {
+    // Reject keys that are unknown, or that appear only in a later row.
+    for (const key of Object.keys(row)) {
+      if (keySet.has(key)) continue
+      throw new ParameterError({
+        parameter: key,
+        reason: "extra",
+        message: meta.columns[key]
+          ? `Insert row ${i} has extra column "${key}" not present in the first row; multi-row inserts must be homogeneous`
+          : `Insert into "${meta.name}" received unknown column "${key}"`
+      })
+    }
+    // Project into canonical order by key; reject rows missing a canonical column.
+    return keyColumns.map((column, k) => {
+      const key = keys[k] as string
+      if (!Object.prototype.hasOwnProperty.call(row, key)) {
+        throw new ParameterError({
+          parameter: key,
+          reason: "missing",
+          message: `Insert row ${i} is missing column "${key}" present in the first row; multi-row inserts must be homogeneous`
+        })
+      }
+      return inputValueNode(meta.name, column, row[key])
+    })
+  })
+  return { columns, rows }
 }
 
 /**
@@ -99,14 +141,10 @@ const valuesToRow = (table: AnyTable, input: Record<string, unknown>): { columns
  * @returns Runtime expression used by insert and update IR.
  */
 const inputValueNode = (table: string, column: AnyColumn, value: unknown): ExprNode => {
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    (("_tag" in value && value._tag === "Param") || "node" in value)
-  ) {
+  if (typeof value === "object" && value !== null && (("_tag" in value && value._tag === "Param") || "node" in value)) {
     return toValueNode(value, column)
   }
-  return { _tag: "Param", name: `${table}.${column.def.name}`, codec: column.def.codec, value }
+  return { _tag: "Param", name: `${table}.${column.def.name}`, codec: columnParamCodec(column), value }
 }
 
 /**
@@ -123,9 +161,7 @@ const assignmentsFrom = (
   const meta = tableMeta(table)
   return Object.entries(input).flatMap(([key, value]) => {
     const column = meta.columns[key]
-    return column
-      ? [{ column: column.def.name, value: inputValueNode(meta.name, column, value) }]
-      : []
+    return column ? [{ column: column.def.name, value: inputValueNode(meta.name, column, value) }] : []
   })
 }
 
@@ -169,9 +205,17 @@ export class ReturningQuery<A, P extends NamedParams = {}> {
    * @param args - Named parameter values.
    * @returns An Effect yielding every returned row.
    */
-  all<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, ReadonlyArray<A>, QueryError, "all", Args> {
+  all<Args extends TerminalArguments<P>>(
+    ...args: Args & ExactTerminalArguments<P, Args>
+  ): TerminalCallResult<P, ReadonlyArray<A>, QueryError, "all", Args> {
     const effect = Effect.flatMap(Database, (db) => executeRows<A>(this.ir, this.fields, db, argsFrom(args)))
-    return compilableEffect(effect, this.ir, this.fields, "all", executeCompiledRows<A>) as TerminalCallResult<P, ReadonlyArray<A>, QueryError, "all", Args>
+    return compilableEffect(effect, this.ir, this.fields, "all", executeCompiledRows<A>) as TerminalCallResult<
+      P,
+      ReadonlyArray<A>,
+      QueryError,
+      "all",
+      Args
+    >
   }
 
   /**
@@ -182,7 +226,9 @@ export class ReturningQuery<A, P extends NamedParams = {}> {
    * @throws {NotFoundError} Through the Effect error channel when no row is returned.
    * @throws {TooManyRowsError} Through the Effect error channel when multiple rows are returned.
    */
-  one<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, A, QueryError | NotFoundError | TooManyRowsError, "one", Args> {
+  one<Args extends TerminalArguments<P>>(
+    ...args: Args & ExactTerminalArguments<P, Args>
+  ): TerminalCallResult<P, A, QueryError | NotFoundError | TooManyRowsError, "one", Args> {
     const operation = `${this.ir._tag}.one`
     const effect = Effect.flatMap(
       Effect.flatMap(Database, (db) => executeRows<A>(this.ir, this.fields, db, argsFrom(args))),
@@ -200,7 +246,9 @@ export class ReturningQuery<A, P extends NamedParams = {}> {
    * @returns An Effect yielding zero or one returned row.
    * @throws {TooManyRowsError} Through the Effect error channel when multiple rows are returned.
    */
-  maybeOne<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, Option.Option<A>, QueryError | TooManyRowsError, "maybeOne", Args> {
+  maybeOne<Args extends TerminalArguments<P>>(
+    ...args: Args & ExactTerminalArguments<P, Args>
+  ): TerminalCallResult<P, Option.Option<A>, QueryError | TooManyRowsError, "maybeOne", Args> {
     const operation = `${this.ir._tag}.maybeOne`
     const effect = Effect.flatMap(
       Effect.flatMap(Database, (db) => executeRows<A>(this.ir, this.fields, db, argsFrom(args))),
@@ -217,9 +265,17 @@ export class ReturningQuery<A, P extends NamedParams = {}> {
    * @param args - Named parameter values.
    * @returns An Effect yielding the affected-row count.
    */
-  run<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
+  run<Args extends TerminalArguments<P>>(
+    ...args: Args & ExactTerminalArguments<P, Args>
+  ): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
     const effect = Effect.flatMap(Database, (db) => executeCommand(this.ir, db, argsFrom(args)))
-    return compilableEffect(effect, this.ir, this.fields, "run", executeCompiledCommand) as TerminalCallResult<P, CommandResult, QueryError, "run", Args>
+    return compilableEffect(effect, this.ir, this.fields, "run", executeCompiledCommand) as TerminalCallResult<
+      P,
+      CommandResult,
+      QueryError,
+      "run",
+      Args
+    >
   }
 
   /**
@@ -261,9 +317,8 @@ export class InsertBuilder<T extends AnyTable> {
     input: I
   ): InsertValues<T, InputParams<I>> {
     const list = (Array.isArray(input) ? input : [input]) as ReadonlyArray<Record<string, unknown>>
-    const first = valuesToRow(this.table, list[0] ?? {})
-    const rows = list.map((r) => valuesToRow(this.table, r).row)
-    return new InsertValues<T, InputParams<I>>(this.table, first.columns, rows)
+    const { columns, rows } = canonicalizeInsertRows(this.table, list)
+    return new InsertValues<T, InputParams<I>>(this.table, columns, rows)
   }
 }
 
@@ -363,7 +418,9 @@ export class InsertValues<T extends AnyTable, P extends NamedParams = {}> {
    * @param input - Assignments applied to the conflicting row.
    * @returns A new insert builder guarded by `insert.onDuplicateKey`.
    */
-  onDuplicateKeyUpdate<I extends ParameterizedInput<UpdateInput<T>>>(input: I): InsertValues<T, MergeParams<P, InputParams<I>>> {
+  onDuplicateKeyUpdate<I extends ParameterizedInput<UpdateInput<T>>>(
+    input: I
+  ): InsertValues<T, MergeParams<P, InputParams<I>>> {
     return new InsertValues<T, MergeParams<P, InputParams<I>>>(this.table, this.columns, this.rows, {
       kind: "onDuplicateKey",
       set: assignmentsFrom(this.table, input as Record<string, unknown>)
@@ -376,7 +433,9 @@ export class InsertValues<T extends AnyTable, P extends NamedParams = {}> {
    * @param fields - Optional selected fields; omit to return every table column.
    * @returns A row-returning query guarded by dialect capabilities.
    */
-  returning<F extends SelectFields>(fields?: F): ReturningQuery<F extends SelectFields ? SelectResult<F> : Record<string, unknown>, P> {
+  returning<F extends SelectFields>(
+    fields?: F
+  ): ReturningQuery<F extends SelectFields ? SelectResult<F> : Record<string, unknown>, P> {
     const selection = returningFields(this.table, fields)
     return new ReturningQuery(this.ir(selection), selection)
   }
@@ -387,10 +446,18 @@ export class InsertValues<T extends AnyTable, P extends NamedParams = {}> {
    * @param args - Named parameter values.
    * @returns An Effect yielding the affected-row count.
    */
-  run<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
+  run<Args extends TerminalArguments<P>>(
+    ...args: Args & ExactTerminalArguments<P, Args>
+  ): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
     const ir = this.ir()
     const effect = Effect.flatMap(Database, (db) => executeCommand(ir, db, argsFrom(args)))
-    return compilableEffect(effect, ir, NO_SELECTION, "run", executeCompiledCommand) as TerminalCallResult<P, CommandResult, QueryError, "run", Args>
+    return compilableEffect(effect, ir, NO_SELECTION, "run", executeCompiledCommand) as TerminalCallResult<
+      P,
+      CommandResult,
+      QueryError,
+      "run",
+      Args
+    >
   }
 }
 
@@ -408,7 +475,10 @@ export class UpdateBuilder<T extends AnyTable> {
    * @returns An update builder with assignments.
    */
   set<I extends ParameterizedInput<UpdateInput<T>>>(input: I): UpdateValues<T, InputParams<I>> {
-    return new UpdateValues<T, InputParams<I>>(this.table, assignmentsFrom(this.table, input as Record<string, unknown>))
+    return new UpdateValues<T, InputParams<I>>(
+      this.table,
+      assignmentsFrom(this.table, input as Record<string, unknown>)
+    )
   }
 }
 
@@ -478,7 +548,9 @@ export class UpdateValues<T extends AnyTable, P extends NamedParams = {}> {
    * @param fields - Optional fields to return; omit for all columns.
    * @returns A row-returning update query.
    */
-  returning<F extends SelectFields>(fields?: F): ReturningQuery<F extends SelectFields ? SelectResult<F> : Record<string, unknown>, P> {
+  returning<F extends SelectFields>(
+    fields?: F
+  ): ReturningQuery<F extends SelectFields ? SelectResult<F> : Record<string, unknown>, P> {
     const selection = returningFields(this.table, fields)
     return new ReturningQuery(this.ir(selection), selection)
   }
@@ -489,10 +561,18 @@ export class UpdateValues<T extends AnyTable, P extends NamedParams = {}> {
    * @param args - Named parameter values.
    * @returns An Effect yielding the affected-row count.
    */
-  run<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
+  run<Args extends TerminalArguments<P>>(
+    ...args: Args & ExactTerminalArguments<P, Args>
+  ): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
     const ir = this.ir()
     const effect = Effect.flatMap(Database, (db) => executeCommand(ir, db, argsFrom(args)))
-    return compilableEffect(effect, ir, NO_SELECTION, "run", executeCompiledCommand) as TerminalCallResult<P, CommandResult, QueryError, "run", Args>
+    return compilableEffect(effect, ir, NO_SELECTION, "run", executeCompiledCommand) as TerminalCallResult<
+      P,
+      CommandResult,
+      QueryError,
+      "run",
+      Args
+    >
   }
 }
 
@@ -506,7 +586,10 @@ export class DeleteBuilder<T extends AnyTable, P extends NamedParams = {}> {
    * @param table - Target table.
    * @param whereNode - Optional predicate retained by an immutable clone.
    */
-  constructor(private readonly table: T, whereNode?: ExprNode) {
+  constructor(
+    private readonly table: T,
+    whereNode?: ExprNode
+  ) {
     if (whereNode !== undefined) this.whereNode = whereNode
   }
 
@@ -558,7 +641,9 @@ export class DeleteBuilder<T extends AnyTable, P extends NamedParams = {}> {
    * @param fields - Optional fields to return; omit for all columns.
    * @returns A row-returning delete query.
    */
-  returning<F extends SelectFields>(fields?: F): ReturningQuery<F extends SelectFields ? SelectResult<F> : Record<string, unknown>, P> {
+  returning<F extends SelectFields>(
+    fields?: F
+  ): ReturningQuery<F extends SelectFields ? SelectResult<F> : Record<string, unknown>, P> {
     const selection = returningFields(this.table, fields)
     return new ReturningQuery(this.ir(selection), selection)
   }
@@ -569,9 +654,17 @@ export class DeleteBuilder<T extends AnyTable, P extends NamedParams = {}> {
    * @param args - Named parameter values.
    * @returns An Effect yielding the affected-row count.
    */
-  run<Args extends TerminalArguments<P>>(...args: Args & ExactTerminalArguments<P, Args>): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
+  run<Args extends TerminalArguments<P>>(
+    ...args: Args & ExactTerminalArguments<P, Args>
+  ): TerminalCallResult<P, CommandResult, QueryError, "run", Args> {
     const ir = this.ir()
     const effect = Effect.flatMap(Database, (db) => executeCommand(ir, db, argsFrom(args)))
-    return compilableEffect(effect, ir, NO_SELECTION, "run", executeCompiledCommand) as TerminalCallResult<P, CommandResult, QueryError, "run", Args>
+    return compilableEffect(effect, ir, NO_SELECTION, "run", executeCompiledCommand) as TerminalCallResult<
+      P,
+      CommandResult,
+      QueryError,
+      "run",
+      Args
+    >
   }
 }
