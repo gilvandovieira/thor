@@ -129,7 +129,9 @@ export const runTransaction = <A, E, R>(
   }
   const requiredCapability: Capability | undefined = current
     ? "transaction.savepoints"
-    : options.isolationLevel ? "transaction.isolationLevel" : undefined
+    : options.isolationLevel
+      ? "transaction.isolationLevel"
+      : undefined
   if (current && options.retry) {
     return Effect.fail(
       new TransactionError({ message: "Nested transactions cannot define an independent retry policy" })
@@ -213,7 +215,8 @@ export const runTransaction = <A, E, R>(
       Effect.catchAll((error) =>
         !(error instanceof CapabilityError) && remaining > 0 && retry.while(error)
           ? attempt(remaining - 1)
-          : Effect.fail(error))
+          : Effect.fail(error)
+      )
     )
   return attempt(retry.times)
 }
