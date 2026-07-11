@@ -38,11 +38,11 @@ pending DDL normally explains the difference.
 
 Migration `SqlStatement` values must come from `sql` or `sqlStatement`; a plain
 object with the same `_tag` is not accepted at runtime. Statements are frozen and
-authenticated by a package-private registry. Because TypeScript migration modules
-may be evaluated through a separate physical Thor copy, the CLI validates the
-loaded statement's tag and string payload as trusted authored source, then
-reconstructs it with its own `sqlStatement` constructor. This is a deliberate CLI
-source boundary, not general cross-copy value interoperability.
+authenticated by a versioned same-realm weak registry, so compatible physical
+Thor copies recognize genuine constructor-produced statements. The CLI still
+validates the loaded tag/string payload and reconstructs it defensively. The
+threat boundary is untrusted data, not arbitrary same-realm code; cross-realm or
+incompatible-protocol values must be reconstructed.
 
 `generate`, `diff`, and `plan` currently compare table presence and produce
 create-table operations only. They do not infer column changes, renames,
@@ -230,3 +230,13 @@ The migrator wraps each step in a transaction on dialects with transactional DDL
 (PostgreSQL, SQLite) and applies without one where the backend does not support
 it (MySQL), where a failed step can leave earlier DDL in place. This is driven by
 the dialect's `transactionalDdl` capability, not a per-migration flag.
+
+`redo` holds one named lock on MySQL but cannot make DDL atomic. If `down`
+succeeds and reapply fails, the old journal row is gone; any DDL completed by the
+new `up` remains. Inspect schema and `_thor_migrations` before retrying. Recovery
+is an idempotent `up` when the migration uses convergent DDL such as
+`CREATE ... IF NOT EXISTS`; otherwise author a reviewed repair migration or
+manually restore the exact precondition, then rerun. Never insert a journal row
+by hand without verifying the current checksum and full schema state. The live
+failure-point test records the schema-present/journal-missing state and its
+idempotent recovery.

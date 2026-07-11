@@ -58,12 +58,20 @@ A feature is not marked stable (`St`) unless its API surface is in
   (they are **not** silently dropped or misaligned). <a id="params"></a>
 - Every application value — inline (`eq(col, x)`) or named (`param(...)`) — is
   validated and encoded through its declared codec before reaching the driver.
-- Inline arrays, plain records, and dates are recursively copied when they enter
-  query IR. Opaque class instances retain identity because their codecs may rely
-  on prototypes; use named execution parameters for mutable opaque values.
+- Inline arrays, records, dates, binary views/Buffers, maps, and sets are
+  recursively copied when they enter query IR. Frozen opaque domain instances
+  are accepted by identity; mutable class instances are rejected because neither
+  retaining nor constructor-free cloning can give deterministic semantics. Pass
+  those values through named execution parameters instead.
 - `.compile()`/`.prepare()` use a **shape-only** model: a query that captures an
   inline value cannot be compiled; use `param(name, schema)` and supply the value
   at `execute()`.
+- DML `RETURNING.one()`/`.maybeOne()` request at most two rows from the driver in
+  direct, prepared, and compiled modes. node-postgres uses its protocol row
+  bound, Node and Bun SQLite stop their statement iterators after two rows, and
+  postgres.js uses a two-row cursor then returns `CLOSE`. Structural
+  postgres.js/SQLite wrappers that omit the required cursor/iterator reject the
+  bounded terminal instead of materializing an unbounded result.
 - `limit`/`offset` must be finite, non-negative safe integers; other values are
   rejected before any IR is built.
 - Empty `inArray`/`or` lower to `FALSE`; empty `notInArray`/`and` lower to `TRUE`.
@@ -135,19 +143,21 @@ A feature is not marked stable (`St`) unless its API surface is in
 
 ## Relations
 
-- Batched `query` loading targets 800 bound key values per statement. The batch
-  size is `floor(800 / keyColumnCount)`, with a minimum of one. A composite key
-  wider than 800 columns therefore exceeds the target in its one-row batch. The
-  budget is conservative and not dialect-aware; backend parameter, expression,
-  and packet limits still require application-specific testing.
+- Batched `query` loading uses a dialect-aware native parameter budget capped at
+  800 key values per statement. The batch size is
+  `floor(availableBudget / keyColumnCount)`. A composite key wider than the
+  available budget is rejected before driver execution; it never falls back to
+  N+1 or emits an oversized statement. The conservative cap also limits SQLite
+  expression depth and practical MySQL packet growth.
 
 ## Identifiers
 
-- Thor treats schema DSL names as opaque single identifiers and safely doubles
-  the active dialect's quote delimiter. It does not currently reject empty, NUL,
-  overlength, reserved, or backend-truncation-colliding names, nor does it parse
-  dots in ordinary table/column names as qualification. Use explicit schema/name
-  APIs where provided and choose portable identifiers in application schemas.
+- Thor rejects empty and NUL-bearing identifiers before compilation. Other names
+  are opaque single identifiers: quotes/backticks are doubled, while whitespace,
+  Unicode, emoji, reserved words, and dots are quoted and permitted. Dots are not
+  implicit qualification. Backend byte limits and truncation collisions differ
+  by server/object kind and remain backend-enforced; choose portable names and
+  use structural schema/name APIs where provided.
 
 ## Raw SQL trust boundary
 
@@ -157,10 +167,12 @@ A feature is not marked stable (`St`) unless its API surface is in
   Prefer the structured window-frame constructors such as `rowsBetween(...)`.
 - `SqlStatement` migration values are immutable and authenticated by their
   constructor; structural `{ _tag: "SqlStatement", sql: ... }` objects are
-  rejected. Package copies have isolated authenticity registries. The CLI treats
-  loaded migration modules as trusted authored source, validates the SQL field,
-  and re-authenticates it in the executing package copy; arbitrary cross-copy
-  runtime values do not interoperate.
+  rejected. Compatible physical package copies in one JavaScript realm share a
+  versioned weak authenticity protocol for SQL, statements, columns, params,
+  expressions, tables, and routines. Plain/JSON lookalikes remain rejected.
+  This protects untrusted data, not hostile same-realm code, which can already
+  import Thor and invoke explicit unsafe constructors. Cross-realm and
+  incompatible-protocol values require reconstruction.
 
 ## Stability classification
 

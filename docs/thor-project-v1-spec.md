@@ -498,9 +498,10 @@ must not bake user input into cache keys or SQL strings.
 Compiled and prepared handles own a deeply frozen snapshot of their query graph,
 including raw-template arrays, parameter nodes, nested queries, and selections.
 Mutation of builder inputs after handle construction must not alter SQL, binding,
-guards, metadata, or decoding. Direct inline arrays, plain records, and dates are
-snapshotted when they enter IR; opaque instances retain identity and should be
-passed as named execution values when mutable.
+guards, metadata, or decoding. Direct inline arrays, records, dates, binary
+values, maps, and sets are snapshotted when they enter IR. Frozen opaque domain
+instances are accepted by identity; mutable class instances are rejected and
+must be passed as named execution values.
 
 ---
 
@@ -1110,10 +1111,11 @@ Migrator.apply(plan)
 ```
 
 `SqlStatement` is an immutable authenticated value produced by `sql` or
-`sqlStatement`; structural lookalikes are rejected. Authenticity is isolated per
-physical package copy. The CLI may validate and re-authenticate statements loaded
-from trusted migration source evaluated through another package copy, but normal
-cross-copy runtime values are not promised to interoperate.
+`sqlStatement`; structural lookalikes are rejected. Compatible physical package
+copies in one JavaScript realm share a versioned weak authenticity registry for
+SQL-bearing and schema/query values. The threat model is untrusted data, not
+hostile same-realm code (which can already invoke unsafe constructors).
+Cross-realm or incompatible-protocol values must be reconstructed.
 
 ### 15.4 Migration policies
 
@@ -1529,10 +1531,10 @@ Property tests should cover IR/compiler invariants:
 - empty/invalid mutations fail guards
 ```
 
-Identifier quoting means delimiter escaping, not backend-validity validation.
-The current alpha accepts opaque single identifiers and does not consistently
-reject empty, NUL, overlength, reserved, or truncation-colliding names. Ordinary
-table/column strings are not parsed as schema qualification.
+Identifier policy rejects empty and NUL-bearing names before compilation. Other
+names are opaque single identifiers: delimiter characters are escaped, reserved
+words and Unicode are quoted, and dots are not parsed as schema qualification.
+Backend-specific byte limits and truncation collisions remain backend-enforced.
 
 ### 18.8 Testing invariant
 
