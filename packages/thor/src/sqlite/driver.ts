@@ -209,16 +209,18 @@ const makeDriver = (client: SQLiteClient, runtime: RuntimeRequirements, profile:
         try: () => {
           const cached = prepared.get(name)
           if (!cached) return
-          prepared.delete(name)
           finalize(cached.statement)
+          prepared.delete(name)
         },
         catch: mapSQLiteError
       }),
     clearPrepared: () =>
       Effect.try({
         try: () => {
-          for (const { statement } of prepared.values()) finalize(statement)
-          prepared.clear()
+          for (const [name, { statement }] of prepared) {
+            finalize(statement)
+            prepared.delete(name)
+          }
         },
         catch: mapSQLiteError
       })

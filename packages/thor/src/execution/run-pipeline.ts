@@ -8,7 +8,7 @@
  *
  * @module execution/run-pipeline
  */
-import { Effect, Either, ParseResult, Schema } from "effect"
+import { Effect, Either, Exit, ParseResult, Schema } from "effect"
 import { collectQueryParams, type ParamNode, type QueryIR, type SelectionField } from "../ir/query-ir.js"
 import { collectViolations } from "../guards/query-guards.js"
 import type { Dialect } from "../dialect.js"
@@ -350,9 +350,21 @@ export const hasCompiled = (caches: QueryCaches, ir: QueryIR, dialect: Dialect):
 interface PreparedRegistryEntry {
   readonly sql: string
   leases: number
+  evictionRequested: boolean
 }
 
 const preparedByDriver = new WeakMap<object, Map<string, PreparedRegistryEntry>>()
+
+/** @param entry - Leased native identity. @returns An idempotent one-lease finalizer. */
+const leaseRelease = (entry: PreparedRegistryEntry): Effect.Effect<void> => {
+  let released = false
+  return Effect.sync(() => {
+    if (released) return
+    released = true
+    entry.leases--
+    if (entry.leases < 0) throw new Error("Prepared resource lease underflow")
+  })
+}
 
 /**
  * @param driver - Active driver.
@@ -394,7 +406,7 @@ export const prepareForExecution = (
       preparedByDriver.set(scope, prepared)
     }
     const prior = prepared.get(requested)
-    if (prior?.sql === compiled.sql) {
+    if (prior?.sql === compiled.sql && !prior.evictionRequested) {
       prior.leases++
       prepared.delete(requested)
       prepared.set(requested, prior)
@@ -402,50 +414,62 @@ export const prepareForExecution = (
       return {
         name: requested,
         outcome: db.recordPreparedCache === false ? "not-used" : "hit",
-        release: Effect.sync(() => {
-          prior.leases--
-        })
+        release: leaseRelease(prior)
       }
     }
     if (prior !== undefined) {
       if (db.recordPreparedCache !== false) caches.notePrepared("miss", prepared.size, 0)
+      if (db.recordPreparedCache !== false) caches.notePreparedLifecycle("admission-bypass", prepared.size)
       return { name: undefined, outcome: db.recordPreparedCache === false ? "not-used" : "miss", release: Effect.void }
     }
 
-    const evictedNames: string[] = []
+    let evictions = 0
     const maxSize = caches.preparedMaxSize
     const releasePrepared = db.driver.releasePrepared
     while (prepared.size >= maxSize) {
-      const oldest = Array.from(prepared).find(([, entry]) => entry.leases === 0)?.[0]
+      const oldest = Array.from(prepared).find(([, entry]) => entry.leases === 0 && !entry.evictionRequested)
       if (oldest === undefined || !releasePrepared) {
         if (db.recordPreparedCache !== false) caches.notePrepared("miss", prepared.size, 0)
+        if (db.recordPreparedCache !== false) caches.notePreparedLifecycle("admission-bypass", prepared.size)
         return {
           name: undefined,
           outcome: db.recordPreparedCache === false ? "not-used" : "miss",
           release: Effect.void
         }
       }
-      prepared.delete(oldest)
-      evictedNames.push(oldest)
+      const [oldestName, oldestEntry] = oldest
+      oldestEntry.evictionRequested = true
+      const released = yield* Effect.exit(releasePrepared(oldestName))
+      if (Exit.isFailure(released)) {
+        oldestEntry.evictionRequested = false
+        if (db.recordPreparedCache !== false) {
+          caches.notePrepared("miss", prepared.size, 0)
+          caches.notePreparedLifecycle("release-failure", prepared.size)
+          caches.notePreparedLifecycle("admission-bypass", prepared.size)
+        }
+        return {
+          name: undefined,
+          outcome: db.recordPreparedCache === false ? "not-used" : "miss",
+          release: Effect.void
+        }
+      }
+      if (prepared.get(oldestName) === oldestEntry) prepared.delete(oldestName)
+      evictions++
+      if (db.recordPreparedCache !== false) caches.notePreparedLifecycle("physical-release", prepared.size)
     }
 
     // Complete registry admission synchronously before release effects can yield,
     // so concurrent executions always observe a registry within its bound.
-    const admitted: PreparedRegistryEntry = { sql: compiled.sql, leases: 1 }
+    const admitted: PreparedRegistryEntry = { sql: compiled.sql, leases: 1, evictionRequested: false }
     prepared.set(requested, admitted)
-    if (releasePrepared) {
-      for (const name of evictedNames) {
-        // Release failure is housekeeping, not a reason to fail the unrelated query.
-        yield* Effect.ignore(releasePrepared(name))
-      }
+    if (db.recordPreparedCache !== false) {
+      caches.notePrepared("miss", prepared.size, evictions)
+      caches.notePreparedLifecycle("admission", prepared.size)
     }
-    if (db.recordPreparedCache !== false) caches.notePrepared("miss", prepared.size, evictedNames.length)
     return {
       name: requested,
       outcome: db.recordPreparedCache === false ? "not-used" : "miss",
-      release: Effect.sync(() => {
-        admitted.leases--
-      })
+      release: leaseRelease(admitted)
     }
   })
 

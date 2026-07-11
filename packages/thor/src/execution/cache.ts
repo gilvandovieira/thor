@@ -70,6 +70,14 @@ export interface CacheLayerStats {
   readonly size: number | undefined
   /** Configured bound, or `undefined` when unbounded. */
   readonly maxSize: number | undefined
+  /** Native prepared resources admitted (prepared layer only). */
+  readonly admissions?: number
+  /** Shapes deliberately run unprepared because admission was unsafe or full. */
+  readonly admissionBypasses?: number
+  /** Successful physical finalize/unprepare operations. */
+  readonly physicalReleases?: number
+  /** Failed physical finalize/unprepare operations. */
+  readonly releaseFailures?: number
 }
 
 /**
@@ -334,6 +342,10 @@ export class QueryCaches {
   private preparedMisses = 0
   private preparedEvictions = 0
   private preparedSize = 0
+  private preparedAdmissions = 0
+  private preparedAdmissionBypasses = 0
+  private preparedPhysicalReleases = 0
+  private preparedReleaseFailures = 0
 
   /** Configured bound for each physical connection's prepared registry. */
   readonly preparedMaxSize: number
@@ -368,6 +380,25 @@ export class QueryCaches {
     this.preparedSize = size
   }
 
+  /**
+   * Records a physical prepared-resource lifecycle transition.
+   *
+   * @param event - Admission, capacity bypass, release, or release failure.
+   * @param size - Actual native-admitted registry size.
+   * @returns Nothing.
+   * @internal
+   */
+  notePreparedLifecycle(
+    event: "admission" | "admission-bypass" | "physical-release" | "release-failure",
+    size: number
+  ): void {
+    if (event === "admission") this.preparedAdmissions++
+    else if (event === "admission-bypass") this.preparedAdmissionBypasses++
+    else if (event === "physical-release") this.preparedPhysicalReleases++
+    else this.preparedReleaseFailures++
+    this.preparedSize = size
+  }
+
   /** @returns A snapshot of every layer's counters (spec §9, §19). */
   stats(): ReadonlyArray<CacheLayerStats> {
     return [
@@ -379,7 +410,11 @@ export class QueryCaches {
         misses: this.preparedMisses,
         evictions: this.preparedEvictions,
         size: this.preparedSize,
-        maxSize: this.preparedMaxSize
+        maxSize: this.preparedMaxSize,
+        admissions: this.preparedAdmissions,
+        admissionBypasses: this.preparedAdmissionBypasses,
+        physicalReleases: this.preparedPhysicalReleases,
+        releaseFailures: this.preparedReleaseFailures
       },
       this.decoder.stats(),
       this.capability.stats()
@@ -400,6 +435,10 @@ export class QueryCaches {
     this.preparedMisses = 0
     this.preparedEvictions = 0
     this.preparedSize = 0
+    this.preparedAdmissions = 0
+    this.preparedAdmissionBypasses = 0
+    this.preparedPhysicalReleases = 0
+    this.preparedReleaseFailures = 0
   }
 }
 

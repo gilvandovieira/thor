@@ -3,6 +3,7 @@ import { Effect, Layer, Schema } from "effect"
 import {
   Database,
   type DatabaseService,
+  DriverError,
   MySQLDialect,
   PostgresDialect,
   db,
@@ -212,6 +213,44 @@ describe("Epic L — withQueryCache wiring (spec §9.3)", () => {
 
     expect(driver.releasedPreparedNames).toHaveLength(3)
     expect(statOf(narrow, "prepared")).toMatchObject({ evictions: 3, size: 1, maxSize: 1 })
+  })
+
+  it("retains native registry truth and bypasses admission when physical release fails", async () => {
+    const recorder = new FakeDriver().enqueue({ rows: [] }, { rows: [] })
+    const physical = {}
+    const driver = {
+      ...recorder.driver,
+      preparedScope: physical,
+      releasePrepared: () => Effect.fail(new DriverError({ message: "unprepare failed" }))
+    }
+    const caches = makeQueryCaches({ preparedMaxSize: 1 })
+    const layer = Layer.succeed(Database, {
+      dialect: PostgresDialect,
+      driver,
+      allowEmulation: false,
+      preparedStatements: true,
+      queryCache: caches
+    } satisfies DatabaseService)
+    const first = db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.id, param("first", Schema.String)))
+    const second = db
+      .select({ email: users.email })
+      .from(users)
+      .where(eq(users.email, param("second", Schema.String)))
+
+    await run(first.all({ first: "u1" }), layer)
+    await run(second.all({ second: "a@example.com" }), layer)
+
+    expect(recorder.preparedNames).toEqual([first.toSql().cacheKey, undefined])
+    expect(statOf(caches, "prepared")).toMatchObject({
+      size: 1,
+      admissions: 1,
+      admissionBypasses: 1,
+      physicalReleases: 0,
+      releaseFailures: 1
+    })
   })
 
   it("default (no withQueryCache) still executes correctly", async () => {

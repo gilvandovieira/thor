@@ -195,8 +195,8 @@ export const makeMySQLDriver = (client: MySQLClient): Driver => {
               try: () => {
                 const sql = prepared.get(name)
                 if (!sql) return
-                prepared.delete(name)
                 unprepare(sql)
+                prepared.delete(name)
               },
               catch: mapMySQLDriverError
             })
@@ -205,8 +205,14 @@ export const makeMySQLDriver = (client: MySQLClient): Driver => {
     clearPrepared: () =>
       Effect.try({
         try: () => {
-          if (unprepare) for (const sql of prepared.values()) unprepare(sql)
-          prepared.clear()
+          if (!unprepare) {
+            prepared.clear()
+            return
+          }
+          for (const [name, sql] of prepared) {
+            unprepare(sql)
+            prepared.delete(name)
+          }
         },
         catch: mapMySQLDriverError
       })
