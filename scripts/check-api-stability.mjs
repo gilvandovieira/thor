@@ -1,10 +1,16 @@
 /**
- * Enforces the reviewed V1 stability anchors from spec §6.
+ * Enforces the reviewed public API from the manifest at docs/api-manifest.json
+ * (spec §6). The manifest is the single source of truth for every compatibility
+ * commitment; this checker verifies the implementation still matches it:
  *
- * This is intentionally narrower than the JSDoc audit: implementation helpers
- * need documentation, but only package-facing contracts need release stability
- * tags. The anchor list prevents the settled API families from silently losing
- * or changing classification as source files are split.
+ *   - each anchor declaration carries exactly its recorded stability tag;
+ *   - the package export map equals the manifest's reviewed subpath set;
+ *   - stable terminal methods, compiled-query methods, and error tags keep
+ *     their classification;
+ *   - the tagged-error set and capability-name set match the recorded snapshot
+ *     (so a removed or accidentally-added export/tag/capability fails loudly);
+ *   - internal IR/cache symbols never leak through the stable root;
+ *   - the v1 spec never re-lists a deferred terminal (stream) as stable.
  */
 import fs from "node:fs"
 import ts from "typescript"
@@ -13,49 +19,36 @@ const Stable = "stable"
 const Experimental = "experimental"
 const Internal = "internal"
 
-const anchors = [
-  ["packages/thor/src/schema/column.ts", "Column", Stable],
-  ["packages/thor/src/schema/table.ts", "defineTable", Stable],
-  ["packages/thor/src/schema/table.ts", "Select", Stable],
-  ["packages/thor/src/postgres/index.ts", "pg", Stable],
-  ["packages/thor/src/sqlite/index.ts", "sqlite", Stable],
-  ["packages/thor/src/mysql/index.ts", "mysql", Stable],
-  ["packages/thor/src/sql/query-builder.ts", "db", Stable],
-  ["packages/thor/src/sql/query-builder.ts", "SelectQuery", Stable],
-  ["packages/thor/src/sql/mutation-builder.ts", "ReturningQuery", Stable],
-  ["packages/thor/src/sql/query-builder.ts", "QueryReference", Stable],
-  ["packages/thor/src/sql/query-builder-support.ts", "PreparedQuery", Experimental],
-  ["packages/thor/src/execution/compiled-query.ts", "CompiledQuery", Stable],
-  ["packages/thor/src/execution/compiled-query.ts", "CompileOptions", Stable],
-  ["packages/thor/src/execution/plan.ts", "withMode", Experimental],
-  ["packages/thor/src/execution/plan.ts", "withQueryCache", Stable],
-  ["packages/thor/src/migrate/define-migration.ts", "MigrationDefinition", Stable],
-  ["packages/thor/src/migrate/define-migration.ts", "defineMigration", Stable],
-  ["packages/thor/src/migrate/migrator.ts", "MigratorService", Stable],
-  ["packages/thor/src/migrate/migrator.ts", "Migrator", Stable],
-  ["packages/thor/src/migrate/migration-ir.ts", "MigrationPlan", Stable],
-  ["packages/thor/src/errors/index.ts", "ThorError", Stable],
-  ["packages/thor/src/capabilities/capability.ts", "ALL_CAPABILITIES", Stable],
-  ["packages/thor/src/capabilities/capability.ts", "Capability", Stable],
-  ["packages/thor/src/capabilities/runtime.ts", "RuntimeCapabilityProfile", Experimental],
-  ["packages/thor/src/capabilities/runtime.ts", "detectRuntimeCapabilities", Experimental],
-  ["packages/thor/src/dialect.ts", "Dialect", Stable],
-  ["packages/thor/src/execution/driver.ts", "Driver", Stable],
-  ["packages/thor/src/testing/fake-driver.ts", "FakeDriver", Stable],
-  ["packages/thor/src/testing/fake-database-layer.ts", "FakeDatabaseLayer", Stable],
-  ["packages/thor/src/testing/expect-sql.ts", "expectSql", Stable],
-  ["packages/thor/src/testing/contract-suite.ts", "makeDialectContractSuite", Experimental],
-  ["packages/thor/src/observability/index.ts", "ObservabilityOptions", Stable],
-  ["packages/thor/src/observability/index.ts", "withObservability", Stable],
-  ["packages/thor/src/execution/cache.ts", "QueryCaches", Internal],
-  ["packages/thor/src/ir/query-ir.ts", "QueryIR", Internal],
-  ["packages/cli/src/commands.ts", "init", Stable],
-  ["packages/cli/src/commands.ts", "create", Stable],
-  ["packages/cli/src/commands.ts", "capabilities", Stable]
-]
+const manifest = JSON.parse(fs.readFileSync("docs/api-manifest.json", "utf8"))
+const anchors = manifest.anchors.map((entry) => [entry.file, entry.symbol, entry.stability])
 
 const errors = []
 const parsed = new Map()
+
+/**
+ * @param actual - Set found in the implementation.
+ * @param expected - Reviewed set from the manifest.
+ * @param label - Human-readable name of the set for diagnostics.
+ * @returns Nothing; records added/removed differences as errors.
+ */
+const diffSet = (actual, expected, label) => {
+  const actualSet = new Set(actual)
+  const expectedSet = new Set(expected)
+  for (const name of actualSet) {
+    if (!expectedSet.has(name)) {
+      errors.push(
+        `${label}: "${name}" is present in the implementation but not the reviewed manifest (added without review?)`
+      )
+    }
+  }
+  for (const name of expectedSet) {
+    if (!actualSet.has(name)) {
+      errors.push(
+        `${label}: manifest lists "${name}" but it is missing from the implementation (removed without review?)`
+      )
+    }
+  }
+}
 
 const sourceFor = (file) => {
   let source = parsed.get(file)
@@ -162,20 +155,39 @@ for (const statement of errorSource.statements) {
 }
 
 const rootSource = fs.readFileSync("packages/thor/src/index.ts", "utf8")
-for (const name of [
-  "QueryCaches",
-  "WeakCacheLayer",
-  "BoundedLruCache",
-  "makeQueryCaches",
-  "defaultQueryCaches",
-  "normalizeQuery",
-  "queryStructuralHash",
-  "collectQueryParams",
-  "queryCapabilityBits",
-  "QueryIR"
-]) {
+for (const name of manifest.rootSealedSymbols) {
   if (new RegExp(`\\b${name}\\b`).test(rootSource)) {
     errors.push(`packages/thor/src/index.ts: internal symbol ${name} must not be re-exported from the root`)
+  }
+}
+
+// The published subpath export map must equal the reviewed set exactly — a new
+// public entry point or a removed one is a compatibility event.
+const thorManifest = JSON.parse(fs.readFileSync("packages/thor/package.json", "utf8"))
+diffSet(Object.keys(thorManifest.exports ?? {}), manifest.exports, "package export map")
+
+// The tagged-error set is a stable contract (docs/errors.md). Snapshot it from
+// the Data.TaggedError declarations and diff against the manifest.
+const errorTags = [
+  ...fs.readFileSync("packages/thor/src/errors/index.ts", "utf8").matchAll(/Data\.TaggedError\("([A-Za-z]+)"\)/g)
+].map((match) => match[1])
+diffSet(errorTags, manifest.errorTags, "tagged-error set")
+
+// The capability-name set feeds guards, cache keys, and the CLI; a rename is a
+// contract change. Snapshot the `ALL_CAPABILITIES` string-literal array.
+const capabilitySource = fs.readFileSync("packages/thor/src/capabilities/capability.ts", "utf8")
+const capabilityBlock = capabilitySource.slice(
+  capabilitySource.indexOf("ALL_CAPABILITIES"),
+  capabilitySource.indexOf("] as const")
+)
+const capabilityNames = [...capabilityBlock.matchAll(/"([a-z]+\.[a-zA-Z]+)"/g)].map((match) => match[1])
+diffSet(capabilityNames, manifest.capabilities, "capability-name set")
+
+// Stable CLI commands must all exist as exported command functions.
+const cliSource = fs.readFileSync("packages/cli/src/commands.ts", "utf8")
+for (const command of manifest.cliCommands) {
+  if (!new RegExp(`export const ${command}\\b`).test(cliSource)) {
+    errors.push(`packages/cli/src/commands.ts: stable CLI command "${command}" is missing its exported implementation`)
   }
 }
 
@@ -191,5 +203,7 @@ if (errors.length > 0) {
   for (const error of errors) console.error(`- ${error}`)
   process.exitCode = 1
 } else {
-  console.log(`API stability audit passed for ${anchors.length} public contract anchors.`)
+  console.log(
+    `API stability audit passed: ${anchors.length} anchors, ${manifest.exports.length} exports, ${manifest.errorTags.length} error tags, ${manifest.capabilities.length} capabilities.`
+  )
 }

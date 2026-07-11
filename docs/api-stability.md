@@ -5,6 +5,14 @@ tags in the source and enforced by `scripts/check-api-stability.mjs` (part of
 `pnpm docs:check`). The tag on a declaration is the contract; it cannot drift
 silently.
 
+The reviewed public surface is recorded in [`docs/api-manifest.json`](./api-manifest.json)
+— export path, symbol, stability classification, and since-version for every
+anchor, plus the frozen export-map, tagged-error, capability-name, and stable
+CLI-command sets. The checker verifies the implementation against that manifest
+and fails when any of those sets gains or loses a member without a manifest
+update, so adding, removing, or reclassifying a public API is always a
+deliberate, reviewed change.
+
 ## Levels
 
 - **`@stable`** — the supported public surface. Breaking changes are a semver

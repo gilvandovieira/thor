@@ -1,0 +1,258 @@
+{
+  "$comment": "Reviewed public-API manifest (spec §6). The source of truth for scripts/check-api-stability.mjs. Every entry is a compatibility commitment: adding, removing, or reclassifying one is a deliberate, reviewed change. `since` is the release the symbol entered its current classification; `deprecated`/`removeIn` mark a scheduled removal.",
+  "baselineVersion": "0.1.0",
+  "exports": [
+    ".",
+    "./schema",
+    "./sql",
+    "./postgres",
+    "./sqlite",
+    "./mysql",
+    "./migrate",
+    "./testing",
+    "./routine",
+    "./relations",
+    "./capabilities",
+    "./observability",
+    "./introspect",
+    "./skills"
+  ],
+  "anchors": [
+    { "file": "packages/thor/src/schema/column.ts", "symbol": "Column", "stability": "stable", "since": "0.1.0" },
+    { "file": "packages/thor/src/schema/table.ts", "symbol": "defineTable", "stability": "stable", "since": "0.1.0" },
+    { "file": "packages/thor/src/schema/table.ts", "symbol": "Select", "stability": "stable", "since": "0.1.0" },
+    { "file": "packages/thor/src/postgres/index.ts", "symbol": "pg", "stability": "stable", "since": "0.1.0" },
+    { "file": "packages/thor/src/sqlite/index.ts", "symbol": "sqlite", "stability": "stable", "since": "0.1.0" },
+    { "file": "packages/thor/src/mysql/index.ts", "symbol": "mysql", "stability": "stable", "since": "0.1.0" },
+    { "file": "packages/thor/src/sql/query-builder.ts", "symbol": "db", "stability": "stable", "since": "0.1.0" },
+    {
+      "file": "packages/thor/src/sql/query-builder.ts",
+      "symbol": "SelectQuery",
+      "stability": "stable",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/sql/mutation-builder.ts",
+      "symbol": "ReturningQuery",
+      "stability": "stable",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/sql/query-builder.ts",
+      "symbol": "QueryReference",
+      "stability": "stable",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/sql/query-builder-support.ts",
+      "symbol": "PreparedQuery",
+      "stability": "experimental",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/execution/compiled-query.ts",
+      "symbol": "CompiledQuery",
+      "stability": "stable",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/execution/compiled-query.ts",
+      "symbol": "CompileOptions",
+      "stability": "stable",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/execution/plan.ts",
+      "symbol": "withMode",
+      "stability": "experimental",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/execution/plan.ts",
+      "symbol": "withQueryCache",
+      "stability": "stable",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/migrate/define-migration.ts",
+      "symbol": "MigrationDefinition",
+      "stability": "stable",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/migrate/define-migration.ts",
+      "symbol": "defineMigration",
+      "stability": "stable",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/migrate/migrator.ts",
+      "symbol": "MigratorService",
+      "stability": "stable",
+      "since": "0.1.0"
+    },
+    { "file": "packages/thor/src/migrate/migrator.ts", "symbol": "Migrator", "stability": "stable", "since": "0.1.0" },
+    {
+      "file": "packages/thor/src/migrate/migration-ir.ts",
+      "symbol": "MigrationPlan",
+      "stability": "stable",
+      "since": "0.1.0"
+    },
+    { "file": "packages/thor/src/errors/index.ts", "symbol": "ThorError", "stability": "stable", "since": "0.1.0" },
+    {
+      "file": "packages/thor/src/capabilities/capability.ts",
+      "symbol": "ALL_CAPABILITIES",
+      "stability": "stable",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/capabilities/capability.ts",
+      "symbol": "Capability",
+      "stability": "stable",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/capabilities/runtime.ts",
+      "symbol": "RuntimeCapabilityProfile",
+      "stability": "experimental",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/capabilities/runtime.ts",
+      "symbol": "detectRuntimeCapabilities",
+      "stability": "experimental",
+      "since": "0.1.0"
+    },
+    { "file": "packages/thor/src/dialect.ts", "symbol": "Dialect", "stability": "stable", "since": "0.1.0" },
+    { "file": "packages/thor/src/execution/driver.ts", "symbol": "Driver", "stability": "stable", "since": "0.1.0" },
+    {
+      "file": "packages/thor/src/testing/fake-driver.ts",
+      "symbol": "FakeDriver",
+      "stability": "stable",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/testing/fake-database-layer.ts",
+      "symbol": "FakeDatabaseLayer",
+      "stability": "stable",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/testing/expect-sql.ts",
+      "symbol": "expectSql",
+      "stability": "stable",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/testing/contract-suite.ts",
+      "symbol": "makeDialectContractSuite",
+      "stability": "experimental",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/observability/index.ts",
+      "symbol": "ObservabilityOptions",
+      "stability": "stable",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/observability/index.ts",
+      "symbol": "withObservability",
+      "stability": "stable",
+      "since": "0.1.0"
+    },
+    {
+      "file": "packages/thor/src/execution/cache.ts",
+      "symbol": "QueryCaches",
+      "stability": "internal",
+      "since": "0.1.0"
+    },
+    { "file": "packages/thor/src/ir/query-ir.ts", "symbol": "QueryIR", "stability": "internal", "since": "0.1.0" },
+    { "file": "packages/cli/src/commands.ts", "symbol": "init", "stability": "stable", "since": "0.1.0" },
+    { "file": "packages/cli/src/commands.ts", "symbol": "create", "stability": "stable", "since": "0.1.0" },
+    { "file": "packages/cli/src/commands.ts", "symbol": "capabilities", "stability": "stable", "since": "0.1.0" }
+  ],
+  "terminals": ["all", "one", "maybeOne", "run"],
+  "cliCommands": [
+    "init",
+    "create",
+    "generate",
+    "check",
+    "status",
+    "up",
+    "down",
+    "redo",
+    "drift",
+    "pull",
+    "introspect",
+    "inspect",
+    "doctor",
+    "capabilities",
+    "skills"
+  ],
+  "rootSealedSymbols": [
+    "QueryCaches",
+    "WeakCacheLayer",
+    "BoundedLruCache",
+    "makeQueryCaches",
+    "defaultQueryCaches",
+    "normalizeQuery",
+    "queryStructuralHash",
+    "collectQueryParams",
+    "queryCapabilityBits",
+    "QueryIR"
+  ],
+  "errorTags": [
+    "CapabilityError",
+    "CompileError",
+    "ConstraintError",
+    "DecodeError",
+    "DriverError",
+    "GuardError",
+    "IrreversibleMigrationError",
+    "MigrationError",
+    "NotFoundError",
+    "ParameterError",
+    "RoutineError",
+    "RuntimeCapabilityError",
+    "TimeoutError",
+    "TooManyRowsError",
+    "TransactionError"
+  ],
+  "capabilities": [
+    "insert.returning",
+    "update.returning",
+    "delete.returning",
+    "insert.onConflict",
+    "insert.onDuplicateKey",
+    "select.cte",
+    "select.recursiveCte",
+    "select.windowFunctions",
+    "select.lateralJoin",
+    "select.rightJoin",
+    "select.fullJoin",
+    "select.setOperations",
+    "select.forUpdate",
+    "transaction.savepoints",
+    "transaction.isolationLevel",
+    "schema.json",
+    "schema.array",
+    "schema.enum",
+    "schema.generatedColumns",
+    "schema.identityColumns",
+    "query.streaming",
+    "query.preparedStatements",
+    "routine.functionCall",
+    "routine.procedureCall",
+    "routine.tableValuedFunction",
+    "routine.namedArguments",
+    "routine.outParameters",
+    "routine.overloading",
+    "routine.variadicArguments",
+    "routine.defaultArguments",
+    "routine.schemaQualifiedName",
+    "routine.extensionRequired",
+    "migration.transactionalDdl",
+    "migration.rollbackDdl"
+  ]
+}
