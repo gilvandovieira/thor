@@ -5,6 +5,14 @@ tags in the source and enforced by `scripts/check-api-stability.mjs` (part of
 `pnpm docs:check`). The tag on a declaration is the contract; it cannot drift
 silently.
 
+The reviewed public surface is recorded in [`docs/api-manifest.json`](./api-manifest.json)
+— export path, symbol, stability classification, and since-version for every
+anchor, plus the frozen export-map, tagged-error, capability-name, and stable
+CLI-command sets. The checker verifies the implementation against that manifest
+and fails when any of those sets gains or loses a member without a manifest
+update, so adding, removing, or reclassifying a public API is always a
+deliberate, reviewed change.
+
 ## Levels
 
 - **`@stable`** — the supported public surface. Breaking changes are a semver
@@ -51,7 +59,12 @@ APIs still settling — usable, but the shape may change:
 Reachable but not contractual — do not depend on these shapes:
 
 - `QueryIR` and the IR node types
-- `QueryCaches` and the cache-layer internals
+- `normalizeQuery`, `queryStructuralHash`, and guard collectors
+- `QueryCaches`, cache registries/factories, and cache-layer implementations
+
+These symbols are not re-exported from the package root and have no public
+subpath. Tests and repository benchmarks import them from source because they
+verify implementation invariants, not consumer contracts.
 
 ## `inspect()` is stable-for-debug only
 

@@ -67,20 +67,34 @@ describe("benchmark reporting", () => {
   })
 
   it("validates runtime baselines and regression threshold boundaries", () => {
-    const baseline = validateBenchmarkBaseline({
-      schemaVersion: 1,
-      environment: { runtime: "node", version: "26.4.0", platform: "linux", architecture: "x64" },
-      measurement: { statistic: "median", samples: 5 },
-      metrics: { "point.cold": 10_000, "point.warm": 2_000 }
-    }, { runtime: "node", platform: "linux", architecture: "x64" }, ["point.cold", "point.warm"])
+    const baseline = validateBenchmarkBaseline(
+      {
+        schemaVersion: 1,
+        environment: { runtime: "node", version: "26.4.0", platform: "linux", architecture: "x64" },
+        measurement: { statistic: "median", samples: 5 },
+        metrics: { "point.cold": 10_000, "point.warm": 2_000 }
+      },
+      { runtime: "node", platform: "linux", architecture: "x64" },
+      ["point.cold", "point.warm"]
+    )
 
     expect(benchmarkRegressions({ "point.warm": 2_000 * BENCHMARK_REGRESSION_LIMIT }, baseline)).toEqual([])
     expect(benchmarkRegressions({ "point.warm": 2_000 * BENCHMARK_REGRESSION_LIMIT + 1 }, baseline)).toEqual([
       expect.objectContaining({ metric: "point.warm" })
     ])
-    expect(() => validateBenchmarkBaseline({ ...baseline, metrics: { "point.cold": -1 } }, { runtime: "node", platform: "linux", architecture: "x64" }, ["point.cold"])).toThrow(/metric/)
-    expect(() => validateBenchmarkBaseline(baseline, { runtime: "bun", platform: "linux", architecture: "x64" }, ["point.cold"])).toThrow(/environment/)
-    expect(benchmarkRegressions({ floor: 10_000 }, { ...baseline, metrics: { floor: BENCHMARK_GATE_MIN_NS - 1 } })).toEqual([])
+    expect(() =>
+      validateBenchmarkBaseline(
+        { ...baseline, metrics: { "point.cold": -1 } },
+        { runtime: "node", platform: "linux", architecture: "x64" },
+        ["point.cold"]
+      )
+    ).toThrow(/metric/)
+    expect(() =>
+      validateBenchmarkBaseline(baseline, { runtime: "bun", platform: "linux", architecture: "x64" }, ["point.cold"])
+    ).toThrow(/environment/)
+    expect(
+      benchmarkRegressions({ floor: 10_000 }, { ...baseline, metrics: { floor: BENCHMARK_GATE_MIN_NS - 1 } })
+    ).toEqual([])
   })
 
   it("enforces the cold-to-warm cache relationship", () => {

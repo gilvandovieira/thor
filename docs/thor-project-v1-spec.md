@@ -5,13 +5,13 @@
 > as the acceptance reference for the delivered Epics A–J foundation. See
 > [`README.md`](./README.md) for the full docs index.
 
-**Status:** Current — authoritative specification (supersedes the v0 spec)
+**Status:** Current — authoritative early-beta contract (supersedes the v0 spec)
 **Project placeholder name:** Thor Project
 **Package scope placeholder:** `@gilvandovieira`
 **Primary package:** `@gilvandovieira/thor`
 **CLI package:** `@gilvandovieira/cli`
 **CLI binary:** `thor`
-**Primary v1 goal:** Production-readiness for the Effect-native ORM/database toolkit defined in the v0 specification.
+**Primary v1 goal:** Production-readiness work for the Effect-native ORM/database toolkit defined in the v0 specification. This document distinguishes shipped early-beta behavior from deferred stable-release requirements.
 
 ---
 
@@ -209,27 +209,30 @@ Splitting may happen later only if one of these becomes true:
 
 ### 5.3 v1 subpath exports
 
-Expected v1 subpaths:
+Shipped v1 subpaths:
 
 ```txt
 @gilvandovieira/thor
 @gilvandovieira/thor/schema
 @gilvandovieira/thor/sql
-@gilvandovieira/thor/ir
 @gilvandovieira/thor/capabilities
-@gilvandovieira/thor/guards
 @gilvandovieira/thor/postgres
 @gilvandovieira/thor/sqlite
 @gilvandovieira/thor/mysql
 @gilvandovieira/thor/migrate
 @gilvandovieira/thor/testing
-@gilvandovieira/thor/bench
 @gilvandovieira/thor/routine
 @gilvandovieira/thor/relations
 @gilvandovieira/thor/introspect
 @gilvandovieira/thor/observability
-@gilvandovieira/thor/runtime
+@gilvandovieira/thor/skills
 ```
+
+Low-level IR, guard collectors, cache implementations, and normalization/hash
+helpers are internal and intentionally have no public subpath. Guard assertions
+for consumers live under `/testing`. Benchmarks are repository commands rather
+than an importable package API. Experimental runtime capability APIs live under
+`/capabilities`; a separate `/runtime` route is deferred.
 
 ### 5.4 Suggested v1 repository layout
 
@@ -311,7 +314,7 @@ v1 must define API stability explicitly.
 ```txt
 - schema DSL
 - fluent query builder
-- execution methods: all, one, maybeOne, run, stream
+- execution methods: all, one, maybeOne, run
 - compiled query API
 - migration file format
 - public tagged errors
@@ -351,6 +354,13 @@ query.inspect()
 ```
 
 `inspect()` should be stable enough for debugging and testing, but not necessarily stable enough for third-party compiler plugins in v1.
+
+`stream()` is deferred. The shipped `Driver` contract returns materialized row
+arrays and has no scoped cursor abstraction, so Thor must not present `.all()` as
+streaming. `query.streaming` remains a stable capability name but is
+`unsupported` for every shipped adapter until cursor lifetime, interruption,
+per-row decoding, transaction affinity, and observability are implemented and
+live-tested per driver.
 
 ---
 
@@ -557,6 +567,16 @@ compileUnsafeHot()
   Requires explicit unsafe opt-in and is available only for already validated paths.
 ```
 
+### 9.5 Prepared-resource lifecycle
+
+Prepared resources are scoped to a physical connection, not merely a query
+shape. A bounded query cache must also bound actual prepared admission on each
+connection. Eviction releases the client statement where the adapter exposes a
+safe release operation; otherwise the adapter executes non-admitted shapes
+unprepared rather than growing an unrelated resource cache. Scoped connection
+disposal clears retained resources. Compile-cache entries, observation counters,
+client handles, and server prepared statements are distinct concepts.
+
 ---
 
 ## 10. Safety and Performance Modes
@@ -695,6 +715,20 @@ Dialect-specific behavior belongs in:
 - dialect driver adapter
 - dialect routine definitions
 ```
+
+### 11.6 Pool-backed layer naming
+
+A layer named `PoolLayer` must borrow per operation and pin one connection only
+inside a transaction. A layer that acquires one connection for its entire
+lifetime must use an explicit dedicated-connection name. Thor's current
+node-postgres/mysql2 pool adapters are
+`PostgresDedicatedPoolConnectionLayer` and
+`MySQLDedicatedPoolConnectionLayer`; they provide affinity, not pool-wide
+concurrency.
+
+`preparedStatements` controls actual prepared execution. For mysql2, enabled
+parameterized execution uses `execute`; disabled execution uses `query` with
+bound values. Parameter-free statements use `query` in either mode.
 
 ---
 
@@ -988,7 +1022,7 @@ requirements so the Effect runtime can enforce safe execution.
 
 v0 supports manual and generated migrations. v1 makes migrations production-shaped.
 
-### 15.1 v1 migration features
+### 15.1 v1 migration features and limits
 
 ```txt
 - schema introspection
@@ -1000,10 +1034,17 @@ v0 supports manual and generated migrations. v1 makes migrations production-shap
 - migration checksums
 - transactional DDL capability awareness
 - environment policies
-- seed/backfill helpers
+- typed backfill helper
 - generated migration tests
 - routine/function/procedure DDL support
 ```
+
+The shipped generator is create-table-only. It does not infer column changes,
+renames, standalone index/constraint changes, enums, views, generated/identity
+alterations, or routine changes. `planExpandContract` is a narrow programmatic
+column-replacement helper, not a CLI `--strategy` generator, and its full
+add/backfill/require/drop sequence currently compiles end-to-end only for
+PostgreSQL. There is no dedicated seed workflow.
 
 ### 15.2 CLI commands
 
@@ -1042,7 +1083,7 @@ Migrator.check()
 Migrator.status()
 Migrator.up()
 Migrator.down()
-Migrator.drift()
+Migrator.drift() // legacy create-missing-table operations, not structural drift
 Migrator.dryRun()
 Migrator.apply(plan)
 ```
@@ -1078,7 +1119,7 @@ contract
 Example:
 
 ```sh
-thor generate rename_user_name_to_display_name --strategy expand-contract
+planExpandContract("rename_user_name_to_display_name", { ... })
 ```
 
 May generate:
@@ -1108,16 +1149,24 @@ create table _thor_migrations (
 
 Checksum mismatch should be a hard error by default.
 
+New journal rows use `sha256:v1:<digest>` over a canonical representation of all
+execution-relevant fields: ID, name, up/down representation, Effect revision,
+irreversible marker, and safety/phase metadata. Matching legacy unversioned
+FNV-1a rows remain readable without silent rewrite. Unknown algorithms fail
+clearly.
+
 ### 15.7 Migration invariant
 
 ```txt
 Migration invariant:
 
-The CLI and programmatic migration API must share the same schema IR,
-migration planner, guards, capability checks, and executor. Manual migrations
-and generated migrations are both represented as migration IR before execution.
-Destructive, irreversible, dialect-unsafe, or drifted migrations must be
-blocked unless explicitly approved by policy.
+Generated plans use migration IR, dialect compilation, and structural policy
+checks. Manual SQL and Effect migrations are opaque execution steps whose
+semantics cannot be inferred; they require explicit safety and phase metadata
+and use the same journal, lock, transaction, and policy executor. Structural
+drift is provided by `Introspector.drift`; legacy `Migrator.drift` reports only
+missing expected tables. Destructive, irreversible, dialect-unsafe, or drifted
+operations must be blocked unless explicitly approved by policy.
 ```
 
 ---
@@ -1149,7 +1198,7 @@ const drift = yield* Introspector.drift(expectedSchema)
 
 ### 16.4 Introspection output
 
-Introspection should produce Schema IR including:
+The shipped introspector produces Schema IR including:
 
 ```txt
 - tables
@@ -1157,13 +1206,11 @@ Introspection should produce Schema IR including:
 - indexes
 - constraints
 - foreign keys
-- enums
-- views
-- functions
-- procedures
-- extensions where supported
-- generated/identity columns where supported
 ```
+
+Types and defaults are recorded but deliberately not compared by drift. Enums,
+views, routines, extensions, unique/check constraints, and generated/identity
+metadata are deferred catalog surfaces.
 
 ### 16.5 Drift invariant
 
@@ -1416,7 +1463,7 @@ procedures
 transactions
 savepoints
 isolation levels
-streaming
+streaming (deferred; all shipped adapters report unsupported)
 prepared statements
 views
 ```
@@ -1802,7 +1849,7 @@ Covers:
 
 ```txt
 - queries are pure until execution
-- all/one/maybeOne/run/stream
+- all/one/maybeOne/run; streaming is deferred
 - typed errors
 - Effect Layers
 - Database service requirements

@@ -213,7 +213,8 @@ class CompiledQueryImpl<
   Error,
   D extends Dialect,
   Cardinality extends CompiledCardinality
-> implements CompiledQuery<Params, Output, Error, Database, D, Cardinality> {
+> implements CompiledQuery<Params, Output, Error, Database, D, Cardinality>
+{
   readonly cacheKey: string
   readonly capabilities: ReadonlySet<Capability>
   private readonly dialectId: string
@@ -270,9 +271,11 @@ class CompiledQueryImpl<
   execute(...args: ExecutionArguments<Params>): Effect.Effect<Output, Error, Database> {
     return Effect.flatMap(Database, (db) => {
       if (db.dialect.id !== this.dialectId || db.dialect.profileHash !== this.profileHash) {
-        return Effect.fail(new CompileError({
-          message: `Compiled query targets dialect profile "${this.dialectId}:${this.profileHash}" but execution provided "${db.dialect.id}:${db.dialect.profileHash}"`
-        })) as unknown as Effect.Effect<Output, Error>
+        return Effect.fail(
+          new CompileError({
+            message: `Compiled query targets dialect profile "${this.dialectId}:${this.profileHash}" but execution provided "${db.dialect.id}:${db.dialect.profileHash}"`
+          })
+        ) as unknown as Effect.Effect<Output, Error>
       }
 
       const service = this.applyPolicy(db)
@@ -299,12 +302,7 @@ class CompiledQueryImpl<
  * @param executor - Hot-path execution function for this terminal.
  * @returns The same Effect with a shape-only compile method.
  */
-export const compilableEffect = <
-  Params extends NamedParams,
-  Output,
-  Error,
-  Cardinality extends CompiledCardinality
->(
+export const compilableEffect = <Params extends NamedParams, Output, Error, Cardinality extends CompiledCardinality>(
   effect: Effect.Effect<Output, Error, Database>,
   ir: QueryIR,
   fields: ReadonlyArray<SelectionField>,
@@ -326,8 +324,10 @@ export const compilableEffect = <
     )
   }
   return Object.assign(effect, {
-    compile: <D extends Dialect = typeof PostgresDialect>(dialect: D = PostgresDialect as D, options: CompileOptions = {}) =>
-      build(dialect, options),
+    compile: <D extends Dialect = typeof PostgresDialect>(
+      dialect: D = PostgresDialect as D,
+      options: CompileOptions = {}
+    ) => build(dialect, options),
     compilePrepared: <D extends Dialect = typeof PostgresDialect>(dialect: D = PostgresDialect as D) =>
       build(dialect, { prepare: true }),
     compileUnsafeHot: <D extends Dialect = typeof PostgresDialect>(dialect: D = PostgresDialect as D) =>

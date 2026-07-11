@@ -4,7 +4,7 @@
  *
  * @module schema
  */
-import { Schema } from "effect"
+import type { Schema } from "effect"
 import { makeColumn } from "./column.js"
 import { codecs } from "./codecs.js"
 

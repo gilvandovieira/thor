@@ -9,8 +9,8 @@
  */
 import { Effect } from "effect"
 import { GuardError, type QueryError } from "../errors/index.js"
-import { Database } from "../execution/database.js"
-import type { AnyColumn } from "../schema/column.js"
+import type { Database } from "../execution/database.js"
+import { type AnyColumn, columnParamCodec } from "../schema/column.js"
 import { alias, type AnyTable, type Select, type Table, tableMeta } from "../schema/table.js"
 import type { ExprNode } from "../ir/query-ir.js"
 import { columnRef } from "../sql/expressions.js"
@@ -58,8 +58,9 @@ export interface Relations<Definitions extends RelationDefinitions = RelationDef
   readonly definitions: Definitions
 }
 
-type SameLength<Fields extends NonEmptyColumns, References extends NonEmptyColumns> =
-  References & { readonly length: Fields["length"] }
+type SameLength<Fields extends NonEmptyColumns, References extends NonEmptyColumns> = References & {
+  readonly length: Fields["length"]
+}
 
 /**
  * Declares a to-one relation.
@@ -102,7 +103,8 @@ export const many = <
 ): RelationDescriptor<"many", Fields, Target, References> => ({ kind: "many", target, ...config })
 
 /** @param columns - Key columns. @returns Their physical names. */
-const physicalNames = (columns: ReadonlyArray<AnyColumn>): ReadonlyArray<string> => columns.map((column) => column.def.name)
+const physicalNames = (columns: ReadonlyArray<AnyColumn>): ReadonlyArray<string> =>
+  columns.map((column) => column.def.name)
 
 /** @param left - First name tuple. @param right - Second name tuple. @returns Whether tuples are equal. */
 const sameNames = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
@@ -117,21 +119,36 @@ const sameNames = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): b
  */
 const validateRelation = (relation: AnyRelation, sourceName: string, relationName: string): void => {
   if (relation.fields.length === 0 || relation.fields.length !== relation.references.length) {
-    throw new GuardError({ guard: "relation-definition", message: `Relation "${sourceName}.${relationName}" requires equal non-empty key tuples` })
+    throw new GuardError({
+      guard: "relation-definition",
+      message: `Relation "${sourceName}.${relationName}" requires equal non-empty key tuples`
+    })
   }
   if (relation.fields.some((field) => field.def.table !== sourceName)) {
-    throw new GuardError({ guard: "relation-definition", message: `Relation "${sourceName}.${relationName}" has a source field from another table` })
+    throw new GuardError({
+      guard: "relation-definition",
+      message: `Relation "${sourceName}.${relationName}" has a source field from another table`
+    })
   }
   const target = tableMeta(relation.target)
   if (target.alias) {
-    throw new GuardError({ guard: "relation-definition", message: `Relation "${sourceName}.${relationName}" cannot target an aliased table` })
+    throw new GuardError({
+      guard: "relation-definition",
+      message: `Relation "${sourceName}.${relationName}" cannot target an aliased table`
+    })
   }
   if (relation.references.some((reference) => reference.def.table !== target.name)) {
-    throw new GuardError({ guard: "relation-definition", message: `Relation "${sourceName}.${relationName}" has a reference outside target "${target.name}"` })
+    throw new GuardError({
+      guard: "relation-definition",
+      message: `Relation "${sourceName}.${relationName}" has a reference outside target "${target.name}"`
+    })
   }
   for (let index = 0; index < relation.fields.length; index++) {
     if (relation.fields[index]!.def.dataType !== relation.references[index]!.def.dataType) {
-      throw new GuardError({ guard: "relation-definition", message: `Relation "${sourceName}.${relationName}" key types differ at position ${index}` })
+      throw new GuardError({
+        guard: "relation-definition",
+        message: `Relation "${sourceName}.${relationName}" key types differ at position ${index}`
+      })
     }
   }
 
@@ -142,21 +159,35 @@ const validateRelation = (relation: AnyRelation, sourceName: string, relationNam
     const referenced = field.def.references?.column()
     return referenced?.def.table === target.name && referenced.def.name === relation.references[index]?.def.name
   })
-  const hasReverseFk = targetForeignKeys.some((foreignKey) =>
-    sameNames(foreignKey.columns, referenceNames) &&
-    foreignKey.references.table === sourceName &&
-    sameNames(foreignKey.references.columns, sourceNames))
+  const hasReverseFk = targetForeignKeys.some(
+    (foreignKey) =>
+      sameNames(foreignKey.columns, referenceNames) &&
+      foreignKey.references.table === sourceName &&
+      sameNames(foreignKey.references.columns, sourceNames)
+  )
   if (relation.kind === "one" && !hasForwardFk) {
-    throw new GuardError({ guard: "relation-definition", message: `To-one relation "${sourceName}.${relationName}" must match a source foreign key` })
+    throw new GuardError({
+      guard: "relation-definition",
+      message: `To-one relation "${sourceName}.${relationName}" must match a source foreign key`
+    })
   }
   if (relation.kind === "many" && !hasReverseFk) {
-    throw new GuardError({ guard: "relation-definition", message: `To-many relation "${sourceName}.${relationName}" must match a target foreign key` })
+    throw new GuardError({
+      guard: "relation-definition",
+      message: `To-many relation "${sourceName}.${relationName}" must match a target foreign key`
+    })
   }
   if (relation.kind === "one") {
     const uniqueColumn = relation.references.length === 1 && relation.references[0]!.def.unique
-    const unique = uniqueColumn || sameNames(target.primaryKey, referenceNames) || target.uniqueConstraints.some((constraint) => sameNames(constraint.columns, referenceNames))
+    const unique =
+      uniqueColumn ||
+      sameNames(target.primaryKey, referenceNames) ||
+      target.uniqueConstraints.some((constraint) => sameNames(constraint.columns, referenceNames))
     if (!unique) {
-      throw new GuardError({ guard: "relation-definition", message: `To-one relation "${sourceName}.${relationName}" must reference a primary or unique key` })
+      throw new GuardError({
+        guard: "relation-definition",
+        message: `To-one relation "${sourceName}.${relationName}" must reference a primary or unique key`
+      })
     }
   }
 }
@@ -169,16 +200,20 @@ const validateRelation = (relation: AnyRelation, sourceName: string, relationNam
  * @param definitions - Relations grouped by physical source-table name.
  * @returns A validated graph retained for query inference.
  */
-export const defineRelations = <const Definitions extends RelationDefinitions>(definitions: Definitions): Relations<Definitions> => {
+export const defineRelations = <const Definitions extends RelationDefinitions>(
+  definitions: Definitions
+): Relations<Definitions> => {
   for (const [sourceName, relations] of Object.entries(definitions)) {
-    for (const [relationName, relation] of Object.entries(relations)) validateRelation(relation, sourceName, relationName)
+    for (const [relationName, relation] of Object.entries(relations))
+      validateRelation(relation, sourceName, relationName)
   }
   return { _tag: "Relations", definitions }
 }
 
 type TableName<T extends AnyTable> = T extends Table<infer Name, any> ? Name : string
-type DefinitionsFor<Graph extends RelationDefinitions, T extends AnyTable> =
-  TableName<T> extends keyof Graph ? Graph[TableName<T>] : Readonly<Record<string, never>>
+type DefinitionsFor<Graph extends RelationDefinitions, T extends AnyTable> = TableName<T> extends keyof Graph
+  ? Graph[TableName<T>]
+  : Readonly<Record<string, never>>
 type RelationTarget<Relation> = Relation extends RelationDescriptor<any, any, infer Target, any> ? Target : never
 
 /** @experimental Manual loader context, invoked once with all distinct source keys. */
@@ -206,8 +241,8 @@ export type RelationSelection<Definitions extends Readonly<Record<string, AnyRel
 type RelationValue<Relation> = Relation extends RelationDescriptor<"many", any, infer Target, any>
   ? ReadonlyArray<Select<Target>>
   : Relation extends RelationDescriptor<"one", any, infer Target, any>
-  ? Select<Target> | null
-  : never
+    ? Select<Target> | null
+    : never
 
 /** @experimental Nested result inferred from the selected relation edges. */
 export type RelationalRow<
@@ -222,7 +257,11 @@ type SelectedRelation = readonly [name: string, descriptor: AnyRelation, load: R
 /** @param table - Table to inspect. @param physical - Physical column name. @returns Application property name. */
 const applicationKey = (table: AnyTable, physical: string): string => {
   const entry = Object.entries(tableMeta(table).columns).find(([, column]) => column.def.name === physical)
-  if (!entry) throw new GuardError({ guard: "relation-identity", message: `Column "${tableMeta(table).name}.${physical}" is not mapped` })
+  if (!entry)
+    throw new GuardError({
+      guard: "relation-identity",
+      message: `Column "${tableMeta(table).name}.${physical}" is not mapped`
+    })
   return entry[0]
 }
 
@@ -237,14 +276,12 @@ const rowKey = (row: Row, table: AnyTable, columns: ReadonlyArray<AnyColumn>): R
  */
 const keyId = (key: ReadonlyArray<unknown>): string =>
   JSON.stringify(key, (_, value) =>
-    typeof value === "bigint"
-      ? ` bigint:${value}`
-      : value instanceof Date
-        ? value.toISOString()
-        : value)
+    typeof value === "bigint" ? ` bigint:${value}` : value instanceof Date ? value.toISOString() : value
+  )
 
 /** @param key - Key tuple. @returns Whether SQL equality can match it. */
-const matchableKey = (key: ReadonlyArray<unknown>): boolean => key.every((value) => value !== null && value !== undefined)
+const matchableKey = (key: ReadonlyArray<unknown>): boolean =>
+  key.every((value) => value !== null && value !== undefined)
 
 /** @param table - Table to select. @returns Application-keyed column selection. */
 const columnsOf = (table: AnyTable): Record<string, AnyColumn> => ({ ...tableMeta(table).columns })
@@ -254,7 +291,7 @@ const equality = (column: AnyColumn, value: unknown, name: string): ExprNode => 
   _tag: "Comparison",
   op: "=",
   left: columnRef(column),
-  right: { _tag: "Param", name, codec: column.def.codec, value }
+  right: { _tag: "Param", name, codec: columnParamCodec(column), value }
 })
 
 /** @param columns - Target key columns. @param keys - Source key tuples. @returns Batched predicate. */
@@ -263,7 +300,12 @@ const keysPredicate = (columns: ReadonlyArray<AnyColumn>, keys: ReadonlyArray<Re
     return {
       _tag: "InList",
       expr: columnRef(columns[0]!),
-      values: keys.map((key, index) => ({ _tag: "Param", name: `relation_${index}`, codec: columns[0]!.def.codec, value: key[0] })),
+      values: keys.map((key, index) => ({
+        _tag: "Param",
+        name: `relation_${index}`,
+        codec: columnParamCodec(columns[0]!),
+        value: key[0]
+      })),
       negated: false
     }
   }
@@ -273,7 +315,9 @@ const keysPredicate = (columns: ReadonlyArray<AnyColumn>, keys: ReadonlyArray<Re
     operands: keys.map((key, keyIndex) => ({
       _tag: "Logical",
       op: "and",
-      operands: columns.map((column, columnIndex) => equality(column, key[columnIndex], `relation_${keyIndex}_${columnIndex}`))
+      operands: columns.map((column, columnIndex) =>
+        equality(column, key[columnIndex], `relation_${keyIndex}_${columnIndex}`)
+      )
     }))
   }
 }
@@ -298,10 +342,16 @@ const selectedRelations = (
       throw new GuardError({ guard: "relation-strategy", message: `Relation "${name}" has an unknown strategy` })
     }
     if (load.strategy === "manual" && typeof load.load !== "function") {
-      throw new GuardError({ guard: "relation-manual-loader", message: `Manual relation "${name}" requires one batch loader` })
+      throw new GuardError({
+        guard: "relation-manual-loader",
+        message: `Manual relation "${name}" requires one batch loader`
+      })
     }
     if (load.strategy === "join" && tableMeta(descriptor.target).primaryKey.length === 0) {
-      throw new GuardError({ guard: "relation-identity", message: `Joined relation "${name}" requires a target primary key` })
+      throw new GuardError({
+        guard: "relation-identity",
+        message: `Joined relation "${name}" requires a target primary key`
+      })
     }
     selected.push([name, descriptor, load])
   }
@@ -331,52 +381,57 @@ const joinPredicate = (descriptor: AnyRelation, target: AnyTable): ExprNode => {
 const executeJoinedRoot = (
   rootTable: AnyTable,
   joins: ReadonlyArray<SelectedRelation>
-): Effect.Effect<ReadonlyArray<Row>, QueryError, Database> => Effect.gen(function* () {
-  const rootMeta = tableMeta(rootTable)
-  if (rootMeta.primaryKey.length === 0) {
-    return yield* Effect.fail(new GuardError({ guard: "relation-identity", message: `Joined root "${rootMeta.name}" requires a primary key` }))
-  }
-  const selection: Record<string, AnyColumn> = prefixedSelection("root", rootTable)
-  const aliases = joins.map(([name, descriptor], index) => {
-    const target = alias(descriptor.target, `thor_rel_${index}`)
-    Object.assign(selection, prefixedSelection(`rel_${index}`, target))
-    return { name, descriptor, target, prefix: `rel_${index}` }
-  })
-  let query: any = db.select(selection).from(rootTable)
-  for (const item of aliases) query = query.leftJoin(item.target, joinPredicate(item.descriptor, item.target))
-  const flat: ReadonlyArray<Row> = yield* (query.all() as Effect.Effect<ReadonlyArray<Row>, QueryError, Database>)
-  const roots = new Map<string, Row>()
-  const childSeen = new Map<string, Map<string, Set<string>>>()
-  for (const flatRow of flat) {
-    const root = unprefix(flatRow, "root", rootTable)
-    const rootIdentity = keyId(rootMeta.primaryKey.map((physical) => root[applicationKey(rootTable, physical)]))
-    let output = roots.get(rootIdentity)
-    if (!output) {
-      output = { ...root }
-      for (const { name, descriptor } of aliases) output[name] = descriptor.kind === "many" ? [] : null
-      roots.set(rootIdentity, output)
-      childSeen.set(rootIdentity, new Map())
+): Effect.Effect<ReadonlyArray<Row>, QueryError, Database> =>
+  Effect.gen(function* () {
+    const rootMeta = tableMeta(rootTable)
+    if (rootMeta.primaryKey.length === 0) {
+      return yield* Effect.fail(
+        new GuardError({ guard: "relation-identity", message: `Joined root "${rootMeta.name}" requires a primary key` })
+      )
     }
-    for (const { name, descriptor, prefix } of aliases) {
-      const child = unprefix(flatRow, prefix, descriptor.target)
-      const targetMeta = tableMeta(descriptor.target)
-      const identityValues = targetMeta.primaryKey.map((physical) => child[applicationKey(descriptor.target, physical)])
-      if (!matchableKey(identityValues)) continue
-      const identity = keyId(identityValues)
-      const byRelation = childSeen.get(rootIdentity)!
-      let seen = byRelation.get(name)
-      if (!seen) {
-        seen = new Set()
-        byRelation.set(name, seen)
+    const selection: Record<string, AnyColumn> = prefixedSelection("root", rootTable)
+    const aliases = joins.map(([name, descriptor], index) => {
+      const target = alias(descriptor.target, `thor_rel_${index}`)
+      Object.assign(selection, prefixedSelection(`rel_${index}`, target))
+      return { name, descriptor, target, prefix: `rel_${index}` }
+    })
+    let query: any = db.select(selection).from(rootTable)
+    for (const item of aliases) query = query.leftJoin(item.target, joinPredicate(item.descriptor, item.target))
+    const flat: ReadonlyArray<Row> = yield* query.all() as Effect.Effect<ReadonlyArray<Row>, QueryError, Database>
+    const roots = new Map<string, Row>()
+    const childSeen = new Map<string, Map<string, Set<string>>>()
+    for (const flatRow of flat) {
+      const root = unprefix(flatRow, "root", rootTable)
+      const rootIdentity = keyId(rootMeta.primaryKey.map((physical) => root[applicationKey(rootTable, physical)]))
+      let output = roots.get(rootIdentity)
+      if (!output) {
+        output = { ...root }
+        for (const { name, descriptor } of aliases) output[name] = descriptor.kind === "many" ? [] : null
+        roots.set(rootIdentity, output)
+        childSeen.set(rootIdentity, new Map())
       }
-      if (seen.has(identity)) continue
-      seen.add(identity)
-      if (descriptor.kind === "many") (output[name] as Row[]).push(child)
-      else output[name] = child
+      for (const { name, descriptor, prefix } of aliases) {
+        const child = unprefix(flatRow, prefix, descriptor.target)
+        const targetMeta = tableMeta(descriptor.target)
+        const identityValues = targetMeta.primaryKey.map(
+          (physical) => child[applicationKey(descriptor.target, physical)]
+        )
+        if (!matchableKey(identityValues)) continue
+        const identity = keyId(identityValues)
+        const byRelation = childSeen.get(rootIdentity)!
+        let seen = byRelation.get(name)
+        if (!seen) {
+          seen = new Set()
+          byRelation.set(name, seen)
+        }
+        if (seen.has(identity)) continue
+        seen.add(identity)
+        if (descriptor.kind === "many") (output[name] as Row[]).push(child)
+        else output[name] = child
+      }
     }
-  }
-  return [...roots.values()]
-})
+    return [...roots.values()]
+  })
 
 /** @param table - Root table. @returns One ordinary decoded root query. */
 const executeRoot = (table: AnyTable): Effect.Effect<ReadonlyArray<Row>, QueryError, Database> =>
@@ -397,9 +452,16 @@ const executeQueryBatches = (
   if (keys.length === 0) return Effect.succeed([])
   const batchSize = Math.max(1, Math.floor(800 / descriptor.references.length))
   return Effect.map(
-    Effect.forEach(chunks(keys, batchSize), (batch) =>
-      db.select(columnsOf(descriptor.target)).from(descriptor.target).where(keysPredicate(descriptor.references, batch)).all() as Effect.Effect<ReadonlyArray<Row>, QueryError, Database>,
-    { concurrency: 1 }),
+    Effect.forEach(
+      chunks(keys, batchSize),
+      (batch) =>
+        db
+          .select(columnsOf(descriptor.target))
+          .from(descriptor.target)
+          .where(keysPredicate(descriptor.references, batch))
+          .all() as Effect.Effect<ReadonlyArray<Row>, QueryError, Database>,
+      { concurrency: 1 }
+    ),
     (batches) => batches.flat()
   )
 }
@@ -409,32 +471,34 @@ const loadSeparateRelations = (
   parents: ReadonlyArray<Row>,
   rootTable: AnyTable,
   selected: ReadonlyArray<SelectedRelation>
-): Effect.Effect<ReadonlyArray<Row>, QueryError, Database> => Effect.gen(function* () {
-  for (const [name, descriptor, load] of selected) {
-    const unique = new Map<string, ReadonlyArray<unknown>>()
-    for (const parent of parents) {
-      const key = rowKey(parent, rootTable, descriptor.fields)
-      if (matchableKey(key)) unique.set(keyId(key), key)
+): Effect.Effect<ReadonlyArray<Row>, QueryError, Database> =>
+  Effect.gen(function* () {
+    for (const [name, descriptor, load] of selected) {
+      const unique = new Map<string, ReadonlyArray<unknown>>()
+      for (const parent of parents) {
+        const key = rowKey(parent, rootTable, descriptor.fields)
+        if (matchableKey(key)) unique.set(keyId(key), key)
+      }
+      const keys = [...unique.values()]
+      const children: ReadonlyArray<Row> =
+        load.strategy === "manual"
+          ? yield* load.load({ keys, relation: descriptor }) as Effect.Effect<ReadonlyArray<Row>, QueryError, Database>
+          : yield* executeQueryBatches(descriptor, keys)
+      const byKey = new Map<string, Row[]>()
+      for (const child of children) {
+        const identity = keyId(rowKey(child, descriptor.target, descriptor.references))
+        const existing = byKey.get(identity)
+        if (existing) existing.push(child)
+        else byKey.set(identity, [child])
+      }
+      for (const parent of parents) {
+        const key = rowKey(parent, rootTable, descriptor.fields)
+        const matches = matchableKey(key) ? (byKey.get(keyId(key)) ?? []) : []
+        parent[name] = descriptor.kind === "many" ? matches : (matches[0] ?? null)
+      }
     }
-    const keys = [...unique.values()]
-    const children: ReadonlyArray<Row> = load.strategy === "manual"
-      ? yield* (load.load({ keys, relation: descriptor }) as Effect.Effect<ReadonlyArray<Row>, QueryError, Database>)
-      : yield* executeQueryBatches(descriptor, keys)
-    const byKey = new Map<string, Row[]>()
-    for (const child of children) {
-      const identity = keyId(rowKey(child, descriptor.target, descriptor.references))
-      const existing = byKey.get(identity)
-      if (existing) existing.push(child)
-      else byKey.set(identity, [child])
-    }
-    for (const parent of parents) {
-      const key = rowKey(parent, rootTable, descriptor.fields)
-      const matches = matchableKey(key) ? byKey.get(keyId(key)) ?? [] : []
-      parent[name] = descriptor.kind === "many" ? matches : matches[0] ?? null
-    }
-  }
-  return parents
-})
+    return parents
+  })
 
 /**
  * @experimental Relation query bound to one table and graph.
@@ -443,7 +507,10 @@ const loadSeparateRelations = (
  */
 export class RelationalQuery<T extends AnyTable, Definitions extends Readonly<Record<string, AnyRelation>>> {
   /** @param table - Root table. @param definitions - Relations available from it. */
-  constructor(private readonly table: T, private readonly definitions: Definitions) {}
+  constructor(
+    private readonly table: T,
+    private readonly definitions: Definitions
+  ) {}
 
   /**
    * Executes an explicit relation plan without hidden N+1 behavior.
@@ -453,22 +520,29 @@ export class RelationalQuery<T extends AnyTable, Definitions extends Readonly<Re
    * @param options - Required explicit strategy for every included relation.
    * @returns An Effect yielding nested relation rows.
    */
-  findMany<const With extends RelationSelection<Definitions>>(
-    options: { readonly with: With }
-  ): Effect.Effect<ReadonlyArray<RelationalRow<T, Definitions, With>>, QueryError, Database> {
+  findMany<const With extends RelationSelection<Definitions>>(options: {
+    readonly with: With
+  }): Effect.Effect<ReadonlyArray<RelationalRow<T, Definitions, With>>, QueryError, Database> {
     return Effect.flatMap(
       Effect.try({
         try: () => selectedRelations(this.definitions, options.with),
-        catch: (cause) => cause instanceof GuardError
-          ? cause
-          : new GuardError({ guard: "relation-plan", message: `Relation planning failed: ${String(cause)}` })
+        catch: (cause) =>
+          cause instanceof GuardError
+            ? cause
+            : new GuardError({ guard: "relation-plan", message: `Relation planning failed: ${String(cause)}` })
       }),
       (selected) => {
         const joined = selected.filter(([, , load]) => load.strategy === "join")
         const separate = selected.filter(([, , load]) => load.strategy !== "join")
         const root = joined.length > 0 ? executeJoinedRoot(this.table, joined) : executeRoot(this.table)
         return Effect.map(
-          Effect.flatMap(root, (parents) => loadSeparateRelations(parents.map((parent) => ({ ...parent })), this.table, separate)),
+          Effect.flatMap(root, (parents) =>
+            loadSeparateRelations(
+              parents.map((parent) => ({ ...parent })),
+              this.table,
+              separate
+            )
+          ),
           (rows) => rows as ReadonlyArray<RelationalRow<T, Definitions, With>>
         )
       }

@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { Effect, Exit, Layer } from "effect"
 import pg from "pg"
-import { Database, db, eq, param, pg as t } from "@gilvandovieira/thor"
+import { type Database, db, eq, param, pg as t } from "@gilvandovieira/thor"
 import { PostgresLayer } from "@gilvandovieira/thor/postgres"
 import {
   Migrator,
@@ -36,12 +36,20 @@ const posts = t.table("posts", {
 const m1 = defineMigration({
   id: "0001_create_users",
   name: "create_users",
+  safety: "additive",
+  phase: "expand",
+  downSafety: "destructive",
+  downPhase: "contract",
   up: sql`create table users (id uuid primary key default gen_random_uuid(), email text not null unique, name text);`,
   down: sql`drop table users;`
 })
 const m2 = defineMigration({
   id: "0002_add_created_at",
   name: "add_created_at",
+  safety: "additive",
+  phase: "expand",
+  downSafety: "destructive",
+  downPhase: "contract",
   up: sql`alter table users add column created_at timestamptz not null default now();`,
   down: sql`alter table users drop column created_at;`
 })
@@ -49,6 +57,10 @@ const m3 = defineMigration({
   id: "0003_backfill_names",
   name: "backfill_names",
   revision: "1",
+  safety: "additive",
+  phase: "expand",
+  downSafety: "additive",
+  downPhase: "expand",
   up: rawSql`update users set name = email where name is null`,
   down: rawSql`select 1`
 })
@@ -57,7 +69,16 @@ describe.skipIf(!DATABASE_URL)("live migrator e2e (spec §13)", () => {
   let client: pg.Client
   let app: Layer.Layer<Migrator | Database>
 
-  const config = { migrations: [m1, m2, m3], schema: [users, posts], policy: "safe-only" as const }
+  // These tests exercise migration mechanics (apply/idempotent/rollback/journal),
+  // including rolling back a destructive `down`; policy *enforcement* is covered
+  // in migration-policy.test.ts. Run under a reviewed policy so a destructive
+  // rollback is permitted.
+  const config = {
+    migrations: [m1, m2, m3],
+    schema: [users, posts],
+    policy: "allow-reviewed-destructive" as const,
+    reviewed: true
+  }
 
   const mig = <A, E>(f: (m: MigratorService) => Effect.Effect<A, E>) => Effect.flatMap(Migrator, f)
   const run = <A, E>(eff: Effect.Effect<A, E, Migrator | Database>) => Effect.runPromise(Effect.provide(eff, app))
@@ -83,7 +104,7 @@ describe.skipIf(!DATABASE_URL)("live migrator e2e (spec §13)", () => {
   it("up() applies all pending migrations, runs SQL + Effect steps, and journals them", async () => {
     const entries = await run(mig((m) => m.up()))
     expect(entries.map((e) => e.id)).toEqual(["0001_create_users", "0002_add_created_at", "0003_backfill_names"])
-    for (const e of entries) expect(e.checksum).toMatch(/^[0-9a-f]{8}$/)
+    for (const e of entries) expect(e.checksum).toMatch(/^sha256:v1:[0-9a-f]{64}$/)
 
     // m2 added created_at; its presence proves the SQL step ran.
     const cols = await q(
@@ -124,7 +145,12 @@ describe.skipIf(!DATABASE_URL)("live migrator e2e (spec §13)", () => {
       up: sql`create table ok (id int); create table ok (id int);` // duplicate -> fails
     })
     const badApp = Layer.provideMerge(MigratorLive({ migrations: [bad] }), PostgresLayer(client))
-    const exit = await Effect.runPromiseExit(Effect.provide(mig((m) => m.up()), badApp))
+    const exit = await Effect.runPromiseExit(
+      Effect.provide(
+        mig((m) => m.up()),
+        badApp
+      )
+    )
     expect(Exit.isFailure(exit)).toBe(true)
 
     // Neither the table nor a journal row survived the rollback.
@@ -176,7 +202,11 @@ describe.skipIf(!DATABASE_URL)("live migrator e2e (spec §13)", () => {
       "create table users (id uuid primary key default gen_random_uuid(), email text not null unique, name text);"
     )
     const inserted = await run(
-      db.insert(users).values({ email: "lucas@example.com", name: "Lucas" }).returning({ id: users.id, email: users.email }).one()
+      db
+        .insert(users)
+        .values({ email: "lucas@example.com", name: "Lucas" })
+        .returning({ id: users.id, email: users.email })
+        .one()
     )
     expect(inserted.email).toBe("lucas@example.com")
 

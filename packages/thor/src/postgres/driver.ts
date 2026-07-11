@@ -55,6 +55,9 @@ export interface PgPool {
   readonly connect: () => Promise<PgPoolClient>
 }
 
+/** Per-connection prepared-name → SQL text guard (survives driver re-creation on pool leases). */
+const seenByClient = new WeakMap<object, Map<string, string>>()
+
 /**
  * Choose how to invoke node-postgres:
  *   - no params → simple protocol (allows multi-statement DDL);
@@ -66,16 +69,26 @@ export interface PgPool {
  * hashing to one name) would silently run the wrong statement. `seen` guards
  * against that: on a name/text mismatch we fall back to an unnamed query.
  *
+ * The guard is keyed by the *client object* (the physical connection), not the
+ * driver instance: pooled connections outlive the drivers created per lease
+ * (`PostgresDedicatedPoolConnectionLayer`), and a fresh per-driver map would
+ * forget names the connection still holds server-side.
+ *
  * @param client - Connected node-postgres-compatible client.
  * @returns A collision-aware query invocation function.
  */
 const makeCall = (client: PgClient) => {
-  const seen = new Map<string, string>()
+  let seen = seenByClient.get(client)
+  if (!seen) {
+    seen = new Map<string, string>()
+    seenByClient.set(client, seen)
+  }
+  const known = seen
   return (sql: string, params: ReadonlyArray<unknown>, name?: string): Promise<PgResult> => {
     if (params.length === 0) return client.query(sql)
     if (name) {
-      const priorText = seen.get(name)
-      if (priorText === undefined) seen.set(name, sql)
+      const priorText = known.get(name)
+      if (priorText === undefined) known.set(name, sql)
       if (priorText === undefined || priorText === sql) {
         return client.query({ text: sql, values: params, name })
       }
@@ -95,6 +108,7 @@ export const makePostgresDriver = (client: PgClient): Driver => {
   const call = makeCall(client)
   return {
     runtime: PostgresDriverRuntime,
+    preparedScope: client,
     query: (sql, params, name) =>
       Effect.tryPromise({ try: () => call(sql, params, name), catch: mapDriverError }).pipe(Effect.map((r) => r.rows)),
     execute: (sql, params, name) =>
@@ -138,26 +152,36 @@ export const PostgresLayer = (
 export const PostgresScopedLayer = (
   resource: PgClientResource,
   options: { readonly allowEmulation?: boolean; readonly preparedStatements?: boolean } = {}
-): Layer.Layer<Database, ReturnType<typeof mapDriverError>> => Layer.scoped(
-  Database,
-  Effect.acquireRelease(
-    Effect.tryPromise({ try: resource.acquire, catch: mapDriverError }),
-    (client) => Effect.tryPromise({ try: async () => resource.release(client), catch: mapDriverError }).pipe(Effect.orDie)
-  ).pipe(Effect.map((client): DatabaseService => ({
-    dialect: PostgresDialect,
-    driver: makePostgresDriver(client),
-    allowEmulation: options.allowEmulation ?? false,
-    preparedStatements: options.preparedStatements ?? true
-  })))
-)
+): Layer.Layer<Database, ReturnType<typeof mapDriverError>> =>
+  Layer.scoped(
+    Database,
+    Effect.acquireRelease(Effect.tryPromise({ try: resource.acquire, catch: mapDriverError }), (client) =>
+      Effect.tryPromise({ try: async () => resource.release(client), catch: mapDriverError }).pipe(Effect.orDie)
+    ).pipe(
+      Effect.map(
+        (client): DatabaseService => ({
+          dialect: PostgresDialect,
+          driver: makePostgresDriver(client),
+          allowEmulation: options.allowEmulation ?? false,
+          preparedStatements: options.preparedStatements ?? true
+        })
+      )
+    )
+  )
 
 /**
- * Acquires one dedicated pool connection for the lifetime of the layer.
+ * Acquires one dedicated pool connection for the lifetime of the layer. This is
+ * intentionally not an application-wide per-operation pool: all queries and
+ * nested transactions provided by the layer share this one physical connection.
  * @param pool - node-postgres-compatible pool.
  * @param options - Emulation and prepared-statement settings.
  * @returns A scoped Database layer.
  */
-export const PostgresPoolLayer = (
+export const PostgresDedicatedPoolConnectionLayer = (
   pool: PgPool,
   options: { readonly allowEmulation?: boolean; readonly preparedStatements?: boolean } = {}
-) => PostgresScopedLayer({ acquire: () => pool.connect(), release: (client) => (client as PgPoolClient).release() }, options)
+) =>
+  PostgresScopedLayer(
+    { acquire: () => pool.connect(), release: (client) => (client as PgPoolClient).release() },
+    options
+  )

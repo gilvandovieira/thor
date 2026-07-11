@@ -13,7 +13,8 @@ import {
   makeMigrator,
   migrationPhase,
   planExpandContract,
-  sql
+  sql,
+  unsafeSql
 } from "@gilvandovieira/thor/migrate"
 import type { MigrationDialect } from "../src/dialect.js"
 import { FakeDatabaseLayer, FakeDriver } from "@gilvandovieira/thor/testing"
@@ -28,18 +29,69 @@ const posts = pg.table("posts", {
 })
 
 // --- operation fixtures ------------------------------------------------------
-const dropTable: MigrationOperation = { _tag: "DropTable", table: "old", destructive: true, reversible: false, capabilities: [] }
-const createTable: MigrationOperation = { _tag: "CreateTable", table: "t", columns: [], primaryKey: [], destructive: false, reversible: true, capabilities: [] }
-const addNullable: MigrationOperation = { _tag: "AddColumn", table: "users", column: { name: "nick", type: "text", nullable: true }, destructive: false, reversible: true, capabilities: [] }
-const addRequired: MigrationOperation = { _tag: "AddColumn", table: "users", column: { name: "nick", type: "text", nullable: false }, destructive: false, reversible: true, capabilities: [] }
-const setNotNull: MigrationOperation = { _tag: "SetNotNull", table: "users", column: "nick", destructive: false, reversible: true, capabilities: [] }
-const rawSql: MigrationOperation = { _tag: "RawSql", sql: "vacuum", unchecked: true, destructive: false, reversible: false, capabilities: [] }
+const dropTable: MigrationOperation = {
+  _tag: "DropTable",
+  table: "old",
+  destructive: true,
+  reversible: false,
+  capabilities: []
+}
+const createTable: MigrationOperation = {
+  _tag: "CreateTable",
+  table: "t",
+  columns: [],
+  primaryKey: [],
+  destructive: false,
+  reversible: true,
+  capabilities: []
+}
+const addNullable: MigrationOperation = {
+  _tag: "AddColumn",
+  table: "users",
+  column: { name: "nick", type: "text", nullable: true },
+  destructive: false,
+  reversible: true,
+  capabilities: []
+}
+const addRequired: MigrationOperation = {
+  _tag: "AddColumn",
+  table: "users",
+  column: { name: "nick", type: "text", nullable: false },
+  destructive: false,
+  reversible: true,
+  capabilities: []
+}
+const setNotNull: MigrationOperation = {
+  _tag: "SetNotNull",
+  table: "users",
+  column: "nick",
+  destructive: false,
+  reversible: true,
+  capabilities: []
+}
+const rawSql: MigrationOperation = {
+  _tag: "RawSql",
+  sql: "vacuum",
+  unchecked: true,
+  destructive: false,
+  reversible: false,
+  capabilities: []
+}
 
 describe("Epic O3 — expand/contract classification (spec §15.5)", () => {
   it("classifies additive, non-breaking operations as expand", () => {
     expect(migrationPhase(createTable)).toBe("expand")
     expect(migrationPhase(addNullable)).toBe("expand")
-    expect(migrationPhase({ _tag: "DropNotNull", table: "users", column: "name", destructive: false, reversible: true, capabilities: [] })).toBe("expand")
+    expect(
+      migrationPhase({
+        _tag: "DropNotNull",
+        table: "users",
+        column: "name",
+        destructive: false,
+        reversible: true,
+        capabilities: []
+      })
+    ).toBe("expand")
     expect(isExpandOperation(addNullable)).toBe(true)
   })
 
@@ -47,7 +99,16 @@ describe("Epic O3 — expand/contract classification (spec §15.5)", () => {
     expect(migrationPhase(dropTable)).toBe("contract")
     expect(migrationPhase(addRequired)).toBe("contract") // required column breaks old inserts
     expect(migrationPhase(setNotNull)).toBe("contract")
-    expect(migrationPhase({ _tag: "AddColumn", table: "users", column: { name: "u", type: "text", nullable: true, unique: true }, destructive: false, reversible: true, capabilities: [] })).toBe("contract")
+    expect(
+      migrationPhase({
+        _tag: "AddColumn",
+        table: "users",
+        column: { name: "u", type: "text", nullable: true, unique: true },
+        destructive: false,
+        reversible: true,
+        capabilities: []
+      })
+    ).toBe("contract")
   })
 })
 
@@ -64,14 +125,19 @@ describe("Epic O3 — migration policies (spec §15.4)", () => {
   })
 
   it("allow-reviewed-destructive gates destructive ops on an explicit review", () => {
-    expect(guardOperations([dropTable], "allow-reviewed-destructive", { reviewed: false }))
-      .toEqual([expect.objectContaining({ guard: "destructive-migration", message: expect.stringContaining("reviewed run") })])
+    expect(guardOperations([dropTable], "allow-reviewed-destructive", { reviewed: false })).toEqual([
+      expect.objectContaining({ guard: "destructive-migration", message: expect.stringContaining("reviewed run") })
+    ])
     expect(guardOperations([dropTable, rawSql], "allow-reviewed-destructive", { reviewed: true })).toEqual([])
   })
 
   it("disabled and validate-only block every operation", () => {
-    expect(guardOperations([createTable], "disabled")).toEqual([expect.objectContaining({ guard: "migrations-disabled" })])
-    expect(guardOperations([createTable], "validate-only")).toEqual([expect.objectContaining({ guard: "validate-only" })])
+    expect(guardOperations([createTable], "disabled")).toEqual([
+      expect.objectContaining({ guard: "migrations-disabled" })
+    ])
+    expect(guardOperations([createTable], "validate-only")).toEqual([
+      expect.objectContaining({ guard: "validate-only" })
+    ])
   })
 
   it("the deprecated allow-destructive alias permits everything", () => {
@@ -95,7 +161,10 @@ describe("Epic O2 — expand/contract generator (spec §15.5)", () => {
       "rename_name_to_display_4_contract"
     ])
     // The added column is forced nullable in the expand phase, no matter the input.
-    expect(plans[0]!.operations[0]).toMatchObject({ _tag: "AddColumn", column: { name: "display_name", nullable: true } })
+    expect(plans[0]!.operations[0]).toMatchObject({
+      _tag: "AddColumn",
+      column: { name: "display_name", nullable: true }
+    })
     expect(plans[1]!.operations[0]).toMatchObject({ _tag: "RawSql", sql: "update users set display_name = name" })
     expect(plans[2]!.operations[0]).toMatchObject({ _tag: "SetNotNull", column: "display_name" })
     expect(plans[3]!.operations[0]).toMatchObject({ _tag: "DropColumn", column: "name", destructive: true })
@@ -149,7 +218,13 @@ const harness = (options: HarnessOptions = {}) => {
       Effect.sync(() => {
         calls.push(statement)
         if (statement === "read") {
-          return journal.map((e) => ({ id: e.id, name: e.name, checksum: e.checksum, applied_at: e.appliedAt, execution_time_ms: e.executionTimeMs }))
+          return journal.map((e) => ({
+            id: e.id,
+            name: e.name,
+            checksum: e.checksum,
+            applied_at: e.appliedAt,
+            execution_time_ms: e.executionTimeMs
+          }))
         }
         return []
       }),
@@ -157,7 +232,13 @@ const harness = (options: HarnessOptions = {}) => {
       Effect.sync(() => {
         calls.push(statement)
         if (statement === "insert") {
-          journal.push({ id: String(params[0]), name: String(params[1]), checksum: String(params[2]), appliedAt: params[3] as Date, executionTimeMs: Number(params[4]) })
+          journal.push({
+            id: String(params[0]),
+            name: String(params[1]),
+            checksum: String(params[2]),
+            appliedAt: params[3] as Date,
+            executionTimeMs: Number(params[4])
+          })
         }
         return { rowCount: 0 }
       }),
@@ -187,7 +268,9 @@ describe("Epic O1 — diff, plan, dryRun (spec §15.3)", () => {
 
   it("plan produces a guarded, reviewable migration plan", async () => {
     const h = harness()
-    const plan = await h.run(Effect.flatMap(makeMigrator({ schema: [users, posts] }), (m) => m.plan("add_posts", ["users"])))
+    const plan = await h.run(
+      Effect.flatMap(makeMigrator({ schema: [users, posts] }), (m) => m.plan("add_posts", ["users"]))
+    )
     expect(plan.name).toBe("add_posts")
     expect(plan.operations.map((o) => o._tag)).toEqual(["CreateTable"])
   })
@@ -195,7 +278,9 @@ describe("Epic O1 — diff, plan, dryRun (spec §15.3)", () => {
   it("dryRun previews pending migrations and their SQL without applying", async () => {
     const first = defineMigration({ id: "0001_a", name: "a", up: sql`create table a ()` })
     const second = defineMigration({ id: "0002_b", name: "b", up: sql`create table b ()` })
-    const h = harness({ journal: [{ id: "0001_a", name: "a", checksum: "x", appliedAt: new Date(), executionTimeMs: 0 }] })
+    const h = harness({
+      journal: [{ id: "0001_a", name: "a", checksum: "x", appliedAt: new Date(), executionTimeMs: 0 }]
+    })
     const report = await h.run(Effect.flatMap(makeMigrator({ migrations: [first, second] }), (m) => m.dryRun()))
     expect(report.pending).toEqual([{ id: "0002_b", name: "b", kind: "sql", statements: ["create table b ()"] }])
     // Nothing was written: the journal insert was never issued.
@@ -204,20 +289,24 @@ describe("Epic O1 — diff, plan, dryRun (spec §15.3)", () => {
 
   it("apply is policy-guarded: a destructive plan is blocked under safe-only", async () => {
     const h = harness()
-    const exit = await h.run(Effect.flip(Effect.flatMap(
-      makeMigrator({ policy: "safe-only" }),
-      (m) => m.apply({ id: "9001_drop", name: "drop", operations: [dropTable] })
-    )))
+    const exit = await h.run(
+      Effect.flip(
+        Effect.flatMap(makeMigrator({ policy: "safe-only" }), (m) =>
+          m.apply({ id: "9001_drop", name: "drop", operations: [dropTable] })
+        )
+      )
+    )
     expect(exit).toMatchObject({ _tag: "MigrationError" })
     expect(h.calls).not.toContain("script") // never reached the driver
   })
 
   it("apply proceeds for a reviewed destructive run", async () => {
     const h = harness()
-    const entry = await h.run(Effect.flatMap(
-      makeMigrator({ policy: "allow-reviewed-destructive", reviewed: true }),
-      (m) => m.apply({ id: "9002_drop", name: "drop", operations: [dropTable] })
-    ))
+    const entry = await h.run(
+      Effect.flatMap(makeMigrator({ policy: "allow-reviewed-destructive", reviewed: true }), (m) =>
+        m.apply({ id: "9002_drop", name: "drop", operations: [dropTable] })
+      )
+    )
     expect(entry.id).toBe("9002_drop")
     expect(h.scripts.join("\n")).toContain("drop table")
   })
@@ -225,18 +314,38 @@ describe("Epic O1 — diff, plan, dryRun (spec §15.3)", () => {
 
 describe("Epic O6 — routine/function DDL (spec §15.1, §14)", () => {
   const createFn: MigrationOperation = {
-    _tag: "CreateRoutine", routine: "function", name: "add_one",
-    args: [{ name: "n", type: "integer" }], returns: "integer", language: "sql",
-    body: "select n + 1", replace: true, destructive: false, reversible: true, capabilities: []
+    _tag: "CreateRoutine",
+    routine: "function",
+    name: "add_one",
+    args: [{ name: "n", type: unsafeSql("integer") }],
+    returns: unsafeSql("integer"),
+    language: unsafeSql("sql"),
+    body: unsafeSql("select n + 1"),
+    replace: true,
+    destructive: false,
+    reversible: true,
+    capabilities: []
   }
   const createProc: MigrationOperation = {
-    _tag: "CreateRoutine", routine: "procedure", name: "do_it",
-    args: [{ name: "x", type: "integer" }], language: "sql", body: "begin end",
-    destructive: false, reversible: true, capabilities: []
+    _tag: "CreateRoutine",
+    routine: "procedure",
+    name: "do_it",
+    args: [{ name: "x", type: unsafeSql("integer") }],
+    language: unsafeSql("sql"),
+    body: unsafeSql("begin end"),
+    destructive: false,
+    reversible: true,
+    capabilities: []
   }
   const dropFn: MigrationOperation = {
-    _tag: "DropRoutine", routine: "function", name: "add_one",
-    args: [{ type: "integer" }], ifExists: true, destructive: true, reversible: false, capabilities: []
+    _tag: "DropRoutine",
+    routine: "function",
+    name: "add_one",
+    args: [{ type: unsafeSql("integer") }],
+    ifExists: true,
+    destructive: true,
+    reversible: false,
+    capabilities: []
   }
 
   it("classifies create as expand and drop as contract", () => {
@@ -247,19 +356,20 @@ describe("Epic O6 — routine/function DDL (spec §15.1, §14)", () => {
   })
 
   it("compiles PostgreSQL function/procedure DDL", () => {
-    expect(PostgresDialect.migrations.compileOperation(createFn))
-      .toBe(`create or replace function "add_one"("n" integer) returns integer language sql as $$select n + 1$$;`)
-    expect(PostgresDialect.migrations.compileOperation(createProc))
-      .toBe(`create procedure "do_it"("x" integer) language sql as $$begin end$$;`)
-    expect(PostgresDialect.migrations.compileOperation(dropFn))
-      .toBe(`drop function if exists "add_one"(integer);`)
+    expect(PostgresDialect.migrations.compileOperation(createFn)).toBe(
+      `create or replace function "add_one"("n" integer) returns integer language sql as $$select n + 1$$;`
+    )
+    expect(PostgresDialect.migrations.compileOperation(createProc)).toBe(
+      `create procedure "do_it"("x" integer) language sql as $$begin end$$;`
+    )
+    expect(PostgresDialect.migrations.compileOperation(dropFn)).toBe(`drop function if exists "add_one"(integer);`)
   })
 
   it("compiles MySQL routine DDL (no OR REPLACE, no arg list on drop)", () => {
-    expect(MySQLDialect.migrations.compileOperation(createFn))
-      .toBe("create function `add_one`(`n` integer) returns integer select n + 1")
-    expect(MySQLDialect.migrations.compileOperation(dropFn))
-      .toBe("drop function if exists `add_one`;")
+    expect(MySQLDialect.migrations.compileOperation(createFn)).toBe(
+      "create function `add_one`(`n` integer) returns integer select n + 1"
+    )
+    expect(MySQLDialect.migrations.compileOperation(dropFn)).toBe("drop function if exists `add_one`;")
   })
 
   it("rejects stored routines on SQLite before the driver", () => {

@@ -3,7 +3,7 @@ import { Effect, Option, Schema } from "effect"
 import {
   CapabilityError,
   CompileError,
-  Database,
+  type Database,
   MySQLDialect,
   PostgresDialect,
   db,
@@ -37,14 +37,9 @@ describe("compiled query API (v1 spec §8)", () => {
     expect(FindUserByEmail.cardinality).toBe("one")
     expect(FindUserByEmail.capabilities).toEqual(new Set())
 
-    expectTypeOf(FindUserByEmail).toMatchTypeOf<CompiledQuery<
-      { email: string },
-      { id: string; email: string },
-      unknown,
-      Database,
-      typeof PostgresDialect,
-      "one"
-    >>()
+    expectTypeOf(FindUserByEmail).toMatchTypeOf<
+      CompiledQuery<{ email: string }, { id: string; email: string }, unknown, Database, typeof PostgresDialect, "one">
+    >()
   })
 
   it("binds values per execution without changing SQL, cache identity, or prepared identity", async () => {
@@ -58,10 +53,7 @@ describe("compiled query API (v1 spec §8)", () => {
 
     expect(ada).toEqual({ id: "u1", email: "ada@example.com" })
     expect(grace).toEqual({ id: "u2", email: "grace@example.com" })
-    expect(driver.calls.map((call) => call.params)).toEqual([
-      ["ada@example.com"],
-      ["grace@example.com"]
-    ])
+    expect(driver.calls.map((call) => call.params)).toEqual([["ada@example.com"], ["grace@example.com"]])
     expect(driver.calls[0]!.sql).toBe(driver.calls[1]!.sql)
     expect(driver.preparedNames).toEqual([FindUserByEmail.cacheKey, FindUserByEmail.cacheKey])
   })
@@ -87,9 +79,14 @@ describe("compiled query API (v1 spec §8)", () => {
   it("rejects a mismatched dialect profile before binding or calling the driver", async () => {
     const driver = new FakeDriver()
     const error = await Effect.runPromise(
-      Effect.flip(Effect.provide(FindUserByEmail.execute({ email: "a@example.com" }), FakeDatabaseLayer(driver, {
-        dialect: MySQLDialect
-      })))
+      Effect.flip(
+        Effect.provide(
+          FindUserByEmail.execute({ email: "a@example.com" }),
+          FakeDatabaseLayer(driver, {
+            dialect: MySQLDialect
+          })
+        )
+      )
     )
 
     expect(error).toBeInstanceOf(CompileError)
@@ -118,17 +115,15 @@ describe("compiled query API (v1 spec §8)", () => {
     expect(maybeOne.cardinality).toBe("maybeOne")
     expect(command.cardinality).toBe("run")
 
-    await expect(run(all.execute(), new FakeDriver().enqueue({ rows: [{ id: "u1" }] }))).resolves.toEqual([{ id: "u1" }])
+    await expect(run(all.execute(), new FakeDriver().enqueue({ rows: [{ id: "u1" }] }))).resolves.toEqual([
+      { id: "u1" }
+    ])
     await expect(run(maybeOne.execute(), new FakeDriver().enqueue({ rows: [] }))).resolves.toEqual(Option.none())
     await expect(run(command.execute(), new FakeDriver().enqueue({ rowCount: 2 }))).resolves.toEqual({ rowCount: 2 })
   })
 
   it("rejects inline values because compiled handles represent shapes only", () => {
-    const terminal = db
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.email, "captured@example.com"))
-      .one()
+    const terminal = db.select({ id: users.id }).from(users).where(eq(users.email, "captured@example.com")).one()
 
     expect(() => terminal.compile()).toThrow(/cannot capture value/i)
   })

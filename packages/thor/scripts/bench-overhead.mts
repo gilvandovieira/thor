@@ -46,7 +46,7 @@ const layerFor = (rows: ReadonlyArray<Record<string, unknown>>) =>
 
 const oneRow = [{ id: "018f0000-0000-7000-8000-000000000000", email: "a@b.c" }]
 const bulkRows = Array.from({ length: 100 }, (_, i) => ({
-  id: "018f0000-0000-7000-8000-0000000000" + String(i).padStart(2, "0"),
+  id: `018f0000-0000-7000-8000-0000000000${String(i).padStart(2, "0")}`,
   email: `u${i}@b.c`,
   name: i % 2 ? null : `n${i}`,
   age: i
@@ -89,16 +89,14 @@ const rows: Row[] = [
   timeSync("execute bulk .all() [100 rows]", 30_000, () => void bulkRt.runSync(builtBulk.all()))
 ]
 
-console.log("\nThor own-code overhead — what Thor adds before the database\n" + "-".repeat(105))
+console.log(`\nThor own-code overhead — what Thor adds before the database\n${"-".repeat(105)}`)
 console.log(timingLegend(rows[0]!.sampleCount))
 console.log("No database, disk, or network time is included. Throughput is only an equivalent for comparison.\n")
 console.log(
   `  ${"work".padEnd(48)} ${"typical".padStart(10)} ${"range".padStart(19)} ${"equivalent".padStart(17)}  consistency`
 )
 for (const r of rows) {
-  const label = r.label.startsWith("decode 100")
-    ? `${r.label} (${formatDuration(r.nsPerOp / 100)}/row)`
-    : r.label
+  const label = r.label.startsWith("decode 100") ? `${r.label} (${formatDuration(r.nsPerOp / 100)}/row)` : r.label
   console.log(
     `  ${label.padEnd(48)} ${formatDuration(r.nsPerOp).padStart(10)} ${formatRange(r).padStart(19)} ${formatThroughput(r.opsPerSec).padStart(17)}  ${noiseLabel(r)}`
   )
@@ -107,11 +105,15 @@ for (const r of rows) {
 const pointNs = rows.find((r) => r.label.startsWith("execute point"))!.nsPerOp
 const illustrativeDbNs = 150_000
 console.log("\nIn everyday terms:")
-console.log(`  • A complete one-row trip through Thor takes ${formatDuration(pointNs)} before real database waiting time.`)
+console.log(
+  `  • A complete one-row trip through Thor takes ${formatDuration(pointNs)} before real database waiting time.`
+)
 console.log(
   `  • Against an illustrative 150 µs local database round-trip, that is about ${((pointNs / illustrativeDbNs) * 100).toFixed(1)}% of the total; a real network usually makes the percentage smaller.`
 )
-console.log("  • The range matters: if it is wide or marked noisy, rerun before drawing conclusions from a small difference.")
+console.log(
+  "  • The range matters: if it is wide or marked noisy, rerun before drawing conclusions from a small difference."
+)
 console.log()
 
 await oneRt.dispose()

@@ -5,6 +5,7 @@
  * @module migrate/migration-ir
  */
 import type { SqlDataType } from "../schema/column.js"
+import type { UnsafeSqlNode } from "../ir/query-ir.js"
 
 /** Typed literal accepted as a generated DDL default. */
 export type DefaultLiteral = string | number | bigint | boolean | null | Date
@@ -136,10 +137,10 @@ export interface RawSqlOp extends OpBase {
 /** Whether a routine is a value-returning function or a called procedure. */
 export type RoutineKind = "function" | "procedure"
 
-/** A routine argument. `type` is trusted dialect SQL type text (never interpolated user data). */
+/** A routine argument. SQL type syntax requires an explicit `unsafeSql` boundary. */
 export interface RoutineArgSpec {
   readonly name?: string
-  readonly type: string
+  readonly type: UnsafeSqlNode
 }
 
 /**
@@ -153,11 +154,11 @@ export interface CreateRoutineOp extends OpBase {
   readonly name: string
   readonly args: ReadonlyArray<RoutineArgSpec>
   /** Return type SQL for functions; ignored for procedures. */
-  readonly returns?: string
-  /** Routine language (e.g. `sql`, `plpgsql`). */
-  readonly language: string
-  /** Trusted routine body. */
-  readonly body: string
+  readonly returns?: UnsafeSqlNode
+  /** Routine language syntax (e.g. `unsafeSql("sql")`). */
+  readonly language: UnsafeSqlNode
+  /** Explicitly unsafe, dialect-specific routine body. */
+  readonly body: UnsafeSqlNode
   /** Emit `CREATE OR REPLACE` where the dialect supports it. */
   readonly replace?: boolean
 }
@@ -236,3 +237,26 @@ export const migrationPhase = (op: MigrationOperation): "expand" | "contract" =>
  * @returns Whether the operation is an expand-phase (additive, non-breaking) step.
  */
 export const isExpandOperation = (op: MigrationOperation): boolean => migrationPhase(op) === "expand"
+
+/**
+ * Runtime-validates a routine-DDL syntax field before it enters compiled DDL.
+ * The type system already requires `unsafeSql(...)`, but a JS caller (or cast)
+ * could smuggle a plain object; the dialect compilers refuse anything without
+ * the explicit unsafe brand rather than interpolating it.
+ *
+ * @param node - Candidate explicit-unsafe syntax node.
+ * @param field - Field name used in the error message.
+ * @returns The validated trusted SQL text.
+ * @throws {TypeError} When the node is not a genuine `unsafeSql(...)` value.
+ */
+export const unsafeSyntax = (node: UnsafeSqlNode, field: string): string => {
+  if (
+    typeof node !== "object" ||
+    node === null ||
+    (node as { _tag?: string })._tag !== "UnsafeSql" ||
+    typeof (node as { sql?: unknown }).sql !== "string"
+  ) {
+    throw new TypeError(`Routine DDL ${field} must be explicit unsafeSql(...) syntax`)
+  }
+  return node.sql
+}

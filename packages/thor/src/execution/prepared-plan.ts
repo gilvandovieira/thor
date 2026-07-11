@@ -9,8 +9,14 @@
  *
  * @module execution/prepared-plan
  */
-import { Effect } from "effect"
-import { collectQueryParams, queryCapabilityBits, type ParamNode, type QueryIR, type SelectionField } from "../ir/query-ir.js"
+import type { Effect } from "effect"
+import {
+  collectQueryParams,
+  queryCapabilityBits,
+  type ParamNode,
+  type QueryIR,
+  type SelectionField
+} from "../ir/query-ir.js"
 import { collectCapabilityViolations, collectStructuralViolations } from "../guards/query-guards.js"
 import type { Dialect } from "../dialect.js"
 import type { CapabilityBits } from "../capabilities/capability.js"
@@ -18,13 +24,7 @@ import { queryStructuralHash } from "../ir/structural-hash.js"
 import { normalizeQuery } from "../ir/normalize.js"
 import { type DecodeError, GuardError, type ParameterError, type QueryError } from "../errors/index.js"
 import type { CompiledStatement, RawRow } from "./driver.js"
-import {
-  decodeRows,
-  ParameterPlan,
-  type QueryArgs,
-  type RowDecoder,
-  rowDecoderFor
-} from "./run-pipeline.js"
+import { decodeRows, ParameterPlan, type QueryArgs, type RowDecoder, rowDecoderFor } from "./run-pipeline.js"
 
 /** One dialect-profile validation recorded by a prepared handle. */
 export interface PreparedDialectInspection {
@@ -213,8 +213,8 @@ export class PreparedExecutionPlan {
       return cached.failure
     }
 
-    const failure = this.structuralFailure ??
-      collectCapabilityViolations(this.ir, dialect.capabilities, allowEmulation)[0] ?? null
+    const failure =
+      this.structuralFailure ?? collectCapabilityViolations(this.ir, dialect.capabilities, allowEmulation)[0] ?? null
     byPolicy.set(allowEmulation, { profileHash, failure })
     this.recordDialect(dialect, profileHash, allowEmulation, failure)
     return failure

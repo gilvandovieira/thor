@@ -1,13 +1,8 @@
 import { describe, expect, it } from "vitest"
 import { Effect, Exit, Fiber, Layer } from "effect"
-import {
-  Database,
-  DriverError,
-  type Driver,
-  type RawRow
-} from "@gilvandovieira/thor"
+import { Database, DriverError, type Driver, type RawRow } from "@gilvandovieira/thor"
 import { PostgresDialect } from "@gilvandovieira/thor/postgres"
-import { defineMigration, makeMigrator, sql, type JournalEntry } from "@gilvandovieira/thor/migrate"
+import { defineMigration, legacyChecksum, makeMigrator, sql, type JournalEntry } from "@gilvandovieira/thor/migrate"
 import type { MigrationDialect } from "../src/dialect.js"
 
 interface HarnessOptions {
@@ -24,15 +19,16 @@ const harness = (options: HarnessOptions = {}) => {
   let locked = false
   const waiters: Array<() => void> = []
 
-  const acquire = (): Effect.Effect<ReadonlyArray<RawRow>, DriverError> => Effect.async((resume) => {
-    const enter = () => {
-      locked = true
-      calls.push("lock")
-      resume(Effect.succeed([{ acquired: 1 }]))
-    }
-    if (locked) waiters.push(enter)
-    else enter()
-  })
+  const acquire = (): Effect.Effect<ReadonlyArray<RawRow>, DriverError> =>
+    Effect.async((resume) => {
+      const enter = () => {
+        locked = true
+        calls.push("lock")
+        resume(Effect.succeed([{ acquired: 1 }]))
+      }
+      if (locked) waiters.push(enter)
+      else enter()
+    })
 
   const release = (): ReadonlyArray<RawRow> => {
     calls.push("unlock")
@@ -67,47 +63,50 @@ const harness = (options: HarnessOptions = {}) => {
   const failure = (message: string) => new DriverError({ message })
   const driver: Driver = {
     runtime: { adapter: "migration-test", required: [] },
-    query: (statement) => Effect.suspend(() => {
-      if (statement === "lock") return acquire()
-      if (statement === "unlock") return Effect.succeed(release())
-      if (statement === "read") {
-        calls.push("read")
-        return Effect.succeed(journal.map((entry) => ({
-          id: entry.id,
-          name: entry.name,
-          checksum: entry.checksum,
-          applied_at: entry.appliedAt,
-          execution_time_ms: entry.executionTimeMs
-        })))
-      }
-      if (statement === "tables") return Effect.succeed([])
-      return Effect.succeed([])
-    }),
-    execute: (statement, params) => Effect.suspend(() => {
-      calls.push(statement)
-      if (statement === "commit" && options.failCommit) return Effect.fail(failure("commit failed"))
-      if (statement === "rollback" && options.failRollback) return Effect.fail(failure("rollback failed"))
-      if (statement === "insert") {
-        journal.push({
-          id: String(params[0]),
-          name: String(params[1]),
-          checksum: String(params[2]),
-          appliedAt: params[3] as Date,
-          executionTimeMs: Number(params[4])
-        })
-      }
-      if (statement === "delete") {
-        const index = journal.findIndex((entry) => entry.id === params[0])
-        if (index >= 0) journal.splice(index, 1)
-      }
-      return Effect.succeed({ rowCount: 0 })
-    }),
-    executeScript: (statement) => Effect.suspend(() => {
-      calls.push(`script:${statement}`)
-      return statement === "fail"
-        ? Effect.fail(failure("script failed"))
-        : Effect.succeed({ rowCount: 0 })
-    })
+    query: (statement) =>
+      Effect.suspend(() => {
+        if (statement === "lock") return acquire()
+        if (statement === "unlock") return Effect.succeed(release())
+        if (statement === "read") {
+          calls.push("read")
+          return Effect.succeed(
+            journal.map((entry) => ({
+              id: entry.id,
+              name: entry.name,
+              checksum: entry.checksum,
+              applied_at: entry.appliedAt,
+              execution_time_ms: entry.executionTimeMs
+            }))
+          )
+        }
+        if (statement === "tables") return Effect.succeed([])
+        return Effect.succeed([])
+      }),
+    execute: (statement, params) =>
+      Effect.suspend(() => {
+        calls.push(statement)
+        if (statement === "commit" && options.failCommit) return Effect.fail(failure("commit failed"))
+        if (statement === "rollback" && options.failRollback) return Effect.fail(failure("rollback failed"))
+        if (statement === "insert") {
+          journal.push({
+            id: String(params[0]),
+            name: String(params[1]),
+            checksum: String(params[2]),
+            appliedAt: params[3] as Date,
+            executionTimeMs: Number(params[4])
+          })
+        }
+        if (statement === "delete") {
+          const index = journal.findIndex((entry) => entry.id === params[0])
+          if (index >= 0) journal.splice(index, 1)
+        }
+        return Effect.succeed({ rowCount: 0 })
+      }),
+    executeScript: (statement) =>
+      Effect.suspend(() => {
+        calls.push(`script:${statement}`)
+        return statement === "fail" ? Effect.fail(failure("script failed")) : Effect.succeed({ rowCount: 0 })
+      })
   }
 
   const dialect = { ...PostgresDialect, migrations: migrationDialect }
@@ -117,13 +116,20 @@ const harness = (options: HarnessOptions = {}) => {
     allowEmulation: false,
     preparedStatements: false
   })
-  const service = <A>(migrations: Parameters<typeof makeMigrator>[0]["migrations"]) =>
+  const service = (migrations: NonNullable<Parameters<typeof makeMigrator>[0]>["migrations"]) =>
     Effect.runPromise(Effect.provide(makeMigrator({ migrations }), layer))
 
   return { calls, journal, service }
 }
 
-const migration = defineMigration({ id: "0001_first", name: "first", up: sql`first`, down: sql`undo first` })
+const migration = defineMigration({
+  id: "0001_first",
+  name: "first",
+  safety: "additive",
+  downSafety: "destructive",
+  up: sql`first`,
+  down: sql`undo first`
+})
 
 describe("migration concurrency and failure invariants", () => {
   it("re-reads pending migrations under the lock so racers cannot double-apply", async () => {
@@ -145,7 +151,7 @@ describe("migration concurrency and failure invariants", () => {
     expect(JSON.stringify(commitExit)).toContain("commit failed")
 
     const rollback = harness({ failRollback: true })
-    const bad = defineMigration({ id: "0001_bad", name: "bad", up: sql`fail` })
+    const bad = defineMigration({ id: "0001_bad", name: "bad", safety: "additive", up: sql`fail` })
     const rollbackService = await rollback.service([bad])
     const rollbackExit = await Effect.runPromiseExit(rollbackService.up())
     expect(JSON.stringify(rollbackExit)).toContain("script failed")
@@ -171,9 +177,27 @@ describe("migration concurrency and failure invariants", () => {
     expect(JSON.stringify(lostExit)).toContain("migration lock was lost")
   })
 
+  it("accepts legacy checksums and rejects unknown versioned algorithms clearly", async () => {
+    const base = {
+      id: migration.id,
+      name: migration.name,
+      appliedAt: new Date(),
+      executionTimeMs: 0
+    }
+    const legacy = harness({ journal: [{ ...base, checksum: legacyChecksum(migration) }] })
+    const legacyService = await legacy.service([migration])
+    await expect(Effect.runPromise(legacyService.check())).resolves.toBeUndefined()
+    expect(legacy.journal[0]?.checksum).toBe(legacyChecksum(migration))
+
+    const unknown = harness({ journal: [{ ...base, checksum: "sha512:v1:deadbeef" }] })
+    const unknownService = await unknown.service([migration])
+    const exit = await Effect.runPromiseExit(unknownService.check())
+    expect(JSON.stringify(exit)).toContain("unknown checksum algorithm")
+  })
+
   it("journals completed non-transactional migrations before a later MySQL-style DDL failure", async () => {
     const test = harness({ transactionalDdl: false })
-    const bad = defineMigration({ id: "0002_bad", name: "bad", up: sql`fail` })
+    const bad = defineMigration({ id: "0002_bad", name: "bad", safety: "additive", up: sql`fail` })
     const service = await test.service([migration, bad])
     const exit = await Effect.runPromiseExit(service.up())
 
@@ -188,14 +212,17 @@ describe("migration concurrency and failure invariants", () => {
       id: "0001_wait",
       name: "wait",
       revision: "1",
+      safety: "additive",
       up: Effect.never
     })
     const service = await test.service([interrupted])
-    await Effect.runPromise(Effect.gen(function* () {
-      const fiber = yield* Effect.fork(service.up())
-      yield* Effect.yieldNow()
-      yield* Fiber.interrupt(fiber)
-    }))
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.fork(service.up())
+        yield* Effect.yieldNow()
+        yield* Fiber.interrupt(fiber)
+      })
+    )
 
     expect(test.calls).toContain("rollback")
     expect(test.calls).toContain("unlock")

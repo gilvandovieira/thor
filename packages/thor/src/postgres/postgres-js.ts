@@ -43,11 +43,7 @@ export interface PostgresJsClient {
    * @param options - Optional postgres.js execution settings.
    * @returns A pending postgres.js query.
    */
-  unsafe: (
-    query: string,
-    params?: ReadonlyArray<unknown>,
-    options?: PostgresJsUnsafeOptions
-  ) => PostgresJsPending
+  unsafe: (query: string, params?: ReadonlyArray<unknown>, options?: PostgresJsUnsafeOptions) => PostgresJsPending
 }
 
 /**

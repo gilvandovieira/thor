@@ -14,12 +14,18 @@ import { collectViolations } from "../guards/query-guards.js"
 import type { Dialect } from "../dialect.js"
 import type { CapabilityMatrix } from "../capabilities/matrix.js"
 import { normalizeQuery } from "../ir/normalize.js"
-import { DecodeError, ParameterError, type QueryError } from "../errors/index.js"
+import {
+  type ConstraintError,
+  DecodeError,
+  type DriverError,
+  ParameterError,
+  type QueryError
+} from "../errors/index.js"
 import type { CompiledStatement, RawRow } from "./driver.js"
-import { type DatabaseService } from "./database.js"
+import type { DatabaseService } from "./database.js"
 import { DEFAULT_EXECUTION_MODE, resolveDecodeMode } from "./plan.js"
 import { defaultQueryCaches, type QueryCaches } from "./cache.js"
-import { type QueryCacheOutcome, type QueryObservationState } from "../observability/index.js"
+import type { QueryCacheOutcome, QueryObservationState } from "../observability/index.js"
 
 /**
  * The named query cache registry backing a service's non-prepared execution
@@ -44,6 +50,14 @@ interface NamedParameter {
 /** Compiled validation/encoding plan for a query's named parameters. */
 export class ParameterPlan {
   private readonly named = new Map<string, NamedParameter>()
+  /**
+   * Inline-bound values, encoded once through their declared column/param codec.
+   * Keyed by node identity — the same node objects appear in the compiled
+   * `paramOrder`. This closes the P0.2 gap where inline values (e.g.
+   * `eq(users.email, "x")`) previously bypassed the codec that named
+   * `param()` values were validated and encoded through.
+   */
+  private readonly inline = new Map<ParamNode, unknown>()
   private readonly failure: ParameterError | undefined
 
   /**
@@ -52,7 +66,22 @@ export class ParameterPlan {
   constructor(params: ReadonlyArray<ParamNode>) {
     let failure: ParameterError | undefined
     for (const node of params) {
-      if (Object.prototype.hasOwnProperty.call(node, "value")) continue
+      if (Object.hasOwn(node, "value")) {
+        // Inline literal: validate and encode through its codec, once.
+        if (this.inline.has(node)) continue
+        const result = (Schema.encodeUnknownEither(node.codec) as ParameterEncoder)(node.value)
+        if (Either.isLeft(result)) {
+          failure ??= new ParameterError({
+            parameter: node.name,
+            reason: "invalid",
+            message: `Invalid inline value for "${node.name}": ${ParseResult.TreeFormatter.formatErrorSync(result.left)}`,
+            cause: result.left
+          })
+        } else {
+          this.inline.set(node, result.right)
+        }
+        continue
+      }
       const existing = this.named.get(node.name)
       if (existing) {
         if (existing.node === node) continue
@@ -60,9 +89,10 @@ export class ParameterPlan {
         failure ??= new ParameterError({
           parameter: node.name,
           reason,
-          message: reason === "conflict"
-            ? `Named parameter "${node.name}" was declared with conflicting schemas`
-            : `Named parameter "${node.name}" was declared more than once; reuse the same param() value`
+          message:
+            reason === "conflict"
+              ? `Named parameter "${node.name}" was declared with conflicting schemas`
+              : `Named parameter "${node.name}" was declared more than once; reuse the same param() value`
         })
         continue
       }
@@ -83,21 +113,25 @@ export class ParameterPlan {
     if (this.failure) return Effect.fail(this.failure)
 
     for (const name of this.named.keys()) {
-      if (!Object.prototype.hasOwnProperty.call(args, name)) {
-        return Effect.fail(new ParameterError({
-          parameter: name,
-          reason: "missing",
-          message: `Missing required named parameter "${name}"`
-        }))
+      if (!Object.hasOwn(args, name)) {
+        return Effect.fail(
+          new ParameterError({
+            parameter: name,
+            reason: "missing",
+            message: `Missing required named parameter "${name}"`
+          })
+        )
       }
     }
     for (const name of Object.keys(args)) {
       if (!this.named.has(name)) {
-        return Effect.fail(new ParameterError({
-          parameter: name,
-          reason: "extra",
-          message: `Unexpected named parameter "${name}"`
-        }))
+        return Effect.fail(
+          new ParameterError({
+            parameter: name,
+            reason: "extra",
+            message: `Unexpected named parameter "${name}"`
+          })
+        )
       }
     }
 
@@ -105,19 +139,24 @@ export class ParameterPlan {
     for (const [name, parameter] of this.named) {
       const result = parameter.encode(args[name])
       if (Either.isLeft(result)) {
-        return Effect.fail(new ParameterError({
-          parameter: name,
-          reason: "invalid",
-          message: `Invalid value for named parameter "${name}": ${ParseResult.TreeFormatter.formatErrorSync(result.left)}`,
-          cause: result.left
-        }))
+        return Effect.fail(
+          new ParameterError({
+            parameter: name,
+            reason: "invalid",
+            message: `Invalid value for named parameter "${name}": ${ParseResult.TreeFormatter.formatErrorSync(result.left)}`,
+            cause: result.left
+          })
+        )
       }
       encoded.set(name, result.right)
     }
 
-    return Effect.succeed(paramOrder.map((node) =>
-      Object.prototype.hasOwnProperty.call(node, "value") ? node.value : encoded.get(node.name)
-    ))
+    // Inline nodes were validated and encoded at construction (a failure would
+    // have short-circuited above via `this.failure`); named nodes resolve from
+    // the just-encoded execution args. Both go through their declared codec.
+    return Effect.succeed(
+      paramOrder.map((node) => (Object.hasOwn(node, "value") ? this.inline.get(node) : encoded.get(node.name)))
+    )
   }
 }
 
@@ -237,7 +276,11 @@ const guardCached = (
  * @param db - Active database service (carries dialect + execution mode).
  * @returns An Effect that fails with the first violation or succeeds with void.
  */
-export const guardForMode = (caches: QueryCaches, ir: QueryIR, db: DatabaseService): Effect.Effect<void, QueryError> => {
+export const guardForMode = (
+  caches: QueryCaches,
+  ir: QueryIR,
+  db: DatabaseService
+): Effect.Effect<void, QueryError> => {
   const matrix = db.dialect.capabilities
   if ((db.mode ?? DEFAULT_EXECUTION_MODE) === "safe") return guardCached(caches, ir, matrix, db.allowEmulation)
   if (cachedGuardResult(caches, ir, matrix, db.allowEmulation) === null) {
@@ -304,7 +347,22 @@ export const preparedNameFor = (db: DatabaseService, compiled: CompiledStatement
 export const hasCompiled = (caches: QueryCaches, ir: QueryIR, dialect: Dialect): boolean =>
   (caches.compile.peek(ir) as Map<Dialect, CompiledStatement> | undefined)?.has(dialect) ?? false
 
-const preparedByDriver = new WeakMap<object, Set<string>>()
+const preparedByDriver = new WeakMap<object, Map<string, string>>()
+
+/**
+ * @param driver - Active driver.
+ * @returns The object owning the connection's prepared statements (the physical
+ * connection when the adapter exposes one, otherwise the driver instance).
+ */
+const preparedScopeOf = (driver: { readonly preparedScope?: object }): object => driver.preparedScope ?? driver
+
+/** Prepared identity and observation outcome selected for one execution. */
+export interface PreparedExecution {
+  /** Name passed to the driver, or undefined for unprepared execution. */
+  readonly name: string | undefined
+  /** Actual connection-scoped prepared-registry outcome. */
+  readonly outcome: QueryCacheOutcome
+}
 
 /**
  * Record prepared-shape reuse once and return its per-execution outcome.
@@ -314,22 +372,52 @@ const preparedByDriver = new WeakMap<object, Set<string>>()
  * @param compiled - Compiled query shape.
  * @returns The observed prepared-cache outcome.
  */
-export const notePrepared = (
+export const prepareForExecution = (
   db: DatabaseService,
   caches: QueryCaches,
   compiled: CompiledStatement
-): QueryCacheOutcome => {
-  if (!preparedNameFor(db, compiled) || db.recordPreparedCache === false) return "not-used"
-  let prepared = preparedByDriver.get(db.driver)
-  if (!prepared) {
-    prepared = new Set()
-    preparedByDriver.set(db.driver, prepared)
-  }
-  const hit = prepared.has(compiled.cacheKey)
-  prepared.add(compiled.cacheKey)
-  caches.notePrepared(compiled.cacheKey)
-  return hit ? "hit" : "miss"
-}
+): Effect.Effect<PreparedExecution, DriverError | ConstraintError> =>
+  Effect.gen(function* () {
+    const requested = preparedNameFor(db, compiled)
+    if (!requested) return { name: undefined, outcome: "not-used" }
+    const scope = preparedScopeOf(db.driver)
+    let prepared = preparedByDriver.get(scope)
+    if (!prepared) {
+      prepared = new Map()
+      preparedByDriver.set(scope, prepared)
+    }
+    const priorSql = prepared.get(requested)
+    if (priorSql === compiled.sql) {
+      prepared.delete(requested)
+      prepared.set(requested, compiled.sql)
+      if (db.recordPreparedCache !== false) caches.notePrepared("hit", prepared.size, false)
+      return { name: requested, outcome: db.recordPreparedCache === false ? "not-used" : "hit" }
+    }
+    if (priorSql !== undefined) {
+      if (db.recordPreparedCache !== false) caches.notePrepared("miss", prepared.size, false)
+      return { name: undefined, outcome: db.recordPreparedCache === false ? "not-used" : "miss" }
+    }
+
+    let evicted = false
+    const maxSize = caches.preparedMaxSize
+    if (maxSize !== undefined && prepared.size >= maxSize) {
+      const oldest = prepared.keys().next().value as string | undefined
+      if (!oldest || !db.driver.releasePrepared) {
+        if (db.recordPreparedCache !== false) caches.notePrepared("miss", prepared.size, false)
+        return { name: undefined, outcome: db.recordPreparedCache === false ? "not-used" : "miss" }
+      }
+      // Remove the registry entry before yielding so a concurrent fiber cannot
+      // pick the same victim; a release failure is housekeeping, not a reason to
+      // fail the user's unrelated query, so it is observed and swallowed.
+      prepared.delete(oldest)
+      yield* Effect.ignore(db.driver.releasePrepared(oldest))
+      evicted = true
+    }
+
+    prepared.set(requested, compiled.sql)
+    if (db.recordPreparedCache !== false) caches.notePrepared("miss", prepared.size, evicted)
+    return { name: requested, outcome: db.recordPreparedCache === false ? "not-used" : "miss" }
+  })
 
 /** @returns Fresh mutable facts scoped to one execution. */
 export const observationState = (): QueryObservationState => ({
@@ -401,7 +489,10 @@ const describeFailure = (
       })
     }
   }
-  return new DecodeError({ message: `Failed to decode row: ${ParseResult.TreeFormatter.formatErrorSync(rowError)}`, cause: rowError })
+  return new DecodeError({
+    message: `Failed to decode row: ${ParseResult.TreeFormatter.formatErrorSync(rowError)}`,
+    cause: rowError
+  })
 }
 
 /**

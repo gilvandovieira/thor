@@ -41,9 +41,7 @@ const expressionShape = (node: ExprNode): unknown => {
       return [
         node._tag,
         node.strings,
-        node.values.map((value) => value._tag === "UnsafeSql"
-          ? [value._tag, value.sql]
-          : expressionShape(value))
+        node.values.map((value) => (value._tag === "UnsafeSql" ? [value._tag, value.sql] : expressionShape(value)))
       ]
     case "ScalarSubquery":
       return [node._tag, queryShape(node.query)]
@@ -134,11 +132,7 @@ const queryShape = (ir: QueryIR): unknown => {
         ir.where ? expressionShape(ir.where) : null,
         (ir.groupBy ?? []).map(expressionShape),
         ir.having ? expressionShape(ir.having) : null,
-        (ir.setOperations ?? []).map((operation) => [
-          operation.type,
-          queryShape(operation.query),
-          operation.all
-        ]),
+        (ir.setOperations ?? []).map((operation) => [operation.type, queryShape(operation.query), operation.all]),
         ir.orderBy.map((term) => [expressionShape(term.expr), term.direction]),
         ir.limit ?? null,
         ir.offset ?? null
@@ -175,12 +169,7 @@ const queryShape = (ir: QueryIR): unknown => {
         selectionShape(ir.returning)
       ]
     case "Call":
-      return [
-        ...common,
-        ir.schema ?? null,
-        ir.procedure,
-        ir.args.map(expressionShape)
-      ]
+      return [...common, ir.schema ?? null, ir.procedure, ir.args.map(expressionShape)]
   }
 }
 

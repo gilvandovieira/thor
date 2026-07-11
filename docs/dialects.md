@@ -19,7 +19,7 @@ thor capabilities mysql
 |---|---|---|---|
 | PostgreSQL | Production | node-postgres, postgres.js | Primary target; every implemented public query feature runs through the full shared matrix |
 | SQLite | Production/local/embedded | node:sqlite, bun:sqlite | Node and Bun run the same real contract and feature fixtures; unsupported routines and lateral joins fail through capabilities |
-| MySQL 8 | Compatibility, explicitly partial | mysql2 | Core DML, joins, CTEs, windows, sets, duplicate-key upsert, transactions, routines, and decoding are tested; DML RETURNING, full join, arrays, PostgreSQL conflict syntax, table-valued routines, and transactional DDL are unsupported |
+| MySQL 8 | Compatibility, explicitly partial | mysql2 | Core DML, joins, CTEs, windows, sets, duplicate-key upsert, transactions, and decoding are live-tested; scalar/procedure routine compilation has unit/fake coverage but is not in the MySQL live routine matrix; DML RETURNING, full join, arrays, PostgreSQL conflict syntax, table-valued routines, streaming, and transactional DDL are unsupported |
 
 MySQL remains partial because some PostgreSQL/SQLite features have no MySQL
 equivalent and MySQL DDL is not transactionally rollback-safe. The matrix is the

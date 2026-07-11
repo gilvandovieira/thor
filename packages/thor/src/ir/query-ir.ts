@@ -152,12 +152,28 @@ export interface FunctionCallNode {
 }
 
 /** Window specification applied to a function expression. */
+export type WindowFrameBoundaryNode =
+  | { readonly _tag: "UnboundedPreceding" }
+  | { readonly _tag: "Preceding"; readonly offset: number }
+  | { readonly _tag: "CurrentRow" }
+  | { readonly _tag: "Following"; readonly offset: number }
+  | { readonly _tag: "UnboundedFollowing" }
+
+/** Structured SQL window frame, safe to compile as syntax. */
+export interface WindowFrameNode {
+  readonly _tag: "WindowFrame"
+  readonly unit: "rows" | "range" | "groups"
+  readonly start: WindowFrameBoundaryNode
+  readonly end: WindowFrameBoundaryNode
+}
+
+/** Window specification applied to a function expression. */
 export interface WindowFunctionNode {
   readonly _tag: "WindowFunction"
   readonly function: FunctionCallNode
   readonly partitionBy: ReadonlyArray<ExprNode>
   readonly orderBy: ReadonlyArray<OrderByTerm>
-  readonly frame?: string
+  readonly frame?: WindowFrameNode | UnsafeSqlNode
 }
 
 /** Reference to the candidate row in an upsert update. */

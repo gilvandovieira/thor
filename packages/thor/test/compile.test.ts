@@ -83,17 +83,16 @@ describe("Postgres compiler (spec Milestone 4)", () => {
 
     expect(expectSql(query)).toMatchObject({
       sql: 'UPDATE "users" SET "name" = $1, "age" = $2 WHERE "users"."id" = $3 RETURNING "users"."id" AS "id"',
-      params: [
-        { name: "users.name", value: "New" },
-        { name: "users.age", value: 42 },
-        { name: "id" }
-      ]
+      params: [{ name: "users.name", value: "New" }, { name: "users.age", value: 42 }, { name: "id" }]
     })
     expect(query.requiredCapabilities()).toEqual(["update.returning"])
   })
 
   it("compiles delete with a named parameter and returning", () => {
-    const query = db.delete(users).where(eq(users.id, param("id", Schema.String))).returning({ id: users.id })
+    const query = db
+      .delete(users)
+      .where(eq(users.id, param("id", Schema.String)))
+      .returning({ id: users.id })
 
     expect(expectSql(query)).toMatchObject({
       sql: 'DELETE FROM "users" WHERE "users"."id" = $1 RETURNING "users"."id" AS "id"',

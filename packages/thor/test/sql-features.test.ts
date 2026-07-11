@@ -18,7 +18,14 @@ import {
 } from "@gilvandovieira/thor/testing"
 
 const noop = () => {}
-const api: ContractTestApi = { describe, it, beforeAll: noop, afterAll: noop, beforeEach: noop, expect: expect as never }
+const api: ContractTestApi = {
+  describe,
+  it,
+  beforeAll: noop,
+  afterAll: noop,
+  beforeEach: noop,
+  expect: expect as never
+}
 
 for (const dialect of [PostgresDialect, SQLiteDialect, MySQLDialect]) {
   runSqlFeatureMatrix(api, { dialect, features: LEVEL_1_2_FEATURES })

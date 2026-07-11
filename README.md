@@ -5,6 +5,13 @@ You describe your tables and queries in plain, fluent TypeScript; Thor gives you
 back fully-typed results and runs them against **PostgreSQL, SQLite, or MySQL** —
 the same code, three databases.
 
+Thor is currently **`0.1.0-alpha.1`** — an alpha, not a production-ready stable
+release. The core pipeline is substantial and the release-blocking correctness
+work is done and tested, but streaming is deferred and migration generation,
+routines, and some resource-lifecycle guarantees remain partial. See
+[docs/limitations.md](docs/limitations.md) for the exact conformance state, and
+reserve `1.0.0` for a deliberate stable release after external application use.
+
 Two ideas make it different from most query builders:
 
 - **Nothing touches your database until you ask it to.** Building a query is a
@@ -262,9 +269,12 @@ const program = Effect.gen(function* () {
   const m = yield* Migrator
   yield* m.up()      // apply each pending migration under the dialect policy
   yield* m.check()   // verify order + checksums
-  yield* m.drift()   // what would it take to match your schema to the DB?
+  yield* m.drift()   // legacy: create-table ops for missing expected tables only
 })
 ```
+
+Use `Introspector.drift()` for full supported structural diagnostics (tables,
+columns, nullability, primary/foreign keys, and explicit indexes).
 
 For reviewable planning (`diff`/`plan`/`dryRun`), environment policies,
 expand/contract staging, and typed backfills, see
@@ -297,14 +307,15 @@ typed builder → runtime IR → capability check → compile → execute → de
 | Query builder (select/insert/update/delete, predicates, params) | ✅ Done |
 | Advanced queries (joins, aggregation, windows, CTEs, sets, upserts) | ✅ Done |
 | Guards & capability checks | ✅ Done |
-| Dialects | ✅ PostgreSQL + SQLite production targets; MySQL 8 compatibility target is explicitly partial (see `docs/dialects.md`) |
+| Dialects | ✅ PostgreSQL + SQLite primary targets; MySQL 8 compatibility target is explicitly partial (see `docs/dialects.md`). Conformance levels per feature: [docs/limitations.md](docs/limitations.md) |
 | Effect execution + drivers (2 Postgres drivers, Node & Bun SQLite, mysql2) | ✅ Done |
 | Prepared handles & performance modes | ✅ Done |
 | Benchmarks + CI regression gate | ✅ Done |
 | Testing helpers & cross-dialect contract suite | ✅ Done |
 | Migrations (live migrator + CLI) | ✅ Journaled programmatic migrator plus configured `generate`/`check`/`status`/`up`/`down`/`redo`/`drift`/`pull`/`doctor` commands; generation is currently create-table-only |
 | SQL feature-matrix tests | ✅ Implemented Levels 1–10 surfaces covered across query, codec, transaction, and migration/DDL scenarios |
-| Stored routines (functions/procedures) | 🟡 Scalar/aggregate expressions, table-function sources, procedure commands, capability guards, and return decoding done; advanced named/out arguments and routine DDL remain |
+| Stored routines (functions/procedures) | 🟡 Scalar/aggregate expressions, PostgreSQL table-function sources, procedure commands, capability guards, selected-result decoding, and basic PostgreSQL/MySQL migration DDL; declared input codecs, true named/default/overloaded/OUT arguments, procedure output decoding, extension verification, and routine introspection remain |
+| Streaming | ⛔ Deferred; no `.stream()` terminal or scoped cursor driver contract is shipped |
 
 The compact dialect summary below is generated from the executable capability
 matrices (36 declared capabilities), rather than maintained by hand.
@@ -312,9 +323,9 @@ matrices (36 declared capabilities), rather than maintained by hand.
 <!-- capabilities:generated:start -->
 | Dialect | Native | Emulated | Unsupported | Unknown |
 |---|---:|---:|---:|---:|
-| PostgreSQL | 23 | 1 | 1 | 11 |
-| SQLite | 15 | 5 | 15 | 1 |
-| MySQL 8 | 17 | 1 | 14 | 4 |
+| PostgreSQL | 23 | 1 | 2 | 10 |
+| SQLite | 15 | 5 | 16 | 0 |
+| MySQL 8 | 17 | 1 | 15 | 3 |
 <!-- capabilities:generated:end -->
 
 See [`docs/dialects.md`](docs/dialects.md) for live lanes, MySQL's explicit

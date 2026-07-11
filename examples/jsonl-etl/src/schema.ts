@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { sqlite, type Insert, type Select } from "@gilvandovieira/thor"
+import { sqlite, type Insert, type Select, unsafeSql } from "@gilvandovieira/thor"
 
 export const EventTags = Schema.Array(Schema.String)
 export const EventPayload = Schema.Struct({
@@ -21,7 +21,7 @@ export const sources = sqlite.table(
   },
   {
     indexes: [{ name: "sources_region_idx", columns: ["region"] }],
-    checks: [{ name: "sources_region_check", expression: "region in ('na', 'eu', 'latam')" }]
+    checks: [{ name: "sources_region_check", expression: unsafeSql("region in ('na', 'eu', 'latam')") }]
   }
 )
 
@@ -54,9 +54,9 @@ export const rawEvents = sqlite.table(
       }
     ],
     checks: [
-      { name: "raw_events_type_check", expression: "event_type in ('view', 'cart', 'purchase', 'refund')" },
-      { name: "raw_events_amount_check", expression: "amount_usd >= 0" },
-      { name: "raw_events_day_check", expression: "length(occurred_day) = 10" }
+      { name: "raw_events_type_check", expression: unsafeSql("event_type in ('view', 'cart', 'purchase', 'refund')") },
+      { name: "raw_events_amount_check", expression: unsafeSql("amount_usd >= 0") },
+      { name: "raw_events_day_check", expression: unsafeSql("length(occurred_day) = 10") }
     ]
   }
 )
@@ -105,7 +105,9 @@ export const importRuns = sqlite.table(
   },
   {
     indexes: [{ name: "import_runs_started_idx", columns: ["startedAt"] }],
-    checks: [{ name: "import_runs_status_check", expression: "status in ('running', 'completed', 'failed')" }]
+    checks: [
+      { name: "import_runs_status_check", expression: unsafeSql("status in ('running', 'completed', 'failed')") }
+    ]
   }
 )
 

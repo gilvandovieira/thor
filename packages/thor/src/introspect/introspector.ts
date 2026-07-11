@@ -71,4 +71,7 @@ export const makeIntrospector = (): Effect.Effect<IntrospectorService, never, Da
 /**
  * A layer providing the {@link Introspector} over a `Database`.
  */
-export const IntrospectorLive: Layer.Layer<Introspector, never, Database> = Layer.effect(Introspector, makeIntrospector())
+export const IntrospectorLive: Layer.Layer<Introspector, never, Database> = Layer.effect(
+  Introspector,
+  makeIntrospector()
+)

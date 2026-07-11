@@ -10,8 +10,9 @@
  *
  * @module schema/column
  */
-import type { Schema } from "effect"
+import { Schema } from "effect"
 import { internIdentifier } from "../ir/identifiers.js"
+import type { UnsafeSqlNode } from "../ir/query-ir.js"
 
 /** Logical column data types rendered independently by each dialect. */
 export type SqlDataType =
@@ -189,8 +190,9 @@ export class Column<C = ColumnConfig> {
    * @param sql - Dialect-compatible SQL expression.
    * @returns A new column whose insert field is optional.
    */
-  defaultSql(sql: string): Column<Patch<C, { hasDefault: true }>> {
-    return this.with<{ hasDefault: true }>({ hasDefault: true, defaultValue: { kind: "sql", sql } })
+  defaultSql(sql: UnsafeSqlNode): Column<Patch<C, { hasDefault: true }>> {
+    if (sql?._tag !== "UnsafeSql") throw new TypeError("SQL defaults require unsafeSql(...)")
+    return this.with<{ hasDefault: true }>({ hasDefault: true, defaultValue: { kind: "sql", sql: sql.sql } })
   }
 
   /**
@@ -213,17 +215,31 @@ export class Column<C = ColumnConfig> {
    * @param sql - Trusted generation expression.
    * @returns A new column omitted from insert and update types.
    */
-  generatedAlwaysAs(sql: string): Column<Patch<C, { generated: true; hasDefault: true }>> {
+  generatedAlwaysAs(sql: UnsafeSqlNode): Column<Patch<C, { generated: true; hasDefault: true }>> {
+    if (sql?._tag !== "UnsafeSql") throw new TypeError("Generated column expressions require unsafeSql(...)")
     return this.with<{ generated: true; hasDefault: true }>({
       generated: true,
       hasDefault: true,
-      defaultValue: { kind: "sql", sql }
+      defaultValue: { kind: "sql", sql: sql.sql }
     })
   }
 }
 
 /** Any column, regardless of config. */
 export type AnyColumn = Column<any>
+
+/**
+ * The codec used to validate and encode an application value bound to this
+ * column. Nullable columns widen the base codec with `Schema.NullOr` so that
+ * inline values (and decoded rows) accept `null`, mirroring the selection
+ * decode path. Keeping encode and decode nullability in lock-step is what makes
+ * inline and named parameter binding consistent (spec §5, P0.2).
+ *
+ * @param column - Column supplying the codec and nullability.
+ * @returns The column's nullability-aware codec.
+ */
+export const columnParamCodec = (column: AnyColumn): Schema.Schema<any, any> =>
+  column.def.notNull ? column.def.codec : Schema.NullOr(column.def.codec)
 
 /**
  * Creates a nullable column with no constraints or default.

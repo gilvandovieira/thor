@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, Exit, Layer, Schema, Tracer } from "effect"
+import { Cause, type Context, Effect, Exit, Layer, Schema, Tracer } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   Database,
@@ -61,20 +61,23 @@ const collectingTracer = (names: string[], exits: Array<Exit.Exit<unknown, unkno
 describe("Epic S observability", () => {
   it("emits complete value-independent query metadata and cache outcomes", async () => {
     const events: ObservabilityEvent[] = []
-    const driver = new FakeDriver().enqueue(
-      { rows: [{ id: "u1" }] },
-      { rows: [{ id: "u2" }] }
-    )
-    const query = db.select({ id: users.id }).from(users).where(eq(users.email, param("email", Schema.String)))
-    const layer = withObservability(
-      db.withQueryCache(FakeDatabaseLayer(driver)),
-      { onEvent: (event) => events.push(event) }
-    )
+    const driver = new FakeDriver().enqueue({ rows: [{ id: "u1" }] }, { rows: [{ id: "u2" }] })
+    const query = db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.email, param("email", Schema.String)))
+    const layer = withObservability(db.withQueryCache(FakeDatabaseLayer(driver)), {
+      onEvent: (event) => events.push(event)
+    })
 
-    await Effect.runPromise(Effect.provide(Effect.all([
-      query.all({ email: "first@example.com" }),
-      query.all({ email: "second@example.com" })
-    ], { concurrency: 1 }), layer))
+    await Effect.runPromise(
+      Effect.provide(
+        Effect.all([query.all({ email: "first@example.com" }), query.all({ email: "second@example.com" })], {
+          concurrency: 1
+        }),
+        layer
+      )
+    )
 
     const queries = events.filter((event): event is QueryObservabilityEvent => event.kind === "query")
     expect(queries).toHaveLength(2)
@@ -93,7 +96,10 @@ describe("Epic S observability", () => {
   })
 
   it("tracks prepared reuse per driver and only after successful binding", async () => {
-    const query = db.select({ id: users.id }).from(users).where(eq(users.email, param("email", Schema.String)))
+    const query = db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.email, param("email", Schema.String)))
     const firstEvents: ObservabilityEvent[] = []
     const secondEvents: ObservabilityEvent[] = []
     const firstLayer = withObservability(FakeDatabaseLayer(new FakeDriver().enqueue({ rows: [] })), {
@@ -126,20 +132,24 @@ describe("Epic S observability", () => {
     const redactedEvents: ObservabilityEvent[] = []
     const query = db.select({ id: users.id }).from(users).where(eq(users.email, secret))
 
-    await Effect.runPromise(Effect.provide(
-      query.all(),
-      withObservability(FakeDatabaseLayer(new FakeDriver().enqueue({ rows: [] })), {
-        onEvent: (event) => defaultEvents.push(event)
-      })
-    ))
-    await Effect.runPromise(Effect.provide(
-      query.all(),
-      withObservability(FakeDatabaseLayer(new FakeDriver().enqueue({ rows: [] })), {
-        logSql: "summary",
-        logParams: "redacted",
-        onEvent: (event) => redactedEvents.push(event)
-      })
-    ))
+    await Effect.runPromise(
+      Effect.provide(
+        query.all(),
+        withObservability(FakeDatabaseLayer(new FakeDriver().enqueue({ rows: [] })), {
+          onEvent: (event) => defaultEvents.push(event)
+        })
+      )
+    )
+    await Effect.runPromise(
+      Effect.provide(
+        query.all(),
+        withObservability(FakeDatabaseLayer(new FakeDriver().enqueue({ rows: [] })), {
+          logSql: "summary",
+          logParams: "redacted",
+          onEvent: (event) => redactedEvents.push(event)
+        })
+      )
+    )
 
     expect(JSON.stringify(defaultEvents)).not.toContain(secret)
     expect(JSON.stringify(redactedEvents)).not.toContain(secret)
@@ -151,13 +161,15 @@ describe("Epic S observability", () => {
     const secret = "explicitly-unsafe-secret"
     const events: ObservabilityEvent[] = []
     const query = db.select({ id: users.id }).from(users).where(eq(users.email, secret))
-    await Effect.runPromise(Effect.provide(
-      query.all(),
-      withObservability(FakeDatabaseLayer(new FakeDriver().enqueue({ rows: [] })), {
-        logParams: "unsafe-full",
-        onEvent: (event) => events.push(event)
-      })
-    ))
+    await Effect.runPromise(
+      Effect.provide(
+        query.all(),
+        withObservability(FakeDatabaseLayer(new FakeDriver().enqueue({ rows: [] })), {
+          logParams: "unsafe-full",
+          onEvent: (event) => events.push(event)
+        })
+      )
+    )
     expect(JSON.stringify(events)).toContain(secret)
   })
 
@@ -178,7 +190,10 @@ describe("Epic S observability", () => {
 
     expect(Exit.isFailure(exit)).toBe(true)
     if (Exit.isFailure(exit)) {
-      expect(Cause.failureOption(exit.cause)).toMatchObject({ _tag: "Some", value: { _tag: "DriverError", message: "disconnected" } })
+      expect(Cause.failureOption(exit.cause)).toMatchObject({
+        _tag: "Some",
+        value: { _tag: "DriverError", message: "disconnected" }
+      })
     }
     expect(events[0]).toMatchObject({ kind: "query", errorTag: "DriverError" })
     expect(spanExits).toHaveLength(1)
@@ -193,10 +208,9 @@ describe("Epic S observability", () => {
       tracing: true,
       onEvent: (event) => events.push(event)
     })
-    const program = db.transaction(db.select({ id: users.id }).from(users).all()).pipe(
-      Effect.provide(layer),
-      Effect.withTracer(collectingTracer(spanNames))
-    )
+    const program = db
+      .transaction(db.select({ id: users.id }).from(users).all())
+      .pipe(Effect.provide(layer), Effect.withTracer(collectingTracer(spanNames)))
 
     await Effect.runPromise(program)
 
@@ -256,6 +270,7 @@ describe("Epic S observability", () => {
       id: "0001_backfill",
       name: "observed backfill",
       revision: "1",
+      safety: "additive",
       up: backfill(db.select({ id: users.id }).from(users).all())
     })
     const migrator = await Effect.runPromise(Effect.provide(makeMigrator({ migrations: [migration] }), layer))

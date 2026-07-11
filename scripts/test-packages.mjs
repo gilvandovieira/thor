@@ -69,7 +69,11 @@ try {
     "@gilvandovieira/thor/migrate",
     "@gilvandovieira/thor/testing",
     "@gilvandovieira/thor/routine",
-    "@gilvandovieira/thor/capabilities"
+    "@gilvandovieira/thor/capabilities",
+    "@gilvandovieira/thor/relations",
+    "@gilvandovieira/thor/observability",
+    "@gilvandovieira/thor/introspect",
+    "@gilvandovieira/thor/skills"
   ]
   writeFileSync(
     join(consumer, "import-check.mjs"),
@@ -78,11 +82,55 @@ try {
       "for (const name of modules) {",
       "  const loaded = await import(name)",
       "  if (Object.keys(loaded).length === 0) throw new Error(name + ' has no exports')",
+      "}",
+      "const root = await import('@gilvandovieira/thor')",
+      `for (const name of ${JSON.stringify(["QueryCaches", "WeakCacheLayer", "BoundedLruCache", "makeQueryCaches", "defaultQueryCaches", "normalizeQuery", "queryStructuralHash", "collectQueryParams", "queryCapabilityBits", "QueryIR"])}) {`,
+      "  if (name in root) throw new Error(name + ' leaked through the stable root')",
       "}"
     ].join("\n")
   )
 
   run("node", ["import-check.mjs"], consumer)
+
+  // Compile a small TypeScript consumer so packed .d.ts declarations are proven
+  // to resolve for downstream typed projects (not just runtime imports).
+  writeFileSync(
+    join(consumer, "tsconfig.json"),
+    JSON.stringify(
+      {
+        compilerOptions: {
+          module: "nodenext",
+          moduleResolution: "nodenext",
+          target: "es2022",
+          strict: true,
+          noEmit: true,
+          skipLibCheck: true,
+          types: []
+        },
+        files: ["consumer.ts"]
+      },
+      null,
+      2
+    )
+  )
+  writeFileSync(
+    join(consumer, "consumer.ts"),
+    [
+      'import { db, pg } from "@gilvandovieira/thor"',
+      'import { defineMigration } from "@gilvandovieira/thor/migrate"',
+      'import { FakeDriver } from "@gilvandovieira/thor/testing"',
+      'import { ALL_CAPABILITIES } from "@gilvandovieira/thor/capabilities"',
+      'const users = pg.table("users", { id: pg.uuid("id").primaryKey(), email: pg.text("email").notNull() })',
+      "const query = db.select({ id: users.id }).from(users)",
+      "const _sql: string = query.toSql().sql",
+      "const _caps: number = ALL_CAPABILITIES.length",
+      "const _driver = new FakeDriver()",
+      'const _migration = defineMigration({ id: "1", name: "n", safety: "additive", phase: "expand", up: { _tag: "SqlStatement", sql: "select 1" } })',
+      "void _sql; void _caps; void _driver; void _migration; void query"
+    ].join("\n")
+  )
+  run("node", [resolve(root, "node_modules/typescript/bin/tsc"), "-p", "tsconfig.json"], consumer)
+
   const help = run("node", ["node_modules/@gilvandovieira/cli/dist/index.js", "--help"], consumer)
   if (!help.includes("create <name>")) throw new Error("Packed CLI help is incomplete")
   const capabilities = run(
@@ -90,7 +138,8 @@ try {
     ["node_modules/@gilvandovieira/cli/dist/index.js", "capabilities", "sqlite"],
     consumer
   )
-  if (!capabilities.includes("query.streaming\tunknown")) throw new Error("Packed CLI capability output is incomplete")
+  if (!capabilities.includes("query.streaming\tunsupported"))
+    throw new Error("Packed CLI capability output is incomplete")
   if (capabilities.split("\n").length !== 38) throw new Error("Packed CLI did not print every capability")
 
   if (process.argv.includes("--bun")) {
@@ -102,11 +151,30 @@ try {
       ["node_modules/@gilvandovieira/cli/dist/index.js", "capabilities", "sqlite"],
       consumer
     )
-    if (!bunCapabilities.includes("query.streaming\tunknown"))
+    if (!bunCapabilities.includes("query.streaming\tunsupported"))
       throw new Error("Packed CLI capabilities do not run under Bun")
   }
 
   const manifest = JSON.parse(readFileSync(join(consumer, "node_modules/@gilvandovieira/thor/package.json"), "utf8"))
+  const expectedExports = [
+    ".",
+    "./schema",
+    "./sql",
+    "./postgres",
+    "./sqlite",
+    "./mysql",
+    "./migrate",
+    "./testing",
+    "./routine",
+    "./relations",
+    "./capabilities",
+    "./observability",
+    "./introspect",
+    "./skills"
+  ]
+  if (JSON.stringify(Object.keys(manifest.exports)) !== JSON.stringify(expectedExports)) {
+    throw new Error(`Unexpected Thor export map: ${Object.keys(manifest.exports).join(", ")}`)
+  }
   if (manifest.dependencies?.effect) throw new Error("effect must not be duplicated as a direct Thor dependency")
   const cliManifest = JSON.parse(readFileSync(join(consumer, "node_modules/@gilvandovieira/cli/package.json"), "utf8"))
   if (!cliManifest.dependencies?.["@gilvandovieira/thor"])

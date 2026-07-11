@@ -14,5 +14,4 @@ import { PostgresDialect } from "./dialect.js"
  * @param dialect - Optional compatible dialect; defaults to PostgreSQL.
  * @returns Compiled SQL and parameter metadata.
  */
-export const compile = (ir: QueryIR, dialect: Dialect = PostgresDialect): CompiledStatement =>
-  compileQuery(ir, dialect)
+export const compile = (ir: QueryIR, dialect: Dialect = PostgresDialect): CompiledStatement => compileQuery(ir, dialect)

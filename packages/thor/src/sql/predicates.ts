@@ -13,9 +13,20 @@ import {
   type ParamsOf,
   type Predicate,
   isColumn,
+  literal,
   toExprNode,
   toValueNode
 } from "./expressions.js"
+
+/**
+ * Constant predicates used to lower degenerate list/logical shapes to valid SQL
+ * (spec §8, P0.6). An empty `IN ()` / empty `OR` is unsatisfiable → `FALSE`; an
+ * empty `NOT IN ()` / empty `AND` is trivially satisfied → `TRUE`. Lowering at
+ * the builder (rather than the compiler) keeps parameter collection consistent:
+ * the discarded operands never enter the IR.
+ */
+const ALWAYS_FALSE: ExprNode = literal(false)
+const ALWAYS_TRUE: ExprNode = literal(true)
 
 type Comparable = AnyColumn | Expr<any>
 type ComparableValue<T> = T extends AnyColumn ? ColumnValue<T> : T extends Expr<infer A> ? A : unknown
@@ -52,8 +63,7 @@ const comparison = <P extends Record<string, unknown>>(
  * @param op - Comparison operator captured by the returned helper.
  * @returns A typed function that builds comparison IR.
  */
-const compare =
-  (op: ComparisonOp) =>
+const compare = (op: ComparisonOp) =>
   ((left: Comparable, right: Value<Comparable>): Predicate<any> =>
     comparison(op, toExprNode(left), toValueNode(right, isColumn(left) ? left : undefined))) as Compare
 
@@ -113,12 +123,18 @@ export const ilike = compare("ilike")
  * @param values - Typed values, parameters, expressions, or columns.
  * @returns An `InList` expression node.
  */
-export const inArray = <T extends Comparable, V extends ReadonlyArray<Value<T>>>(left: T, values: V): Predicate<MergeParameterMaps<ParamsOf<V[number]>>> => ({
-  _tag: "InList",
-  expr: toExprNode(left),
-  values: values.map((v) => toValueNode(v, isColumn(left) ? left : undefined)),
-  negated: false
-})
+export const inArray = <T extends Comparable, V extends ReadonlyArray<Value<T>>>(
+  left: T,
+  values: V
+): Predicate<MergeParameterMaps<ParamsOf<V[number]>>> =>
+  (values.length === 0
+    ? ALWAYS_FALSE
+    : {
+        _tag: "InList",
+        expr: toExprNode(left),
+        values: values.map((v) => toValueNode(v, isColumn(left) ? left : undefined)),
+        negated: false
+      }) as Predicate<MergeParameterMaps<ParamsOf<V[number]>>>
 
 /**
  * Builds a `NOT IN` expression.
@@ -127,12 +143,18 @@ export const inArray = <T extends Comparable, V extends ReadonlyArray<Value<T>>>
  * @param values - Typed values, parameters, expressions, or columns.
  * @returns A negated `InList` expression node.
  */
-export const notInArray = <T extends Comparable, V extends ReadonlyArray<Value<T>>>(left: T, values: V): Predicate<MergeParameterMaps<ParamsOf<V[number]>>> => ({
-  _tag: "InList",
-  expr: toExprNode(left),
-  values: values.map((v) => toValueNode(v, isColumn(left) ? left : undefined)),
-  negated: true
-})
+export const notInArray = <T extends Comparable, V extends ReadonlyArray<Value<T>>>(
+  left: T,
+  values: V
+): Predicate<MergeParameterMaps<ParamsOf<V[number]>>> =>
+  (values.length === 0
+    ? ALWAYS_TRUE
+    : {
+        _tag: "InList",
+        expr: toExprNode(left),
+        values: values.map((v) => toValueNode(v, isColumn(left) ? left : undefined)),
+        negated: true
+      }) as Predicate<MergeParameterMaps<ParamsOf<V[number]>>>
 
 /**
  * @param column - Column to test.
@@ -150,15 +172,23 @@ export const isNotNull = (column: Comparable): ExprNode => ({ _tag: "IsNull", ex
  * @param operands - Predicates to conjoin.
  * @returns A parenthesized logical `AND` node.
  */
-export const and = <const T extends ReadonlyArray<ExprNode>>(...operands: T): Predicate<MergeParameterMaps<ParamsOf<T[number]>>> =>
-  ({ _tag: "Logical", op: "and", operands })
+export const and = <const T extends ReadonlyArray<ExprNode>>(
+  ...operands: T
+): Predicate<MergeParameterMaps<ParamsOf<T[number]>>> =>
+  (operands.length === 0 ? ALWAYS_TRUE : { _tag: "Logical", op: "and", operands }) as Predicate<
+    MergeParameterMaps<ParamsOf<T[number]>>
+  >
 
 /**
  * @param operands - Predicates to disjoin.
  * @returns A parenthesized logical `OR` node.
  */
-export const or = <const T extends ReadonlyArray<ExprNode>>(...operands: T): Predicate<MergeParameterMaps<ParamsOf<T[number]>>> =>
-  ({ _tag: "Logical", op: "or", operands })
+export const or = <const T extends ReadonlyArray<ExprNode>>(
+  ...operands: T
+): Predicate<MergeParameterMaps<ParamsOf<T[number]>>> =>
+  (operands.length === 0 ? ALWAYS_FALSE : { _tag: "Logical", op: "or", operands }) as Predicate<
+    MergeParameterMaps<ParamsOf<T[number]>>
+  >
 
 /**
  * @param expr - Predicate to negate.

@@ -66,7 +66,10 @@ describe("query dialect independence", () => {
       "Raw SQL interpolation accepts only param(...), columns, or unsafeSql(...)"
     )
 
-    const query = db.select({ id: users.id }).from(users).where(sql`${unsafeSql("TRUE")}`)
+    const query = db
+      .select({ id: users.id })
+      .from(users)
+      .where(sql`${unsafeSql("TRUE")}`)
     expect(expectSql(query, PostgresDialect).sql).toContain("WHERE TRUE")
   })
 
@@ -108,13 +111,9 @@ describe("migration dialect independence", () => {
     const operation = tableToCreateOp(users)
 
     expect(compileOperation(operation, PostgresDialect)).toContain('"id" uuid not null default gen_random_uuid()')
-    expect(compileOperation(operation, PostgresDialect)).toContain(
-      '"created_at" timestamptz not null default now()'
-    )
+    expect(compileOperation(operation, PostgresDialect)).toContain('"created_at" timestamptz not null default now()')
     expect(compileOperation(operation, SQLiteDialect)).toContain('"id" text not null default (lower(')
-    expect(compileOperation(operation, SQLiteDialect)).toContain(
-      '"created_at" text not null default CURRENT_TIMESTAMP'
-    )
+    expect(compileOperation(operation, SQLiteDialect)).toContain('"created_at" text not null default CURRENT_TIMESTAMP')
     expect(compileOperation(operation, MySQLDialect)).toContain("`id` char(36) not null default (uuid())")
     expect(compileOperation(operation, MySQLDialect)).toContain(
       "`created_at` datetime(3) not null default CURRENT_TIMESTAMP(3)"
@@ -166,17 +165,21 @@ describe("migration dialect independence", () => {
     const plan: MigrationPlan = {
       id: "20260709_add_unique",
       name: "add_unique",
-      operations: [{
-        _tag: "AddColumn",
-        table: "users",
-        column: { name: "email", type: "text", nullable: true, unique: true },
-        destructive: false,
-        reversible: true,
-        capabilities: []
-      }]
+      operations: [
+        {
+          _tag: "AddColumn",
+          table: "users",
+          column: { name: "email", type: "text", nullable: true, unique: true },
+          destructive: false,
+          reversible: true,
+          capabilities: []
+        }
+      ]
     }
     const program = Effect.flatMap(makeMigrator(), (migrator) => migrator.apply(plan))
-    const exit = await Effect.runPromiseExit(Effect.provide(program, FakeDatabaseLayer(driver, { dialect: SQLiteDialect })))
+    const exit = await Effect.runPromiseExit(
+      Effect.provide(program, FakeDatabaseLayer(driver, { dialect: SQLiteDialect }))
+    )
 
     expect(Exit.isFailure(exit)).toBe(true)
     expect(JSON.stringify(exit)).toContain("MigrationError")
@@ -197,7 +200,7 @@ describe("migration dialect independence", () => {
     expect(driver.calls.map((call) => call.sql)).toEqual([
       "begin immediate",
       expect.stringContaining('create table if not exists "_thor_migrations"'),
-      expect.stringContaining('select id, name, checksum'),
+      expect.stringContaining("select id, name, checksum"),
       expect.stringContaining('create table "users"'),
       expect.stringContaining('insert into "_thor_migrations"'),
       "commit"
@@ -207,7 +210,17 @@ describe("migration dialect independence", () => {
   })
 
   it("uses a MySQL named lock without wrapping DDL in a transaction", async () => {
-    const driver = new FakeDriver().enqueue({ rows: [{ acquired: 1 }] }, {}, { rows: [] }, {}, {}, { rows: [{ released: 1 }] })
+    // The MySQL journal probe (checksum-column width, len already 255 → no
+    // upgrade) runs once after ensureJournal DDL.
+    const driver = new FakeDriver().enqueue(
+      { rows: [{ acquired: 1 }] },
+      {},
+      { rows: [{ len: 255 }] },
+      { rows: [] },
+      {},
+      {},
+      { rows: [{ released: 1 }] }
+    )
     const plan: MigrationPlan = {
       id: "20260709_create_users",
       name: "create_users",
@@ -220,6 +233,7 @@ describe("migration dialect independence", () => {
     expect(driver.calls.map((call) => call.sql)).toEqual([
       "select get_lock(?, 30) as acquired",
       expect.stringContaining("create table if not exists `_thor_migrations`"),
+      expect.stringContaining("information_schema.columns"),
       expect.stringContaining("select id, name, checksum"),
       expect.stringContaining("create table `users`"),
       expect.stringContaining("insert into `_thor_migrations`"),

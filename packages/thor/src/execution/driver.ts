@@ -83,4 +83,28 @@ export interface Driver {
    * @returns An Effect yielding the normalized command result.
    */
   readonly executeScript?: (sql: string) => Effect.Effect<CommandResult, DriverError | ConstraintError>
+
+  /**
+   * Releases one connection-scoped prepared resource after cache eviction.
+   * Adapters omit this when their public client contract cannot safely release
+   * and later recreate a named statement; bounded execution then stops admitting
+   * new prepared shapes rather than leaking resources.
+   *
+   * @param preparedName - Stable prepared identity previously passed to query/execute.
+   * @returns An Effect completing resource release.
+   */
+  readonly releasePrepared?: (preparedName: string) => Effect.Effect<void, DriverError | ConstraintError>
+
+  /** @returns An Effect releasing every prepared resource owned by this physical connection. */
+  readonly clearPrepared?: () => Effect.Effect<void, DriverError | ConstraintError>
+
+  /**
+   * Identity of the physical connection that owns server-side prepared
+   * statements. The execution pipeline keys its prepared-name registry by this
+   * object so registries survive driver re-creation over the same pooled
+   * connection (a fresh per-driver registry would forget names the connection
+   * still holds, admitting silent name collisions). Defaults to the driver
+   * instance when omitted.
+   */
+  readonly preparedScope?: object
 }

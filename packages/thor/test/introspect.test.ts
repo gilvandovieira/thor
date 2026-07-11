@@ -28,7 +28,11 @@ describe("Epic P1/P3 — Introspector.currentSchema (spec §16.3, §16.4)", () =
           { name: "title", type: "TEXT", notnull: 0, dflt_value: "'untitled'", pk: 0 }
         ]
       }, // pragma table_info(posts)
-      { rows: [{ id: 0, seq: 0, table: "authors", from: "author_id", to: "id", on_update: "NO ACTION", on_delete: "CASCADE" }] }, // pragma foreign_key_list(posts)
+      {
+        rows: [
+          { id: 0, seq: 0, table: "authors", from: "author_id", to: "id", on_update: "NO ACTION", on_delete: "CASCADE" }
+        ]
+      }, // pragma foreign_key_list(posts)
       { rows: [{ seq: 0, name: "posts_title_idx", unique: 0, origin: "c", partial: 0 }] }, // pragma index_list(posts)
       { rows: [{ seqno: 0, cid: 2, name: "title" }] } // pragma index_info(posts_title_idx)
     )
@@ -43,7 +47,9 @@ describe("Epic P1/P3 — Introspector.currentSchema (spec §16.3, §16.4)", () =
             { name: "title", type: "TEXT", nullable: true, default: "'untitled'" }
           ],
           primaryKey: ["id"],
-          foreignKeys: [{ columns: ["author_id"], references: { table: "authors", columns: ["id"] }, onDelete: "cascade" }],
+          foreignKeys: [
+            { columns: ["author_id"], references: { table: "authors", columns: ["id"] }, onDelete: "cascade" }
+          ],
           indexes: [{ name: "posts_title_idx", columns: ["title"], unique: false }]
         }
       ]
@@ -63,14 +69,28 @@ describe("Epic P1/P3 — Introspector.currentSchema (spec §16.3, §16.4)", () =
       { rows: [{ table_name: "posts" }] }, // tables
       {
         rows: [
-          { table_name: "posts", column_name: "id", data_type: "uuid", is_nullable: "NO", column_default: "gen_random_uuid()" },
+          {
+            table_name: "posts",
+            column_name: "id",
+            data_type: "uuid",
+            is_nullable: "NO",
+            column_default: "gen_random_uuid()"
+          },
           { table_name: "posts", column_name: "author_id", data_type: "uuid", is_nullable: "NO", column_default: null }
         ]
       }, // columns
       { rows: [{ table_name: "posts", column_name: "id" }] }, // primary keys
       {
         rows: [
-          { table_name: "posts", constraint_name: "posts_author_id_fkey", column_name: "author_id", foreign_table: "authors", foreign_column: "id", delete_rule: "CASCADE", update_rule: "NO ACTION" }
+          {
+            table_name: "posts",
+            constraint_name: "posts_author_id_fkey",
+            column_name: "author_id",
+            foreign_table: "authors",
+            foreign_column: "id",
+            delete_rule: "CASCADE",
+            update_rule: "NO ACTION"
+          }
         ]
       }, // foreign keys
       { rows: [{ table_name: "posts", index_name: "posts_author_id_idx", column_name: "author_id", is_unique: false }] } // indexes
@@ -95,17 +115,39 @@ describe("Epic P1/P3 — Introspector.currentSchema (spec §16.3, §16.4)", () =
       {
         rows: [
           { table_name: "posts", column_name: "id", column_type: "char(36)", is_nullable: "NO", column_default: null },
-          { table_name: "posts", column_name: "author_id", column_type: "char(36)", is_nullable: "YES", column_default: null }
+          {
+            table_name: "posts",
+            column_name: "author_id",
+            column_type: "char(36)",
+            is_nullable: "YES",
+            column_default: null
+          }
         ]
       },
       { rows: [{ table_name: "posts", column_name: "id" }] },
-      { rows: [{ table_name: "posts", constraint_name: "fk_author", column_name: "author_id", foreign_table: "authors", foreign_column: "id", delete_rule: "CASCADE", update_rule: "NO ACTION" }] }
+      {
+        rows: [
+          {
+            table_name: "posts",
+            constraint_name: "fk_author",
+            column_name: "author_id",
+            foreign_table: "authors",
+            foreign_column: "id",
+            delete_rule: "CASCADE",
+            update_rule: "NO ACTION"
+          }
+        ]
+      }
     )
 
     const table = (await currentSchema(driver, MySQLDialect)).tables[0]!
     expect(table.columns[0]).toEqual({ name: "id", type: "char(36)", nullable: false, default: null })
     expect(table.columns[1]!.nullable).toBe(true)
-    expect(table.foreignKeys[0]).toEqual({ columns: ["author_id"], references: { table: "authors", columns: ["id"] }, onDelete: "cascade" })
+    expect(table.foreignKeys[0]).toEqual({
+      columns: ["author_id"],
+      references: { table: "authors", columns: ["id"] },
+      onDelete: "cascade"
+    })
   })
 
   it("returns an empty schema for a database with no tables", async () => {
@@ -122,11 +164,18 @@ describe.skipIf(!supportsNodeSqlite)("Epic P1/P3 — live SQLite introspection (
       id: sqlite.uuid("id").primaryKey(),
       name: sqlite.text("name").notNull()
     })
-    const posts = sqlite.table("posts", {
-      id: sqlite.uuid("id").primaryKey(),
-      authorId: sqlite.uuid("author_id").notNull().references(() => authors.id, { onDelete: "cascade" }),
-      title: sqlite.text("title").nullable()
-    }, { indexes: [{ name: "posts_title_idx", columns: ["title"] }] })
+    const posts = sqlite.table(
+      "posts",
+      {
+        id: sqlite.uuid("id").primaryKey(),
+        authorId: sqlite
+          .uuid("author_id")
+          .notNull()
+          .references(() => authors.id, { onDelete: "cascade" }),
+        title: sqlite.text("title").nullable()
+      },
+      { indexes: [{ name: "posts_title_idx", columns: ["title"] }] }
+    )
 
     try {
       const schema = await Effect.runPromise(

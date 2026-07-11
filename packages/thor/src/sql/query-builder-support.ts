@@ -9,11 +9,12 @@
  *
  * @module sql/query-builder-support
  */
-import { Effect, Option, Schema } from "effect"
-import type { AnyColumn, Column } from "../schema/column.js"
+import { Effect, type Option, Schema } from "effect"
+import { type AnyColumn, type Column, columnParamCodec } from "../schema/column.js"
 import { type AnyTable, tableMeta } from "../schema/table.js"
 import {
   type QueryIR,
+  type SelectIR,
   type SelectionField,
   collectQueryParams,
   queryCapabilityBits
@@ -24,9 +25,9 @@ import { PostgresDialect } from "../postgres/dialect.js"
 import type { QueryError, NotFoundError, TooManyRowsError } from "../errors/index.js"
 import { Database } from "../execution/database.js"
 import {
-  atMostOne,
-  exactlyOne,
   executePreparedCommand,
+  executePreparedMaybeOne,
+  executePreparedOne,
   executePreparedRows,
   PreparedExecutionPlan,
   type QueryArgs
@@ -59,8 +60,9 @@ export type SelectResult<F extends SelectFields> = { [K in keyof F]: FieldValue<
 export type NamedParams = Record<string, unknown>
 
 /** Merges two parameter maps, with the right-hand side winning on key overlap. */
-export type MergeParams<A extends NamedParams, B extends NamedParams> = { [K in keyof A | keyof B]:
-  K extends keyof B ? B[K] : K extends keyof A ? A[K] : never }
+export type MergeParams<A extends NamedParams, B extends NamedParams> = {
+  [K in keyof A | keyof B]: K extends keyof B ? B[K] : K extends keyof A ? A[K] : never
+}
 
 /** Terminal-method argument tuple: empty when the query has no parameters. */
 export type ExecutionArguments<P extends NamedParams> = keyof P extends never
@@ -74,7 +76,9 @@ export type TerminalArguments<P extends NamedParams> = ExecutionArguments<P> | [
 export type ExactTerminalArguments<P extends NamedParams, Args extends TerminalArguments<P>> = Args extends []
   ? Args
   : Args extends [infer Input]
-    ? Exclude<keyof Input, keyof P> extends never ? Args : never
+    ? Exclude<keyof Input, keyof P> extends never
+      ? Args
+      : never
     : never
 
 /** Terminal result: a compilable value when called with `[]`, otherwise an executing Effect. */
@@ -84,9 +88,7 @@ export type TerminalCallResult<
   Error,
   Cardinality extends CompiledCardinality,
   Args extends TerminalArguments<P>
-> = Args extends []
-  ? TerminalResult<P, Output, Error, Cardinality>
-  : Effect.Effect<Output, Error, Database>
+> = Args extends [] ? TerminalResult<P, Output, Error, Cardinality> : Effect.Effect<Output, Error, Database>
 
 /**
  * @param args - Optional terminal-method argument tuple.
@@ -104,8 +106,7 @@ export const argsFrom = (args: readonly [QueryArgs?]): QueryArgs => args[0] ?? {
 const toSelectionField = (alias: string, value: AnyColumn | Expr<any>): SelectionField => {
   const outputAlias = internIdentifier(alias)
   if (isColumn(value)) {
-    const codec = value.def.notNull ? value.def.codec : Schema.NullOr(value.def.codec)
-    return { alias: outputAlias, expr: columnRef(value), codec }
+    return { alias: outputAlias, expr: columnRef(value), codec: columnParamCodec(value) }
   }
   const expression = value as Expr<any>
   return { alias: outputAlias, expr: expression.node, codec: expression.codec ?? Schema.Unknown }
@@ -134,18 +135,28 @@ export const starSelection = (table: AnyTable): SelectionField[] =>
 /**
  * Produces stable, serializable query metadata for diagnostics.
  *
+ * `params` lists the named parameters that must be supplied at execution
+ * (`execute()`/terminal args); `constants` lists inline-bound values captured in
+ * the query shape (e.g. `eq(users.email, "x")`), which are validated and encoded
+ * once and never enter the cache key (spec §8, P0.3). Distinguishing the two
+ * makes clear which values a compiled handle still expects per call.
+ *
  * @param ir - Query representation to inspect.
- * @returns Query kind, tables, parameters, cardinality, and capabilities.
+ * @returns Query kind, tables, named params, captured constants, cardinality, and capabilities.
  */
-export const inspectIr = (ir: QueryIR) => ({
-  kind: ir._tag,
-  tables: ir.annotations.tableNames,
-  params: collectQueryParams(ir).map((parameter) => parameter.name),
-  cardinality: ir.cardinality,
-  capabilities: bitsToCapabilities(queryCapabilityBits(ir)),
-  operationName: ir.annotations.operationName,
-  tracing: ir.annotations.tracing
-})
+export const inspectIr = (ir: QueryIR) => {
+  const all = collectQueryParams(ir)
+  return {
+    kind: ir._tag,
+    tables: ir.annotations.tableNames,
+    params: all.filter((parameter) => !("value" in parameter)).map((parameter) => parameter.name),
+    constants: all.filter((parameter) => "value" in parameter).map((parameter) => parameter.name),
+    cardinality: ir.cardinality,
+    capabilities: bitsToCapabilities(queryCapabilityBits(ir)),
+    operationName: ir.annotations.operationName,
+    tracing: ir.annotations.tracing
+  }
+}
 
 // --- PREPARED ----------------------------------------------------------------
 
@@ -171,6 +182,9 @@ export const inspectIr = (ir: QueryIR) => ({
  */
 export class PreparedQuery<A, P extends NamedParams = {}> {
   private readonly plan: PreparedExecutionPlan
+  private readonly fields: SelectionField[]
+  /** Lazily-built cardinality-probe plan capped to two rows (see `probePlan`). */
+  private probePlanCache?: PreparedExecutionPlan
 
   /**
    * @param name - Stable handle name used in diagnostics and tracing.
@@ -182,17 +196,42 @@ export class PreparedQuery<A, P extends NamedParams = {}> {
     ir: QueryIR,
     fields: SelectionField[]
   ) {
-    this.plan = new PreparedExecutionPlan({
-      ...ir,
-      annotations: {
-        ...ir.annotations,
-        operationName: name,
-        tracing: {
-          spanName: name,
-          attributes: { "db.query.kind": ir._tag, "db.query.tables": ir.annotations.tableNames.join(",") }
+    this.fields = fields
+    this.plan = new PreparedExecutionPlan(
+      {
+        ...ir,
+        annotations: {
+          ...ir.annotations,
+          operationName: name,
+          tracing: {
+            spanName: name,
+            attributes: { "db.query.kind": ir._tag, "db.query.tables": ir.annotations.tableNames.join(",") }
+          }
         }
-      }
-    }, fields)
+      },
+      fields
+    )
+  }
+
+  /**
+   * The cardinality-probe plan for `.one()`/`.maybeOne()`: a `SELECT` capped to
+   * at most two rows (preserving any tighter user limit) so a prepared handle
+   * never materializes an unbounded result set to decide cardinality (P0.5 /
+   * Finding 5). Non-`SELECT` handles (or ones already ≤ 2) reuse the base plan.
+   *
+   * @returns The two-row-capped prepared plan.
+   */
+  private get probePlan(): PreparedExecutionPlan {
+    if (this.probePlanCache) return this.probePlanCache
+    const ir = this.plan.ir
+    if (ir._tag === "Select") {
+      const probe = Math.min((ir as SelectIR).limit ?? 2, 2)
+      this.probePlanCache =
+        (ir as SelectIR).limit === probe ? this.plan : new PreparedExecutionPlan({ ...ir, limit: probe }, this.fields)
+    } else {
+      this.probePlanCache = this.plan
+    }
+    return this.probePlanCache
   }
 
   /** @experimental Debugging shape only. @returns Stable query-shape metadata without compiling or executing. */
@@ -230,7 +269,9 @@ export class PreparedQuery<A, P extends NamedParams = {}> {
    * @throws {TooManyRowsError} Through the Effect error channel when multiple rows exist.
    */
   one(...args: ExecutionArguments<P>): Effect.Effect<A, QueryError | NotFoundError | TooManyRowsError, Database> {
-    return Effect.flatMap(this.all(...args), (rows) => exactlyOne(rows, `${this.name}.one`))
+    return Effect.flatMap(Database, (db) =>
+      executePreparedOne<A>(this.probePlan, db, argsFrom(args), `${this.name}.one`)
+    )
   }
 
   /**
@@ -240,7 +281,9 @@ export class PreparedQuery<A, P extends NamedParams = {}> {
    * @throws {TooManyRowsError} Through the Effect error channel when multiple rows exist.
    */
   maybeOne(...args: ExecutionArguments<P>): Effect.Effect<Option.Option<A>, QueryError | TooManyRowsError, Database> {
-    return Effect.flatMap(this.all(...args), (rows) => atMostOne(rows, `${this.name}.maybeOne`))
+    return Effect.flatMap(Database, (db) =>
+      executePreparedMaybeOne<A>(this.probePlan, db, argsFrom(args), `${this.name}.maybeOne`)
+    )
   }
 
   /**

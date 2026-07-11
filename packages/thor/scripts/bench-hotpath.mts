@@ -72,7 +72,7 @@ const layerFor = (rows: ReadonlyArray<Record<string, unknown>>) =>
 
 const pointRows = [{ id: "018f0000-0000-7000-8000-000000000001", name: "Ada" }]
 const bulkRows = Array.from({ length: 100 }, (_, i) => ({
-  id: "018f0000-0000-7000-8000-0000000000" + String(i).padStart(2, "0"),
+  id: `018f0000-0000-7000-8000-0000000000${String(i).padStart(2, "0")}`,
   email: `u${i}@b.c`,
   name: i % 2 ? null : `n${i}`,
   age: i
@@ -116,20 +116,61 @@ const time = (label: string, description: string, iters: number, fn: () => void)
 })
 
 const samples: Sample[] = [
-  time("point.raw", "constant raw-driver Effect", 100_000, () => void pointRt.runSync(rawPointDriver.query("select", []))),
-  time("point.minimal", "construct a minimal result object", 500_000, () => void ({ id: pointRows[0]!.id, name: pointRows[0]!.name })),
-  time("point.cold", "rebuild the query every time", 100_000, () =>
-    void pointRt.runSync(pointQuery().one({ email: "a@b.c" }))
+  time(
+    "point.raw",
+    "constant raw-driver Effect",
+    100_000,
+    () => void pointRt.runSync(rawPointDriver.query("select", []))
+  ),
+  time(
+    "point.minimal",
+    "construct a minimal result object",
+    500_000,
+    () => void { id: pointRows[0]!.id, name: pointRows[0]!.name }
+  ),
+  time(
+    "point.cold",
+    "rebuild the query every time",
+    100_000,
+    () => void pointRt.runSync(pointQuery().one({ email: "a@b.c" }))
   ),
   time("point.warm", "reuse the same query", 100_000, () => void pointRt.runSync(warmPoint.one({ email: "a@b.c" }))),
-  time("point.prepared", "reuse a prepared handle", 100_000, () =>
-    void pointRt.runSync(preparedPoint.one({ email: "a@b.c" }))
+  time(
+    "point.prepared",
+    "reuse a prepared handle",
+    100_000,
+    () => void pointRt.runSync(preparedPoint.one({ email: "a@b.c" }))
   ),
-  time("point.compiled", "stable compiled query", 100_000, () => void pointRt.runSync(compiledPoint.execute({ email: "a@b.c" }))),
-  time("point.compiledPrepared", "compiled + prepared query", 100_000, () => void pointRt.runSync(compiledPreparedPoint.execute({ email: "a@b.c" }))),
-  time("point.unsafeHot", "compiled unsafe-hot query", 100_000, () => void pointRt.runSync(unsafeHotPoint.execute({ email: "a@b.c" }))),
-  time("advanced.prepared", "join + group through a handle", 100_000, () => void advancedRt.runSync(advancedQuery.all())),
-  time("routine.prepared", "declared routine through a handle", 100_000, () => void routineRt.runSync(routineQuery.all())),
+  time(
+    "point.compiled",
+    "stable compiled query",
+    100_000,
+    () => void pointRt.runSync(compiledPoint.execute({ email: "a@b.c" }))
+  ),
+  time(
+    "point.compiledPrepared",
+    "compiled + prepared query",
+    100_000,
+    () => void pointRt.runSync(compiledPreparedPoint.execute({ email: "a@b.c" }))
+  ),
+  time(
+    "point.unsafeHot",
+    "compiled unsafe-hot query",
+    100_000,
+    () => void pointRt.runSync(unsafeHotPoint.execute({ email: "a@b.c" }))
+  ),
+  time(
+    "advanced.prepared",
+    "join + group through a handle",
+    100_000,
+    () => void advancedRt.runSync(advancedQuery.all())
+  ),
+  time(
+    "routine.prepared",
+    "declared routine through a handle",
+    100_000,
+    () => void routineRt.runSync(routineQuery.all())
+  ),
   time("bulk.safe", "read and check 100 rows", 20_000, () => void bulkRt.runSync(bulkQuery.all())),
   time("bulk.unsafe", "read 100 rows without checks", 20_000, () => void bulkUnsafeRt.runSync(bulkQuery.all()))
 ]
@@ -142,7 +183,7 @@ const targets = {
   "point.compiledPrepared": assessBenchmarkTarget(by["point.compiledPrepared"]!, 1_000)
 } as const
 
-console.log("\nThor hot-path overhead — Thor's cost only, with no database or network\n" + "-".repeat(100))
+console.log(`\nThor hot-path overhead — Thor's cost only, with no database or network\n${"-".repeat(100)}`)
 console.log(timingLegend(samples[0]!.sampleCount))
 console.log("Throughput is an equivalent for comparison, not promised production capacity.\n")
 console.log(
@@ -185,7 +226,7 @@ if (process.env.BENCH_GATE || process.env.BENCH_UPDATE_BASELINE) {
   const baselinePath = fileURLToPath(new URL(`./hotpath-baselines/${baselineFile}`, import.meta.url))
   const environment = {
     runtime,
-    version: runtime === "node" ? process.versions.node : process.versions.bun ?? "unknown",
+    version: runtime === "node" ? process.versions.node : (process.versions.bun ?? "unknown"),
     platform: process.platform,
     architecture: process.arch
   }
@@ -199,11 +240,13 @@ if (process.env.BENCH_GATE || process.env.BENCH_UPDATE_BASELINE) {
       measurement: { statistic: "median", samples: samples[0]!.sampleCount },
       metrics
     }
-    writeFileSync(baselinePath, JSON.stringify(baseline, null, 2) + "\n")
+    writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`)
     console.log(`\n[gate] baseline recorded → ${baselinePath}`)
   } else if (!existsSync(baselinePath)) {
     console.error(`\n[gate] FAIL — required baseline is missing: ${baselinePath}`)
-    console.error("[gate] Record and review it deliberately with `pnpm bench:baseline`; the gate will never baseline itself.")
+    console.error(
+      "[gate] Record and review it deliberately with `pnpm bench:baseline`; the gate will never baseline itself."
+    )
     process.exit(1)
   } else {
     let baseline: BenchmarkBaseline
@@ -231,7 +274,9 @@ if (process.env.BENCH_GATE || process.env.BENCH_UPDATE_BASELINE) {
       process.exit(1)
     }
     console.log(`\n[gate] OK — no metric is more than ${BENCHMARK_REGRESSION_LIMIT}× slower than ${baselineFile}.`)
-    console.log(`[gate] Metrics below ${formatDuration(BENCHMARK_GATE_MIN_NS)} are recorded but excluded from multiplicative gating.`)
+    console.log(
+      `[gate] Metrics below ${formatDuration(BENCHMARK_GATE_MIN_NS)} are recorded but excluded from multiplicative gating.`
+    )
     console.log("[gate] Runtime version is informational; runtime/platform/architecture and metric shape are enforced.")
   }
 }

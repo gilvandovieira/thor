@@ -14,9 +14,12 @@ for (const [index, source] of blocks.entries()) {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
     reportDiagnostics: true
   })
-  const diagnostics = result.diagnostics?.filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error) ?? []
+  const diagnostics =
+    result.diagnostics?.filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error) ?? []
   if (diagnostics.length > 0) {
-    throw new Error(`README TypeScript block ${index + 1} has syntax errors: ${diagnostics.map((item) => item.messageText).join("; ")}`)
+    throw new Error(
+      `README TypeScript block ${index + 1} has syntax errors: ${diagnostics.map((item) => item.messageText).join("; ")}`
+    )
   }
 }
 

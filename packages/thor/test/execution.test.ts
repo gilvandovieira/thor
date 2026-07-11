@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest"
 import { Effect, Option, Schema } from "effect"
 import {
-  Database,
+  type Database,
   DecodeError,
   DriverError,
   GuardError,
@@ -56,9 +56,7 @@ describe("fake driver execution (spec §14.9)", () => {
       driver
     )
 
-    expect(rows).toStrictEqual([
-      { id: "u1", email: "a@example.com", createdAt: new Date("2026-01-01T00:00:00.000Z") }
-    ])
+    expect(rows).toStrictEqual([{ id: "u1", email: "a@example.com", createdAt: new Date("2026-01-01T00:00:00.000Z") }])
     expect(driver.calls).toStrictEqual([
       {
         sql: 'SELECT "users"."id" AS "id", "users"."email" AS "email", "users"."created_at" AS "createdAt" FROM "users" WHERE "users"."email" = $1',
@@ -68,15 +66,25 @@ describe("fake driver execution (spec §14.9)", () => {
   })
 
   it("validates and encodes named parameters before calling the driver", async () => {
-    const query = db.select({ id: users.id }).from(users).where(eq(users.age, param("age", Schema.NumberFromString)))
+    const query = db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.age, param("age", Schema.NumberFromString)))
     const driver = new FakeDriver().enqueue({ rows: [] })
 
     await runSuccess(query.all({ age: 42 }), driver)
     expect(driver.calls[0]?.params).toEqual(["42"])
 
-    for (const [args, reason] of [[{}, "missing"], [{ age: "42" }, "invalid"], [{ age: 42, other: true }, "extra"]] as const) {
+    for (const [args, reason] of [
+      [{}, "missing"],
+      [{ age: "42" }, "invalid"],
+      [{ age: 42, other: true }, "extra"]
+    ] as const) {
       const rejectedDriver = new FakeDriver()
-      const error = await runFailure((query.all as (args: unknown) => ReturnType<typeof query.all>)(args), rejectedDriver)
+      const error = await runFailure(
+        (query.all as (args: unknown) => ReturnType<typeof query.all>)(args),
+        rejectedDriver
+      )
       expect(error).toBeInstanceOf(ParameterError)
       expect(error).toMatchObject({ _tag: "ParameterError", reason })
       expect(rejectedDriver.calls).toEqual([])
@@ -84,32 +92,48 @@ describe("fake driver execution (spec §14.9)", () => {
   })
 
   it("rejects duplicate and conflicting named parameter declarations", async () => {
-    const duplicates = db.select({ id: users.id }).from(users).where(
-      // Distinct declarations with the same name are ambiguous even when their schemas match.
-      { _tag: "Logical", op: "and", operands: [
-        eq(users.email, param("value", Schema.String)),
-        eq(users.email, param("value", Schema.String))
-      ] }
-    )
-    const conflicts = db.select({ id: users.id }).from(users).where(
-      { _tag: "Logical", op: "and", operands: [
-        eq(users.email, param("value", Schema.String)),
-        eq(users.age, param("value", Schema.Number))
-      ] }
-    )
+    const duplicates = db
+      .select({ id: users.id })
+      .from(users)
+      .where(
+        // Distinct declarations with the same name are ambiguous even when their schemas match.
+        {
+          _tag: "Logical",
+          op: "and",
+          operands: [eq(users.email, param("value", Schema.String)), eq(users.email, param("value", Schema.String))]
+        }
+      )
+    const conflicts = db
+      .select({ id: users.id })
+      .from(users)
+      .where({
+        _tag: "Logical",
+        op: "and",
+        operands: [eq(users.email, param("value", Schema.String)), eq(users.age, param("value", Schema.Number))]
+      })
 
-    for (const [query, reason] of [[duplicates, "duplicate"], [conflicts, "conflict"]] as const) {
+    for (const [query, reason] of [
+      [duplicates, "duplicate"],
+      [conflicts, "conflict"]
+    ] as const) {
       const driver = new FakeDriver()
-      const error = await runFailure((query.all as (args: unknown) => ReturnType<typeof query.all>)({ value: "x" }), driver)
+      const error = await runFailure(
+        (query.all as (args: unknown) => ReturnType<typeof query.all>)({ value: "x" }),
+        driver
+      )
       expect(error).toMatchObject({ _tag: "ParameterError", reason })
       expect(driver.calls).toEqual([])
     }
   })
 
   it("makes outer-joined columns nullable in the type and decoder plan", async () => {
-    const left = db.select({ email: users.email, title: posts.title }).from(users)
+    const left = db
+      .select({ email: users.email, title: posts.title })
+      .from(users)
       .leftJoin(posts, eq(users.id, posts.userId))
-    type LeftRows = typeof left extends { all: (...args: never[]) => Effect.Effect<infer Rows, any, any> } ? Rows : never
+    type LeftRows = typeof left extends { all: (...args: never[]) => Effect.Effect<infer Rows, any, any> }
+      ? Rows
+      : never
     expectTypeOf<LeftRows>().toEqualTypeOf<ReadonlyArray<{ email: string; title: string | null }>>()
 
     const driver = new FakeDriver().enqueue({ rows: [{ email: "a@example.com", title: null }] })
@@ -117,9 +141,13 @@ describe("fake driver execution (spec §14.9)", () => {
   })
 
   it("makes the preserved-left side of a right join nullable in the type and decoder plan", async () => {
-    const right = db.select({ email: users.email, title: posts.title }).from(users)
+    const right = db
+      .select({ email: users.email, title: posts.title })
+      .from(users)
       .rightJoin(posts, eq(users.id, posts.userId))
-    type RightRows = typeof right extends { all: (...args: never[]) => Effect.Effect<infer Rows, any, any> } ? Rows : never
+    type RightRows = typeof right extends { all: (...args: never[]) => Effect.Effect<infer Rows, any, any> }
+      ? Rows
+      : never
     expectTypeOf<RightRows>().toEqualTypeOf<ReadonlyArray<{ email: string | null; title: string }>>()
 
     const driver = new FakeDriver().enqueue({ rows: [{ email: null, title: "hello" }] })
@@ -132,7 +160,10 @@ describe("fake driver execution (spec §14.9)", () => {
       { rows: [{ visits: "9223372036854775807" }] }
     )
     const rows = await runSuccess(
-      db.select({ total: count(), sumAge: sum(users.age), averageAge: avg(users.age) }).from(users).all(),
+      db
+        .select({ total: count(), sumAge: sum(users.age), averageAge: avg(users.age) })
+        .from(users)
+        .all(),
       driver
     )
     expect(rows).toEqual([{ total: 2, sumAge: 60, averageAge: 30.5 }])
@@ -200,11 +231,7 @@ describe("fake driver execution (spec §14.9)", () => {
     const driver = new FakeDriver().enqueue({ rows: [{ id: "new-id", createdAt: "2026-07-09T12:00:00Z" }] })
 
     const row = await runSuccess(
-      db
-        .insert(users)
-        .values({ email: "x@example.com" })
-        .returning({ id: users.id, createdAt: users.createdAt })
-        .one(),
+      db.insert(users).values({ email: "x@example.com" }).returning({ id: users.id, createdAt: users.createdAt }).one(),
       driver
     )
 
@@ -225,10 +252,7 @@ describe("fake driver execution (spec §14.9)", () => {
   it("surfaces field decoding failures as DecodeError", async () => {
     const driver = new FakeDriver().enqueue({ rows: [{ createdAt: "not-a-timestamp" }] })
 
-    const error = await runFailure(
-      db.select({ createdAt: users.createdAt }).from(users).all(),
-      driver
-    )
+    const error = await runFailure(db.select({ createdAt: users.createdAt }).from(users).all(), driver)
 
     expect(error).toBeInstanceOf(DecodeError)
     expect(error).toMatchObject({

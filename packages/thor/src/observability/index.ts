@@ -157,12 +157,16 @@ const durationTimer = Metric.timer("thor_operation_duration", "Thor database ope
 
 /** @param metric - Metric to label. @param event - Label source. @returns The labeled metric. */
 const tagged = <Type, In, Out>(metric: Metric.Metric<Type, In, Out>, event: ObservabilityEvent) =>
-  Metric.tagged(Metric.tagged(Metric.tagged(metric, "kind", event.kind), "operation", event.operation), "dialect", event.dialect)
+  Metric.tagged(
+    Metric.tagged(Metric.tagged(metric, "kind", event.kind), "operation", event.operation),
+    "dialect",
+    event.dialect
+  )
 
 /** @param cause - Failed operation cause. @returns A safe error classification. */
 const errorTag = <E>(cause: Cause.Cause<E>): string =>
   Option.match(Cause.failureOption(cause), {
-    onNone: () => Cause.isInterrupted(cause) ? "Interrupted" : "Defect",
+    onNone: () => (Cause.isInterrupted(cause) ? "Interrupted" : "Defect"),
     onSome: (error) => {
       if (typeof error === "object" && error !== null && "_tag" in error && typeof error._tag === "string") {
         return error._tag
@@ -179,13 +183,15 @@ const replay = <A, E>(exit: Exit.Exit<A, E>): Effect.Effect<A, E> =>
 const emit = (config: ObservabilityConfig, event: ObservabilityEvent): Effect.Effect<void> => {
   const effects: Array<Effect.Effect<void>> = []
   if (config.onEvent) {
-    effects.push(Effect.sync(() => {
-      try {
-        config.onEvent!(event)
-      } catch {
-        // Instrumentation must never alter database behavior.
-      }
-    }))
+    effects.push(
+      Effect.sync(() => {
+        try {
+          config.onEvent!(event)
+        } catch {
+          // Instrumentation must never alter database behavior.
+        }
+      })
+    )
   }
   if (config.logSql !== "none" || config.logParams !== "none") {
     effects.push(Effect.logDebug("thor.database", event))
@@ -240,6 +246,7 @@ const observedParameters = (
  * @param state - Mutable execution facts scoped to this run.
  * @param effect - Query execution Effect.
  * @param rowCount - Successful result row-count extractor.
+ * @param rowsReadOnFailure - Optional rows-read count reported when the effect fails (e.g. a cardinality error after rows were read).
  * @returns The query Effect with opt-in instrumentation.
  */
 export const observeQuery = <A, E, R>(
@@ -248,7 +255,8 @@ export const observeQuery = <A, E, R>(
   args: Readonly<Record<string, unknown>>,
   state: QueryObservationState,
   effect: Effect.Effect<A, E, R>,
-  rowCount: (value: A) => number | undefined
+  rowCount: (value: A) => number | undefined,
+  rowsReadOnFailure?: () => number | undefined
 ): Effect.Effect<A, E, R> => {
   const config = database.observability
   if (!config) return effect
@@ -268,13 +276,16 @@ export const observeQuery = <A, E, R>(
     const exit = yield* Effect.exit(effect)
     const durationMs = Math.max(0, Date.now() - started)
     const failure = Exit.isFailure(exit) ? errorTag(exit.cause) : undefined
-    const rows = Exit.isSuccess(exit) ? rowCount(exit.value) : undefined
+    // On a refined-cardinality failure (`.one()`/`.maybeOne()`), the driver rows
+    // were read and decoded before the failure; report that actual read count.
+    const rows = Exit.isSuccess(exit) ? rowCount(exit.value) : rowsReadOnFailure?.()
     const parameters = observedParameters(config.logParams, args, state)
-    const sql = config.logSql === "unsafe-full"
-      ? state.compiledSql
-      : config.logSql === "summary"
-      ? `${operation}${tables.length > 0 ? ` ${tables.join(",")}` : ""}`
-      : undefined
+    const sql =
+      config.logSql === "unsafe-full"
+        ? state.compiledSql
+        : config.logSql === "summary"
+          ? `${operation}${tables.length > 0 ? ` ${tables.join(",")}` : ""}`
+          : undefined
     const event: QueryObservabilityEvent = {
       kind: "query",
       operation,
@@ -381,14 +392,17 @@ export const withObservability = <E, R>(
 ): Layer.Layer<Database, E, R> =>
   Layer.effect(
     Database,
-    Effect.map(Database, (database): DatabaseService => ({
-      ...database,
-      observability: {
-        tracing: options.tracing ?? false,
-        metrics: options.metrics ?? false,
-        logSql: options.logSql ?? "none",
-        logParams: options.logParams ?? "none",
-        ...(options.onEvent ? { onEvent: options.onEvent } : {})
-      }
-    }))
+    Effect.map(
+      Database,
+      (database): DatabaseService => ({
+        ...database,
+        observability: {
+          tracing: options.tracing ?? false,
+          metrics: options.metrics ?? false,
+          logSql: options.logSql ?? "none",
+          logParams: options.logParams ?? "none",
+          ...(options.onEvent ? { onEvent: options.onEvent } : {})
+        }
+      })
+    )
   ).pipe(Layer.provide(layer))

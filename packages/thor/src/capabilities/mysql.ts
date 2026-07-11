@@ -27,7 +27,7 @@ export const MySQLCapabilities = defineVerifiedCapabilities("mysql", {
   "schema.enum": "unknown",
   "schema.generatedColumns": "native",
   "schema.identityColumns": "emulated",
-  "query.streaming": "unknown",
+  "query.streaming": "unsupported",
   "query.preparedStatements": "native",
   "routine.functionCall": "native",
   "routine.procedureCall": "native",

@@ -63,6 +63,11 @@ actions are normalized to lower case, with the implicit `no action` omitted.
 already has an `IntrospectedSchema`. Both it and `Introspector.drift()` return a
 `DriftReport` with `inSync` and an ordered `changes` array.
 
+`Migrator.drift()` is a legacy, differently shaped API: it returns only
+`CreateTable` operations for expected tables missing from the database. It is
+not structural drift and should not be used for diagnostics or reconciliation;
+prefer `Introspector.drift()`.
+
 ## Structural scope
 
 Drift currently reports:
@@ -149,10 +154,8 @@ when structural drift remains and no migration is pending. When migrations are
 pending, it warns instead because the pending DDL may explain the difference.
 This check uses the configured `journalTable` as its ignored table.
 
-The standalone CLI `drift` and `doctor` paths currently use the default
-`_thor_migrations` ignore rule. If `journalTable` is customized, use the
-programmatic `ignoreTables` option when an exact custom-journal drift check is
-required.
+The `up`, `drift`, and `doctor` CLI paths all ignore the configured
+`journalTable`, including custom names.
 
 ## Dialect strategy and performance
 

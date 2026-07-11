@@ -43,10 +43,7 @@ export interface ExpandContractColumnChange {
  * @param change - The column change to stage.
  * @returns Four ordered migration plans; the final (drop) plan is destructive.
  */
-export const planExpandContract = (
-  base: string,
-  change: ExpandContractColumnChange
-): ReadonlyArray<MigrationPlan> => {
+export const planExpandContract = (base: string, change: ExpandContractColumnChange): ReadonlyArray<MigrationPlan> => {
   const requireColumn = change.requireColumn ?? change.add.name
 
   const expand: MigrationOperation = {

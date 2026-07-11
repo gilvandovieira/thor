@@ -76,16 +76,10 @@ describe("runtime capability detection", () => {
 
 describe("runtime requirements", () => {
   it("reports every missing capability in declaration order", () => {
-    const requirements = defineRuntimeRequirements("example/adapter", [
-      "runtime.bun",
-      "runtime.sqlite.bun"
-    ])
+    const requirements = defineRuntimeRequirements("example/adapter", ["runtime.bun", "runtime.sqlite.bun"])
     const profile = defineRuntimeCapabilities("node", ["runtime.node"])
 
-    expect(missingRuntimeCapabilities(requirements, profile)).toEqual([
-      "runtime.bun",
-      "runtime.sqlite.bun"
-    ])
+    expect(missingRuntimeCapabilities(requirements, profile)).toEqual(["runtime.bun", "runtime.sqlite.bun"])
   })
 
   it("throws a tagged, actionable error before adapter use", () => {

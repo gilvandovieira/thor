@@ -33,6 +33,10 @@ export class FakeDriver {
   readonly calls: DriverCall[] = []
   /** The prepared-statement name passed with each call (`undefined` if unprepared), aligned to `calls`. */
   readonly preparedNames: (string | undefined)[] = []
+  /** Prepared identities released by bounded-cache eviction. */
+  readonly releasedPreparedNames: string[] = []
+  /** Number of whole-registry cleanup calls. */
+  clearedPrepared = 0
   private readonly queue: FakeResult[] = []
 
   /**
@@ -50,6 +54,8 @@ export class FakeDriver {
   reset(): void {
     this.calls.length = 0
     this.preparedNames.length = 0
+    this.releasedPreparedNames.length = 0
+    this.clearedPrepared = 0
     this.queue.length = 0
   }
 
@@ -64,33 +70,40 @@ export class FakeDriver {
    * @returns A `Driver` view backed by this recorder and response queue.
    */
   get driver(): Driver {
-    const self = this
     return {
       runtime: FakeDriverRuntime,
       query: (sql, params, name) =>
         Effect.suspend(() => {
-          self.calls.push({ sql, params })
-          self.preparedNames.push(name)
-          const result = self.next()
+          this.calls.push({ sql, params })
+          this.preparedNames.push(name)
+          const result = this.next()
           return result.error ? Effect.fail(result.error) : Effect.succeed(result.rows ?? [])
         }),
       execute: (sql, params, name) =>
         Effect.suspend(() => {
-          self.calls.push({ sql, params })
-          self.preparedNames.push(name)
-          const result = self.next()
+          this.calls.push({ sql, params })
+          this.preparedNames.push(name)
+          const result = this.next()
           return result.error
             ? Effect.fail(result.error)
             : Effect.succeed<CommandResult>({ rowCount: result.rowCount ?? result.rows?.length ?? 0 })
         }),
       executeScript: (sql) =>
         Effect.suspend(() => {
-          self.calls.push({ sql, params: [] })
-          self.preparedNames.push(undefined)
-          const result = self.next()
+          this.calls.push({ sql, params: [] })
+          this.preparedNames.push(undefined)
+          const result = this.next()
           return result.error
             ? Effect.fail(result.error)
             : Effect.succeed<CommandResult>({ rowCount: result.rowCount ?? result.rows?.length ?? 0 })
+        }),
+      releasePrepared: (name) =>
+        Effect.sync(() => {
+          this.releasedPreparedNames.push(name)
+        }),
+      clearPrepared: () =>
+        Effect.sync(() => {
+          this.clearedPrepared++
         })
     }
   }

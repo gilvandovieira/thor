@@ -15,7 +15,7 @@
 import pgLib from "pg"
 import postgres from "postgres"
 import { Effect, Schema, type Layer } from "effect"
-import { Database, db, eq, param, pg } from "@gilvandovieira/thor"
+import { type Database, db, eq, param, pg } from "@gilvandovieira/thor"
 import { PostgresJsLayer, PostgresLayer } from "@gilvandovieira/thor/postgres"
 import {
   formatDuration,
@@ -61,17 +61,48 @@ const CREATE = `create table bench_users (
 const runScenarios = async (run: <A, E>(e: Effect.Effect<A, E, Database>) => Promise<A>): Promise<Sample[]> => [
   // Reads run before writes so the bulk fixture stays exactly 200 rows.
   await time("select.point", 600, () =>
-    run(db.select({ id: users.id, name: users.name }).from(users).where(eq(users.email, emailParam)).one({ email: "point@bench" }))
+    run(
+      db
+        .select({ id: users.id, name: users.name })
+        .from(users)
+        .where(eq(users.email, emailParam))
+        .one({ email: "point@bench" })
+    )
   ),
   await time("select.bulk200", 150, () =>
-    run(db.select({ id: users.id, email: users.email, name: users.name, age: users.age }).from(users).limit(BULK_ROWS).all())
+    run(
+      db
+        .select({ id: users.id, email: users.email, name: users.name, age: users.age })
+        .from(users)
+        .limit(BULK_ROWS)
+        .all()
+    )
   ),
-  await time("insert", 400, (i) => run(db.insert(users).values({ email: `ins${i}@bench`, name: "x" }).run())),
+  await time("insert", 400, (i) =>
+    run(
+      db
+        .insert(users)
+        .values({ email: `ins${i}@bench`, name: "x" })
+        .run()
+    )
+  ),
   await time("insert.returning", 400, (i) =>
-    run(db.insert(users).values({ email: `insr${i}@bench` }).returning({ id: users.id }).one())
+    run(
+      db
+        .insert(users)
+        .values({ email: `insr${i}@bench` })
+        .returning({ id: users.id })
+        .one()
+    )
   ),
   await time("update.point", 400, (i) =>
-    run(db.update(users).set({ name: `n${i}` }).where(eq(users.email, emailParam)).run({ email: "point@bench" }))
+    run(
+      db
+        .update(users)
+        .set({ name: `n${i}` })
+        .where(eq(users.email, emailParam))
+        .run({ email: "point@bench" })
+    )
   )
 ]
 
@@ -121,8 +152,10 @@ const benchCombo = async (driver: "node-postgres" | "postgres.js", prepared: boo
 
 const main = async () => {
   const results: Record<string, { off: Sample[]; on: Sample[] }> = {}
-  console.log("\nThor with a real local PostgreSQL database\n" + "-".repeat(105))
-  console.log("Smaller time is faster. The database runs over loopback; production network, disk, pooling, and concurrency will differ.")
+  console.log(`\nThor with a real local PostgreSQL database\n${"-".repeat(105)}`)
+  console.log(
+    "Smaller time is faster. The database runs over loopback; production network, disk, pooling, and concurrency will differ."
+  )
   for (const driver of ["node-postgres", "postgres.js"] as const) {
     const off = await benchCombo(driver, false)
     const on = await benchCombo(driver, true)
@@ -147,7 +180,8 @@ const main = async () => {
   for (const a of pg2) {
     const b = js2.get(a.scenario)!
     const ratio = a.nsPerOp / b.nsPerOp
-    const reading = ratio >= 0.9 && ratio <= 1.1 ? "roughly even" : ratio < 1 ? "node-postgres faster" : "postgres.js faster"
+    const reading =
+      ratio >= 0.9 && ratio <= 1.1 ? "roughly even" : ratio < 1 ? "node-postgres faster" : "postgres.js faster"
     console.log(
       `  ${a.scenario.padEnd(18)} ${formatDuration(a.nsPerOp).padStart(14)} ${formatDuration(b.nsPerOp).padStart(14)}  ${reading}`
     )
@@ -155,7 +189,9 @@ const main = async () => {
 
   const preparedPoints = [results["node-postgres"]!.on[0]!, results["postgres.js"]!.on[0]!]
   console.log("\nIn everyday terms:")
-  console.log("  • Preparation mainly helps repeated parameterized work by letting PostgreSQL reuse setup it has already done.")
+  console.log(
+    "  • Preparation mainly helps repeated parameterized work by letting PostgreSQL reuse setup it has already done."
+  )
   console.log(
     `  • A prepared one-row lookup takes ${formatDuration(preparedPoints[0]!.nsPerOp)} with node-postgres and ${formatDuration(preparedPoints[1]!.nsPerOp)} with postgres.js on this local setup.`
   )

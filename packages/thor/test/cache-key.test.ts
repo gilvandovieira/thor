@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest"
-import {
-  capabilityProfileHash,
-  defineCapabilities,
-  dialectProfileHash
-} from "@gilvandovieira/thor/capabilities"
+import { capabilityProfileHash, defineCapabilities, dialectProfileHash } from "@gilvandovieira/thor/capabilities"
 import {
   DEFAULT_DECODE_MODE,
   DEFAULT_EXECUTION_MODE,
@@ -12,9 +8,9 @@ import {
   db,
   eq,
   pg,
-  planKey,
-  queryStructuralHash
+  planKey
 } from "@gilvandovieira/thor"
+import { queryStructuralHash } from "../src/ir/structural-hash.js"
 
 const users = pg.table("users", {
   id: pg.uuid("id").primaryKey(),

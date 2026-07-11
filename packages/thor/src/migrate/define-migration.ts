@@ -6,6 +6,7 @@
  * @module migrate/define-migration
  */
 import { Effect } from "effect"
+import { createHash } from "node:crypto"
 import { MigrationError } from "../errors/index.js"
 import { Database } from "../execution/database.js"
 import type { UnsafeSqlNode } from "../ir/query-ir.js"
@@ -22,6 +23,20 @@ export interface SqlStatement {
  */
 export type MigrationStep = SqlStatement | Effect.Effect<void, MigrationError, Database>
 
+/**
+ * The declared risk class of a manual migration (spec §15.4, P0.4). Thor cannot
+ * infer safety from opaque `sql`/`rawSql` text, so authors declare it: an
+ * `"additive"` migration passes `safe-only`; a `"destructive"` migration is
+ * blocked under `safe-only`/`expand-only` and requires an explicitly reviewed
+ * `allow-reviewed-destructive` run. When **omitted**, the migration is treated
+ * as *unchecked* and blocked under `safe-only`/`expand-only` unless the run is
+ * reviewed — opaque SQL is never silently treated as safe (Finding 2).
+ */
+export type MigrationSafety = "additive" | "destructive"
+
+/** The expand/contract phase a manual migration belongs to (spec §15.5). */
+export type MigrationPhase = "expand" | "contract"
+
 interface MigrationDefinitionBase {
   /** Stable, sortable migration identifier. */
   readonly id: string
@@ -29,6 +44,24 @@ interface MigrationDefinitionBase {
   readonly name: string
   /** Explicitly marks the migration as impossible to roll back. */
   readonly irreversible?: boolean
+  /**
+   * Declared risk class of the **forward** (`up`) step, governing which policy
+   * permits it (spec §15.4). When omitted the migration is "unchecked" and
+   * blocked under `safe-only`/`expand-only` unless the run is reviewed — Thor
+   * cannot prove opaque SQL is additive (Finding 2).
+   */
+  readonly safety?: MigrationSafety
+  /** Declared expand/contract phase of the `up` step, enforced under `expand-only`. */
+  readonly phase?: MigrationPhase
+  /**
+   * Declared risk class of the **rollback** (`down`) step. Rolling an additive
+   * change back is often destructive (e.g. dropping the column it added), so the
+   * `down` direction is guarded independently (Finding 3). When omitted the
+   * `down` is "unchecked" and reviewed-only under `safe-only`.
+   */
+  readonly downSafety?: MigrationSafety
+  /** Declared expand/contract phase of the `down` step, enforced under `expand-only`. */
+  readonly downPhase?: MigrationPhase
 }
 
 /**
@@ -142,8 +175,10 @@ export const rawSql = (
 export const backfill = <E extends { readonly message?: string }>(
   effect: Effect.Effect<unknown, E, Database>
 ): Effect.Effect<void, MigrationError, Database> =>
-  Effect.mapError(Effect.asVoid(effect), (cause) =>
-    new MigrationError({ message: `backfill failed: ${cause.message ?? String(cause)}`, cause }))
+  Effect.mapError(
+    Effect.asVoid(effect),
+    (cause) => new MigrationError({ message: `backfill failed: ${cause.message ?? String(cause)}`, cause })
+  )
 
 /**
  * @param material - Text to hash.
@@ -158,17 +193,79 @@ export const hashText = (material: string): string => {
   return (h >>> 0).toString(16).padStart(8, "0")
 }
 
-/**
- * @param definition - Migration definition to fingerprint.
- * @returns Stable checksum of both directions.
+/** Current migration checksum prefix and canonical-material version. */
+const CHECKSUM_PREFIX = "sha256:v1:"
 
+/** Result of comparing a journal checksum with the current migration definition. */
+export type MigrationChecksumStatus = "current" | "legacy" | "mismatch" | "unknown-algorithm"
+
+/**
+ * @param fields - Ordered semantic fields to serialize without delimiter ambiguity.
+ * @returns Canonical JSON material for the v1 checksum algorithm.
  */
-export const checksum = (definition: MigrationDefinition): string =>
+const canonicalMaterial = (fields: ReadonlyArray<readonly [string, string | boolean | null]>): string =>
+  JSON.stringify(["thor-migration-checksum", 1, fields])
+
+/**
+ * @param material - Canonical checksum material.
+ * @returns A versioned SHA-256 digest.
+ */
+export const checksumText = (material: string): string =>
+  `${CHECKSUM_PREFIX}${createHash("sha256").update(material, "utf8").digest("hex")}`
+
+/**
+ * Computes the historical eight-character FNV-1a migration checksum. This is
+ * retained only to verify existing journal rows; new rows always use SHA-256.
+ *
+ * @param definition - Migration definition to fingerprint using the legacy algorithm.
+ * @returns The legacy unversioned checksum.
+ */
+export const legacyChecksum = (definition: MigrationDefinition): string =>
   hashText(
     (isSqlStatement(definition.up) ? definition.up.sql : `effect:${definition.revision}:up`) +
       "|" +
       (definition.down && isSqlStatement(definition.down)
         ? definition.down.sql
-        : definition.down ? `effect:${definition.revision}:down` : "none") +
+        : definition.down
+          ? `effect:${definition.revision}:down`
+          : "none") +
       `|revision:${definition.revision ?? "sql"}`
   )
+
+/**
+ * @param definition - Migration definition to fingerprint.
+ * @returns Versioned SHA-256 checksum of every execution-relevant field.
+ */
+export const checksum = (definition: MigrationDefinition): string =>
+  checksumText(
+    canonicalMaterial([
+      ["id", definition.id],
+      ["name", definition.name],
+      ["up.kind", isSqlStatement(definition.up) ? "sql" : "effect"],
+      ["up.value", isSqlStatement(definition.up) ? definition.up.sql : (definition.revision ?? null)],
+      ["down.kind", definition.down ? (isSqlStatement(definition.down) ? "sql" : "effect") : "none"],
+      [
+        "down.value",
+        definition.down ? (isSqlStatement(definition.down) ? definition.down.sql : (definition.revision ?? null)) : null
+      ],
+      ["revision", definition.revision ?? null],
+      ["irreversible", definition.irreversible ?? false],
+      ["safety", definition.safety ?? null],
+      ["phase", definition.phase ?? null],
+      ["downSafety", definition.downSafety ?? null],
+      ["downPhase", definition.downPhase ?? null]
+    ])
+  )
+
+/**
+ * Compares a stored journal checksum without mutating journal history.
+ *
+ * @param definition - Current migration definition.
+ * @param stored - Checksum read from the journal.
+ * @returns Whether the checksum is current, legacy-compatible, mismatched, or uses an unknown algorithm.
+ */
+export const migrationChecksumStatus = (definition: MigrationDefinition, stored: string): MigrationChecksumStatus => {
+  if (stored.startsWith(CHECKSUM_PREFIX)) return stored === checksum(definition) ? "current" : "mismatch"
+  if (stored.includes(":")) return "unknown-algorithm"
+  return stored === legacyChecksum(definition) ? "legacy" : "mismatch"
+}

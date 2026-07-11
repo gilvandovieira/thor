@@ -11,7 +11,10 @@ const authors = pg.table("authors", {
 
 const posts = pg.table("posts", {
   id: pg.uuid("id").primaryKey().defaultRandom(),
-  authorId: pg.uuid("author_id").notNull().references(() => authors.id, { onDelete: "cascade" }),
+  authorId: pg
+    .uuid("author_id")
+    .notNull()
+    .references(() => authors.id, { onDelete: "cascade" }),
   title: pg.text("title").notNull()
 })
 
@@ -20,7 +23,10 @@ const posts = pg.table("posts", {
 // annotation to break TypeScript's circular-inference (as with other ORMs).
 const comments: AnyTable = pg.table("comments", {
   id: pg.uuid("id").primaryKey().defaultRandom(),
-  parentId: pg.uuid("parent_id").nullable().references(() => comments.id)
+  parentId: pg
+    .uuid("parent_id")
+    .nullable()
+    .references(() => comments.id)
 })
 
 describe("Epic Q1 — column.references() FK metadata (spec §13.2)", () => {
@@ -40,7 +46,10 @@ describe("Epic Q1 — column.references() FK metadata (spec §13.2)", () => {
     const t = pg.table(
       "t",
       {
-        a: pg.uuid("a").notNull().references(() => authors.id),
+        a: pg
+          .uuid("a")
+          .notNull()
+          .references(() => authors.id),
         b: pg.uuid("b").notNull()
       },
       { foreignKeys: [{ columns: ["b"], references: { table: "authors", columns: ["id"] } }] }
@@ -58,7 +67,8 @@ describe("Epic Q1 — column.references() FK metadata (spec §13.2)", () => {
     expect(op.foreignKeys).toEqual([
       { columns: ["author_id"], references: { table: "authors", columns: ["id"] }, onDelete: "cascade" }
     ])
-    expect(PostgresDialect.migrations.compileOperation(op))
-      .toContain(`foreign key ("author_id") references "authors" ("id") on delete cascade`)
+    expect(PostgresDialect.migrations.compileOperation(op)).toContain(
+      `foreign key ("author_id") references "authors" ("id") on delete cascade`
+    )
   })
 })

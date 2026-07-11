@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { asc, db, eq, param, pg } from "@gilvandovieira/thor"
-import {
-  bitsToCapabilities,
-  capabilitiesToBits
-} from "@gilvandovieira/thor/capabilities"
+import { bitsToCapabilities, capabilitiesToBits } from "@gilvandovieira/thor/capabilities"
 import { tableMeta } from "@gilvandovieira/thor/schema"
 import { Schema } from "effect"
 

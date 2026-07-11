@@ -11,56 +11,46 @@ import { ParseResult, Schema } from "effect"
 const DriverNumeric = Schema.Union(Schema.Number, Schema.String, Schema.BigIntFromSelf)
 
 /** Numeric driver representations (`number`, decimal text, or bigint) decoded as a finite number. */
-export const NumericCodec = Schema.transformOrFail(
-  DriverNumeric,
-  Schema.Number,
-  {
-    strict: true,
-    decode: (input, _, ast) => {
-      const value = Number(input)
-      return Number.isFinite(value)
-        ? ParseResult.succeed(value)
-        : ParseResult.fail(new ParseResult.Type(ast, input, "Expected a finite numeric driver value"))
-    },
-    encode: (value) => ParseResult.succeed(value)
-  }
-)
+export const NumericCodec = Schema.transformOrFail(DriverNumeric, Schema.Number, {
+  strict: true,
+  decode: (input, _, ast) => {
+    const value = Number(input)
+    return Number.isFinite(value)
+      ? ParseResult.succeed(value)
+      : ParseResult.fail(new ParseResult.Type(ast, input, "Expected a finite numeric driver value"))
+  },
+  encode: (value) => ParseResult.succeed(value)
+})
 
 /** Integer-valued aggregate representation decoded only when it is lossless as a JS number. */
-export const SafeIntegerCodec = Schema.transformOrFail(
-  DriverNumeric,
-  Schema.Number,
-  {
-    strict: true,
-    decode: (input, _, ast) => {
-      const value = Number(input)
-      return Number.isSafeInteger(value)
-        ? ParseResult.succeed(value)
-        : ParseResult.fail(new ParseResult.Type(ast, input, "Expected a safe integer driver value"))
-    },
-    encode: (value) => ParseResult.succeed(value)
-  }
-)
+export const SafeIntegerCodec = Schema.transformOrFail(DriverNumeric, Schema.Number, {
+  strict: true,
+  decode: (input, _, ast) => {
+    const value = Number(input)
+    return Number.isSafeInteger(value)
+      ? ParseResult.succeed(value)
+      : ParseResult.fail(new ParseResult.Type(ast, input, "Expected a safe integer driver value"))
+  },
+  encode: (value) => ParseResult.succeed(value)
+})
 
 /** Lossless 64-bit integer codec accepting common driver number/string/bigint representations. */
-export const BigIntCodec = Schema.transformOrFail(
-  DriverNumeric,
-  Schema.BigIntFromSelf,
-  {
-    strict: true,
-    decode: (input, _, ast) => {
-      try {
-        if (typeof input === "number" && !Number.isSafeInteger(input)) {
-          return ParseResult.fail(new ParseResult.Type(ast, input, "Unsafe number cannot be decoded losslessly as bigint"))
-        }
-        return ParseResult.succeed(BigInt(input))
-      } catch {
-        return ParseResult.fail(new ParseResult.Type(ast, input, "Expected an integer driver value"))
+export const BigIntCodec = Schema.transformOrFail(DriverNumeric, Schema.BigIntFromSelf, {
+  strict: true,
+  decode: (input, _, ast) => {
+    try {
+      if (typeof input === "number" && !Number.isSafeInteger(input)) {
+        return ParseResult.fail(
+          new ParseResult.Type(ast, input, "Unsafe number cannot be decoded losslessly as bigint")
+        )
       }
-    },
-    encode: (value) => ParseResult.succeed(value)
-  }
-)
+      return ParseResult.succeed(BigInt(input))
+    } catch {
+      return ParseResult.fail(new ParseResult.Type(ast, input, "Expected an integer driver value"))
+    }
+  },
+  encode: (value) => ParseResult.succeed(value)
+})
 
 /** `timestamptz`/`timestamp` <-> `Date`. Accepts a `Date` or an ISO string from the driver. */
 export const TimestampCodec: Schema.Schema<Date, Date | string> = Schema.transformOrFail(

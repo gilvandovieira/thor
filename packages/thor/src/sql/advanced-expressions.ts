@@ -9,8 +9,15 @@
 import { Schema } from "effect"
 import { NumericCodec, SafeIntegerCodec } from "../schema/codecs.js"
 import type { AnyColumn } from "../schema/column.js"
-import type { FunctionCallNode, OrderByTerm, SelectIR } from "../ir/query-ir.js"
-import { type ColumnValue, type Expr, isColumn, toExprNode } from "./expressions.js"
+import type {
+  FunctionCallNode,
+  OrderByTerm,
+  SelectIR,
+  UnsafeSqlNode,
+  WindowFrameBoundaryNode,
+  WindowFrameNode
+} from "../ir/query-ir.js"
+import { type ColumnValue, type Expr, SqlInputBrand, isColumn, toExprNode } from "./expressions.js"
 
 /** Structural select shape accepted by subquery helpers. */
 export interface SelectExpressionSource {
@@ -27,9 +34,82 @@ export interface WindowSpec {
   readonly partitionBy?: ReadonlyArray<ExpressionInput>
   /** Ordered terms within each partition. */
   readonly orderBy?: ReadonlyArray<OrderByTerm>
-  /** Optional trusted SQL frame clause without the `OVER` keyword. */
-  readonly frame?: string
+  /** Structured frame, or an explicitly unsafe custom SQL fragment. */
+  readonly frame?: WindowFrameNode | UnsafeSqlNode
 }
+
+/** Beginning of a partition. */
+export const unboundedPreceding: WindowFrameBoundaryNode = { _tag: "UnboundedPreceding" }
+/** The current result row. */
+export const currentRow: WindowFrameBoundaryNode = { _tag: "CurrentRow" }
+/** End of a partition. */
+export const unboundedFollowing: WindowFrameBoundaryNode = { _tag: "UnboundedFollowing" }
+
+/**
+ * @param offset - Finite, non-negative safe-integer row/value offset.
+ * @returns A structured preceding frame boundary.
+ * @throws {RangeError} When the offset is invalid.
+ */
+export const preceding = (offset: number): WindowFrameBoundaryNode => {
+  if (!Number.isSafeInteger(offset) || offset < 0)
+    throw new RangeError(`Window frame offset must be a non-negative safe integer, received ${offset}`)
+  return { _tag: "Preceding", offset }
+}
+
+/**
+ * @param offset - Finite, non-negative safe-integer row/value offset.
+ * @returns A structured following frame boundary.
+ * @throws {RangeError} When the offset is invalid.
+ */
+export const following = (offset: number): WindowFrameBoundaryNode => {
+  if (!Number.isSafeInteger(offset) || offset < 0)
+    throw new RangeError(`Window frame offset must be a non-negative safe integer, received ${offset}`)
+  return { _tag: "Following", offset }
+}
+
+/** @param boundary - Frame boundary. @returns Its monotonic ordering rank. */
+const boundaryRank = (boundary: WindowFrameBoundaryNode): number => {
+  switch (boundary._tag) {
+    case "UnboundedPreceding":
+      return Number.NEGATIVE_INFINITY
+    case "Preceding":
+      return -boundary.offset
+    case "CurrentRow":
+      return 0
+    case "Following":
+      return boundary.offset
+    case "UnboundedFollowing":
+      return Number.POSITIVE_INFINITY
+  }
+}
+
+/**
+ * @param unit - Window frame unit.
+ * @param start - Inclusive starting boundary.
+ * @param end - Inclusive ending boundary.
+ * @returns A validated structured frame.
+ * @throws {RangeError} When the end precedes the start.
+ */
+const frameBetween = (
+  unit: WindowFrameNode["unit"],
+  start: WindowFrameBoundaryNode,
+  end: WindowFrameBoundaryNode
+): WindowFrameNode => {
+  if (boundaryRank(start) > boundaryRank(end)) throw new RangeError("Window frame end cannot precede its start")
+  return { _tag: "WindowFrame", unit, start, end }
+}
+
+/** @param start - Start boundary. @param end - End boundary. @returns A `ROWS BETWEEN` frame. */
+export const rowsBetween = (start: WindowFrameBoundaryNode, end: WindowFrameBoundaryNode): WindowFrameNode =>
+  frameBetween("rows", start, end)
+
+/** @param start - Start boundary. @param end - End boundary. @returns A `RANGE BETWEEN` frame. */
+export const rangeBetween = (start: WindowFrameBoundaryNode, end: WindowFrameBoundaryNode): WindowFrameNode =>
+  frameBetween("range", start, end)
+
+/** @param start - Start boundary. @param end - End boundary. @returns A `GROUPS BETWEEN` frame. */
+export const groupsBetween = (start: WindowFrameBoundaryNode, end: WindowFrameBoundaryNode): WindowFrameNode =>
+  frameBetween("groups", start, end)
 
 /** Function expression that can be applied over a window. */
 export interface WindowableExpr<A> extends Expr<A> {
@@ -53,17 +133,59 @@ export interface WindowableExpr<A> extends Expr<A> {
 export const windowable = <A>(node: FunctionCallNode, codec: Schema.Schema<A, any>): WindowableExpr<A> => ({
   node,
   codec,
+  [SqlInputBrand]: true,
   over: (spec = {}) => ({
     node: {
       _tag: "WindowFunction",
       function: node,
       partitionBy: (spec.partitionBy ?? []).map(toExprNode),
       orderBy: spec.orderBy ?? [],
-      ...(spec.frame ? { frame: spec.frame } : {})
+      ...(spec.frame ? { frame: assertWindowFrame(spec.frame) } : {})
     },
-    codec
+    codec,
+    [SqlInputBrand]: true
   })
 })
+
+const FRAME_UNITS: ReadonlySet<string> = new Set(["rows", "range", "groups"])
+
+/** @param boundary - Candidate boundary node. @returns Whether it is structurally valid. */
+const isValidBoundary = (boundary: WindowFrameBoundaryNode): boolean => {
+  switch (boundary?._tag) {
+    case "UnboundedPreceding":
+    case "CurrentRow":
+    case "UnboundedFollowing":
+      return true
+    case "Preceding":
+    case "Following":
+      return Number.isSafeInteger(boundary.offset) && boundary.offset >= 0
+    default:
+      return false
+  }
+}
+
+/**
+ * Runtime-validates a window frame so forged or cast frame objects can never
+ * interpolate arbitrary text into `OVER (...)`. Structured frames must use the
+ * exact constructor vocabulary; custom syntax must be an `unsafeSql` node.
+ *
+ * @param frame - Structured frame or explicitly unsafe custom fragment.
+ * @returns The validated frame.
+ * @throws {TypeError} When the frame is not a valid structured or unsafe node.
+ */
+const assertWindowFrame = (frame: WindowFrameNode | UnsafeSqlNode): WindowFrameNode | UnsafeSqlNode => {
+  if (frame && frame._tag === "UnsafeSql" && typeof frame.sql === "string") return frame
+  if (
+    frame &&
+    frame._tag === "WindowFrame" &&
+    FRAME_UNITS.has(frame.unit) &&
+    isValidBoundary(frame.start) &&
+    isValidBoundary(frame.end)
+  ) {
+    return frame
+  }
+  throw new TypeError("Window frame must come from rowsBetween/rangeBetween/groupsBetween or be explicit unsafeSql")
+}
 
 /**
  * @param name - SQL function name.
@@ -76,16 +198,19 @@ const aggregate = <A>(
   args: ReadonlyArray<ExpressionInput>,
   codec: Schema.Schema<A, any>
 ): WindowableExpr<A> =>
-  windowable<A>({
-    _tag: "FunctionCall",
-    name,
-    args: args.map(toExprNode),
-    aggregate: true,
-    star: args.length === 0,
-    declared: false,
-    volatility: "immutable",
-    capabilities: 0n
-  }, codec)
+  windowable<A>(
+    {
+      _tag: "FunctionCall",
+      name,
+      args: args.map(toExprNode),
+      aggregate: true,
+      star: args.length === 0,
+      declared: false,
+      volatility: "immutable",
+      capabilities: 0n
+    },
+    codec
+  )
 
 /**
  * @param value - Optional counted expression; omit for `count(*)`.
@@ -112,7 +237,11 @@ export const avg = (value: ExpressionInput): WindowableExpr<number> => aggregate
  * @returns A minimum-value expression.
  */
 export const min = <A>(value: AnyColumn | Expr<A>): WindowableExpr<A> =>
-  aggregate<A>("min", [value], (isColumn(value) ? value.def.codec : value.codec ?? Schema.Unknown) as Schema.Schema<A, any>)
+  aggregate<A>(
+    "min",
+    [value],
+    (isColumn(value) ? value.def.codec : (value.codec ?? Schema.Unknown)) as Schema.Schema<A, any>
+  )
 
 /**
  * @typeParam A - Expression result type.
@@ -120,46 +249,59 @@ export const min = <A>(value: AnyColumn | Expr<A>): WindowableExpr<A> =>
  * @returns A maximum-value expression.
  */
 export const max = <A>(value: AnyColumn | Expr<A>): WindowableExpr<A> =>
-  aggregate<A>("max", [value], (isColumn(value) ? value.def.codec : value.codec ?? Schema.Unknown) as Schema.Schema<A, any>)
+  aggregate<A>(
+    "max",
+    [value],
+    (isColumn(value) ? value.def.codec : (value.codec ?? Schema.Unknown)) as Schema.Schema<A, any>
+  )
 
 /** @returns A `row_number()` window function awaiting `.over()`. */
 export const rowNumber = (): WindowableExpr<number> =>
-  windowable<number>({
-    _tag: "FunctionCall",
-    name: "row_number",
-    args: [],
-    aggregate: false,
-    star: false,
-    declared: false,
-    volatility: "immutable",
-    capabilities: 0n
-  }, SafeIntegerCodec)
+  windowable<number>(
+    {
+      _tag: "FunctionCall",
+      name: "row_number",
+      args: [],
+      aggregate: false,
+      star: false,
+      declared: false,
+      volatility: "immutable",
+      capabilities: 0n
+    },
+    SafeIntegerCodec
+  )
 
 /** @returns A `rank()` window function awaiting `.over()`. */
 export const rank = (): WindowableExpr<number> =>
-  windowable<number>({
-    _tag: "FunctionCall",
-    name: "rank",
-    args: [],
-    aggregate: false,
-    star: false,
-    declared: false,
-    volatility: "immutable",
-    capabilities: 0n
-  }, SafeIntegerCodec)
+  windowable<number>(
+    {
+      _tag: "FunctionCall",
+      name: "rank",
+      args: [],
+      aggregate: false,
+      star: false,
+      declared: false,
+      volatility: "immutable",
+      capabilities: 0n
+    },
+    SafeIntegerCodec
+  )
 
 /** @returns A `dense_rank()` window function awaiting `.over()`. */
 export const denseRank = (): WindowableExpr<number> =>
-  windowable<number>({
-    _tag: "FunctionCall",
-    name: "dense_rank",
-    args: [],
-    aggregate: false,
-    star: false,
-    declared: false,
-    volatility: "immutable",
-    capabilities: 0n
-  }, SafeIntegerCodec)
+  windowable<number>(
+    {
+      _tag: "FunctionCall",
+      name: "dense_rank",
+      args: [],
+      aggregate: false,
+      star: false,
+      declared: false,
+      volatility: "immutable",
+      capabilities: 0n
+    },
+    SafeIntegerCodec
+  )
 
 /**
  * @typeParam A - Scalar subquery result type.
@@ -167,7 +309,8 @@ export const denseRank = (): WindowableExpr<number> =>
  * @returns A scalar-subquery expression.
  */
 export const scalar = <A = unknown>(query: SelectExpressionSource): Expr<A> => ({
-  node: { _tag: "ScalarSubquery", query: query.ir }
+  node: { _tag: "ScalarSubquery", query: query.ir },
+  [SqlInputBrand]: true
 })
 
 /**
@@ -224,5 +367,6 @@ export const notInSubquery = <T extends AnyColumn>(value: T | Expr<ColumnValue<T
  * @returns Dialect-rendered excluded/candidate-row expression.
  */
 export const excluded = <T extends AnyColumn>(column: T): Expr<ColumnValue<T>> => ({
-  node: { _tag: "ExcludedRef", column: column.def.name }
+  node: { _tag: "ExcludedRef", column: column.def.name },
+  [SqlInputBrand]: true
 })

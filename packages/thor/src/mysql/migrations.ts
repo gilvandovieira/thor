@@ -4,7 +4,13 @@
  * @module mysql/migrations
  */
 import type { MigrationDialect } from "../dialect.js"
-import type { ColumnDefault, ColumnSpec, DefaultLiteral, MigrationOperation } from "../migrate/migration-ir.js"
+import {
+  type ColumnDefault,
+  type ColumnSpec,
+  type DefaultLiteral,
+  type MigrationOperation,
+  unsafeSyntax
+} from "../migrate/migration-ir.js"
 
 /**
  * @param name - Identifier to escape.
@@ -51,8 +57,12 @@ const mysqlType = (type: ColumnSpec["type"]): string => {
  */
 const literal = (value: DefaultLiteral): string => {
   if (value === null) return "null"
-  if (value instanceof Date) return `'${value.toISOString().replace(/'/g, "''")}'`
-  if (typeof value === "string") return `'${value.replace(/'/g, "''")}'`
+  // MySQL treats backslash as an escape character inside string literals by
+  // default, so `\'` would close the literal early; escape both. (Servers
+  // running NO_BACKSLASH_ESCAPES read doubled backslashes literally — DDL
+  // defaults containing backslashes are not portable to that mode.)
+  if (value instanceof Date) return `'${value.toISOString().replace(/\\/g, "\\\\").replace(/'/g, "''")}'`
+  if (typeof value === "string") return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "''")}'`
   if (typeof value === "boolean") return value ? "true" : "false"
   if (typeof value === "number" && !Number.isFinite(value)) throw new TypeError("Non-finite DDL default")
   return String(value)
@@ -61,10 +71,14 @@ const literal = (value: DefaultLiteral): string => {
 /** @param value - Dialect-neutral default. @returns MySQL default SQL. */
 const mysqlDefault = (value: ColumnDefault): string => {
   switch (value.kind) {
-    case "value": return literal(value.value)
-    case "sql": return value.sql
-    case "now": return "CURRENT_TIMESTAMP(3)"
-    case "random": return "(uuid())"
+    case "value":
+      return literal(value.value)
+    case "sql":
+      return value.sql
+    case "now":
+      return "CURRENT_TIMESTAMP(3)"
+    case "random":
+      return "(uuid())"
   }
 }
 
@@ -91,27 +105,35 @@ export const compileMySQLOperation = (operation: MigrationOperation): string => 
         const parts = [
           quote(column.name),
           mysqlType(column.type),
-          column.generated ? `generated always as (${column.generated.expression}) ${column.generated.stored ? "stored" : "virtual"}` : "",
+          column.generated
+            ? `generated always as (${column.generated.expression}) ${column.generated.stored ? "stored" : "virtual"}`
+            : "",
           column.nullable ? "" : "not null",
           column.unique ? "unique" : "",
           column.default ? `default ${mysqlDefault(column.default)}` : ""
         ]
-        return "  " + parts.filter(Boolean).join(" ")
+        return `  ${parts.filter(Boolean).join(" ")}`
       })
       if (operation.primaryKey.length > 0) {
         columns.push(`  primary key (${operation.primaryKey.map(quote).join(", ")})`)
       }
       for (const constraint of operation.uniqueConstraints ?? []) {
-        columns.push(`  ${constraint.name ? `constraint ${quote(constraint.name)} ` : ""}unique (${constraint.columns.map(quote).join(", ")})`)
+        columns.push(
+          `  ${constraint.name ? `constraint ${quote(constraint.name)} ` : ""}unique (${constraint.columns.map(quote).join(", ")})`
+        )
       }
       for (const check of operation.checks ?? []) {
         columns.push(`  ${check.name ? `constraint ${quote(check.name)} ` : ""}check (${check.expression})`)
       }
       for (const foreignKey of operation.foreignKeys ?? []) {
-        columns.push(`  ${foreignKey.name ? `constraint ${quote(foreignKey.name)} ` : ""}foreign key (${foreignKey.columns.map(quote).join(", ")}) references ${quote(foreignKey.references.table)} (${foreignKey.references.columns.map(quote).join(", ")})${foreignKey.onDelete ? ` on delete ${foreignKey.onDelete}` : ""}${foreignKey.onUpdate ? ` on update ${foreignKey.onUpdate}` : ""}`)
+        columns.push(
+          `  ${foreignKey.name ? `constraint ${quote(foreignKey.name)} ` : ""}foreign key (${foreignKey.columns.map(quote).join(", ")}) references ${quote(foreignKey.references.table)} (${foreignKey.references.columns.map(quote).join(", ")})${foreignKey.onDelete ? ` on delete ${foreignKey.onDelete}` : ""}${foreignKey.onUpdate ? ` on update ${foreignKey.onUpdate}` : ""}`
+        )
       }
       for (const index of operation.indexes ?? []) {
-        columns.push(`  ${index.unique ? "unique " : ""}index ${quote(index.name)} (${index.columns.map(quote).join(", ")})`)
+        columns.push(
+          `  ${index.unique ? "unique " : ""}index ${quote(index.name)} (${index.columns.map(quote).join(", ")})`
+        )
       }
       return `create table ${quote(operation.table)} (\n${columns.join(",\n")}\n);`
     }
@@ -135,9 +157,14 @@ export const compileMySQLOperation = (operation: MigrationOperation): string => 
       // MySQL has no CREATE OR REPLACE for routines and no LANGUAGE/`$$` — the
       // trusted body carries characteristics + BEGIN/END. Live execution needs a
       // DELIMITER-aware driver for multi-statement bodies.
-      const args = operation.args.map((arg) => `${arg.name ? `${quote(arg.name)} ` : ""}${arg.type}`).join(", ")
-      const returns = operation.routine === "function" && operation.returns ? ` returns ${operation.returns}` : ""
-      return `create ${operation.routine} ${quote(operation.name)}(${args})${returns} ${operation.body}`
+      const args = operation.args
+        .map((arg) => `${arg.name ? `${quote(arg.name)} ` : ""}${unsafeSyntax(arg.type, "argument type")}`)
+        .join(", ")
+      const returns =
+        operation.routine === "function" && operation.returns
+          ? ` returns ${unsafeSyntax(operation.returns, "return type")}`
+          : ""
+      return `create ${operation.routine} ${quote(operation.name)}(${args})${returns} ${unsafeSyntax(operation.body, "body")}`
     }
     case "DropRoutine":
       // MySQL DROP FUNCTION/PROCEDURE takes no argument list.
@@ -163,10 +190,30 @@ export const MySQLMigrations: MigrationDialect = {
   ensureJournal: (table) => `create table if not exists ${quoteIdent(table)} (
     id varchar(255) primary key,
     name varchar(255) not null,
-    checksum varchar(64) not null,
+    -- Holds versioned digests such as sha256:v1:<64 hex> (74 chars) and legacy
+    -- 8-char FNV-1a hashes; 255 leaves room for future algorithms.
+    checksum varchar(255) not null,
     applied_at datetime(3) not null,
     execution_time_ms int not null
   );`,
+  /**
+   * Journals created before the sha256 checksum format used `varchar(64)`,
+   * which cannot hold the 74-character `sha256:v1:<digest>` value: on strict
+   * MySQL the journal insert would fail *after* the non-transactional DDL ran,
+   * leaving a half-applied migration. Widen in place (an in-place metadata
+   * change; history rows are untouched).
+   *
+   * @param table - Journal table name.
+   * @returns Probe/decision/upgrade for the checksum column width.
+   */
+  upgradeJournal: (table) => ({
+    probe: {
+      sql: "select character_maximum_length as len from information_schema.columns where table_schema = database() and table_name = ? and column_name = 'checksum'",
+      params: [table]
+    },
+    needsUpgrade: (rows) => rows.length > 0 && Number(rows[0]?.len) < 255,
+    upgrade: `alter table ${quoteIdent(table)} modify checksum varchar(255) not null;`
+  }),
   /**
    * @param table - Journal table name.
    * @returns SQL selecting applied migrations.

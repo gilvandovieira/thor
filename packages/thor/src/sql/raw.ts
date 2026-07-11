@@ -6,14 +6,14 @@
  */
 import type { AnyColumn } from "../schema/column.js"
 import type { ParamNode, RawExprInterpolation, RawExprNode, UnsafeSqlNode } from "../ir/query-ir.js"
-import { columnRef, isColumn } from "./expressions.js"
+import { SqlInputBrand, columnRef, isColumn } from "./expressions.js"
 
 /**
  * @param value - Unknown runtime value.
- * @returns Whether `value` is a parameter node.
+ * @returns Whether `value` is a parameter node produced by `param(...)` (brand required).
  */
 const isParam = (value: unknown): value is ParamNode =>
-  typeof value === "object" && value !== null && (value as { _tag?: string })._tag === "Param"
+  typeof value === "object" && value !== null && (value as { _tag?: string })._tag === "Param" && SqlInputBrand in value
 
 /** @param value - Unknown runtime value. @returns Whether it is explicitly unsafe SQL text. */
 const isUnsafeSql = (value: unknown): value is UnsafeSqlNode =>

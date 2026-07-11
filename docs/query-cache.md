@@ -11,7 +11,7 @@ query *shape* — never by parameter values (spec §9.2).
 |---|---|---|
 | `shape` | Query IR identity | normalized IR |
 | `compile` | normalized IR + dialect | compiled SQL |
-| `prepared` | compiled-shape cache key | server-side prepared-statement identity |
+| `prepared` | physical connection + compiled-shape key | client/server prepared resource |
 | `decoder` | selection shape | row decoder |
 | `capability` | IR + capability matrix version | guard result |
 
@@ -21,9 +21,9 @@ layer) routes through these layers; compiled (`.compile()`) and prepared
 
 ## Default vs bounded caches (§9.3)
 
-By default every layer is **unbounded and GC-friendly** (backed by a `WeakMap`):
-entries live only while their shape key is reachable, so nothing leaks and there
-is no eviction. This matches v0 behavior exactly.
+By default the shape/compile/decoder/capability layers are unbounded and
+GC-friendly (`WeakMap`). Prepared resources are different: they belong to a
+physical connection and live until eviction or connection disposal.
 
 Install a **bounded LRU** registry with `withQueryCache` when you want a fixed
 memory budget and live cache statistics:
@@ -39,14 +39,20 @@ const Bounded2 = db.withQueryCache(PostgresLayer(client), { maxSize: 10_000 })
 ```
 
 Each layer then retains at most `maxSize` shapes and evicts the
-least-recently-used entry. Counters are available for observability (feeds
-Epic S):
+least-recently-used entry. Cache-layer registries and counters are internal;
+applications should consume supported query observability events instead of
+depending on cache implementation objects.
 
-```ts
-for (const layer of db.queryCache.stats()) {
-  // { name, hits, misses, evictions, size, maxSize }
-}
-```
+The same bound governs actual connection-scoped prepared admission. SQLite and
+mysql2 release an evicted statement through their runtime APIs. A driver that
+cannot safely deallocate and recreate through its public client contract stops
+admitting new prepared shapes at the bound and executes them unprepared. Owned
+scoped SQLite/MySQL layers clear all retained statements before releasing the
+connection. Separate physical connections always have separate registries.
+
+These are distinct resources: the compile cache retains SQL text; the prepared
+observation counters report real connection-registry outcomes; the client cache
+owns statement handles; and a database server may own parsed statement state.
 
 ## Precompilation modes (§9.4)
 
