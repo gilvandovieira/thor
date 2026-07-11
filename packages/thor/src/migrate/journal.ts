@@ -112,3 +112,52 @@ export const guardOperations = (
   }
   return out
 }
+
+/**
+ * Manual-migration guard (spec §15.4, P0.4): decide whether the configured
+ * policy permits a manual `up`/`down` step whose SQL/Effect body is opaque to
+ * Thor, using only the author-declared `safety`/`phase`. This closes the gap
+ * where `Migrator.up()`/`down()` executed manual steps without any policy check.
+ *
+ * @param safety - Author-declared risk class (undefined ⇒ author-trusted additive).
+ * @param phase - Author-declared expand/contract phase.
+ * @param policy - Active migration policy.
+ * @param options - Policy refinements (e.g. explicit review).
+ * @returns Guard errors blocking the step (empty when permitted).
+ */
+export const guardManualMigration = (
+  safety: "additive" | "destructive" | undefined,
+  phase: "expand" | "contract" | undefined,
+  policy: AutoMigrationPolicy,
+  options: GuardOptions = {}
+): ReadonlyArray<GuardError> => {
+  if (policy === "allow-destructive") return []
+  const reviewed = options.reviewed ?? false
+  const out: GuardError[] = []
+  const block = (guard: string, message: string) => out.push(new GuardError({ guard, message }))
+
+  if (policy === "disabled") {
+    block("migrations-disabled", `Migrations are disabled; manual migration cannot be applied.`)
+    return out
+  }
+  if (policy === "validate-only") {
+    block("validate-only", `Policy "validate-only" applies no operations; manual migration was blocked.`)
+    return out
+  }
+
+  const destructive = safety === "destructive"
+  const isContract = phase === "contract" || destructive
+
+  if (policy === "expand-only" && isContract) {
+    block("non-expand-migration", `Manual migration is a contract-phase change and blocked under policy "expand-only".`)
+  }
+  if (destructive && !(policy === "allow-reviewed-destructive" && reviewed)) {
+    block(
+      "destructive-migration",
+      policy === "allow-reviewed-destructive"
+        ? `Manual migration is declared destructive and requires an explicitly reviewed run.`
+        : `Manual migration is declared destructive and blocked under policy "${policy}". Use "allow-reviewed-destructive" with a reviewed run to proceed.`
+    )
+  }
+  return out
+}

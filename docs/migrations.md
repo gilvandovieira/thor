@@ -78,6 +78,38 @@ A policy gates what a run may do. Pass it in `MigratorConfig.policy`:
 MigratorLive({ policy: "allow-reviewed-destructive", reviewed: true })
 ```
 
+### Manual migrations obey the same policy
+
+`up()` and `down()` enforce the active policy on the manual migrations they
+execute — not only on generated plans passed to `apply()`. Because a manual
+`sql`/`rawSql` body is **opaque** to Thor, you declare its risk class so the
+policy can be applied:
+
+```ts
+defineMigration({
+  id: "0007_drop_legacy",
+  name: "drop_legacy",
+  safety: "destructive",           // blocked under safe-only / expand-only
+  phase: "contract",               // blocked under expand-only
+  up: sql`drop table legacy`
+})
+```
+
+- `safety: "destructive"` — blocked under `safe-only`, and under
+  `allow-reviewed-destructive` unless the run sets `reviewed: true`.
+- `safety: "additive"` (or omitted) — permitted under `safe-only`.
+- `phase: "contract"` — blocked under `expand-only`.
+- `disabled` / `validate-only` — no manual migration runs at all.
+
+Rejection happens **before** any SQL reaches the driver, inside the migration
+lock/transaction, so the journal is never written for a blocked step.
+
+**Limitation.** Thor cannot infer safety from arbitrary SQL text. A migration
+with no declared `safety` is treated as author-trusted **additive** and will
+pass `safe-only`. Mark destructive migrations explicitly (or run every migration
+under a reviewed `allow-reviewed-destructive` policy) to have them enforced. See
+[limitations.md](./limitations.md#migrations).
+
 Every operation is classified `expand` or `contract` by `migrationPhase(op)`:
 additive, non-breaking changes (create table, add a nullable/defaulted column,
 drop NOT NULL) are **expand**; drops, renames, type changes, requiring a column,

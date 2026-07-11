@@ -22,6 +22,19 @@ export interface SqlStatement {
  */
 export type MigrationStep = SqlStatement | Effect.Effect<void, MigrationError, Database>
 
+/**
+ * The declared risk class of a manual migration (spec §15.4, P0.4). Thor cannot
+ * infer safety from opaque `sql`/`rawSql` text, so authors declare it: an
+ * `"additive"` migration passes `safe-only`; a `"destructive"` migration is
+ * blocked under `safe-only`/`expand-only` and requires an explicitly reviewed
+ * `allow-reviewed-destructive` run. When omitted, the migration is treated as
+ * author-trusted additive (see the migration policy docs for the trade-off).
+ */
+export type MigrationSafety = "additive" | "destructive"
+
+/** The expand/contract phase a manual migration belongs to (spec §15.5). */
+export type MigrationPhase = "expand" | "contract"
+
 interface MigrationDefinitionBase {
   /** Stable, sortable migration identifier. */
   readonly id: string
@@ -29,6 +42,13 @@ interface MigrationDefinitionBase {
   readonly name: string
   /** Explicitly marks the migration as impossible to roll back. */
   readonly irreversible?: boolean
+  /**
+   * Declared risk class governing which policy permits this manual migration
+   * (spec §15.4). Defaults to author-trusted additive when omitted.
+   */
+  readonly safety?: MigrationSafety
+  /** Declared expand/contract phase, enforced under the `expand-only` policy. */
+  readonly phase?: MigrationPhase
 }
 
 /**
@@ -142,8 +162,10 @@ export const rawSql = (
 export const backfill = <E extends { readonly message?: string }>(
   effect: Effect.Effect<unknown, E, Database>
 ): Effect.Effect<void, MigrationError, Database> =>
-  Effect.mapError(Effect.asVoid(effect), (cause) =>
-    new MigrationError({ message: `backfill failed: ${cause.message ?? String(cause)}`, cause }))
+  Effect.mapError(
+    Effect.asVoid(effect),
+    (cause) => new MigrationError({ message: `backfill failed: ${cause.message ?? String(cause)}`, cause })
+  )
 
 /**
  * @param material - Text to hash.
@@ -169,6 +191,8 @@ export const checksum = (definition: MigrationDefinition): string =>
       "|" +
       (definition.down && isSqlStatement(definition.down)
         ? definition.down.sql
-        : definition.down ? `effect:${definition.revision}:down` : "none") +
+        : definition.down
+          ? `effect:${definition.revision}:down`
+          : "none") +
       `|revision:${definition.revision ?? "sql"}`
   )
