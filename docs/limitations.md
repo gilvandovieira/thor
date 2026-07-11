@@ -1,13 +1,46 @@
 # Thor limitations & maturity
 
-> **Maturity: alpha / early beta.** The v1 feature surface is largely implemented,
-> but release-blocking correctness work and independent verification are still in
-> progress. Do not treat Thor as production-ready solely because the v1 feature
-> list exists. See the [release-readiness report](./remediation-p0-report.md).
+> **Maturity: `0.1.0-alpha.1` (alpha).** The v1 feature surface is largely
+> implemented and the release-blocking correctness work is done and tested, but
+> streaming is deferred and migration generation, routines, and some
+> resource-lifecycle guarantees remain partial. Do not treat Thor as
+> production-ready solely because the v1 feature list exists. Reserve `1.0.0`
+> for a deliberate stable release after external application use.
 
 This document records what Thor does **not** yet do, or does only partially, so
 the promises it makes are accurate. It complements [dialects.md](./dialects.md),
 [migrations.md](./migrations.md), and [api-stability.md](./api-stability.md).
+
+## Conformance matrix
+
+Each feature is tracked by conformance level rather than a binary "done". Legend:
+**I** implemented · **U** unit/pure-tested · **F** fake-driver-tested ·
+**S** live-SQLite · **P** live-PostgreSQL · **M** live-MySQL · **N** Node ·
+**B** Bun · **D** documented · **St** API-stable. A cell is ✅ met, 🟡 partial,
+⬜ not yet, — not applicable. "Live" columns are exercised by the Docker e2e lane.
+
+| Feature | I | U | F | S | P | M | N | B | D | St | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Query builder | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | pure IR; degenerate shapes rejected |
+| Parameters & encoding | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | inline≡named codec; branded inputs |
+| Compiled/prepared queries | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 | shape-only; `PreparedQuery` experimental |
+| Relations (explicit load) | ✅ | ✅ | ✅ | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ✅ | 🟡 | no hidden N+1; experimental |
+| Transactions | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 | ✅ | ✅ | savepoints, typed causes |
+| Migrations (manual exec) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 | ✅ | ✅ | policy-governed up/down |
+| Migration generation | 🟡 | ✅ | ✅ | 🟡 | 🟡 | 🟡 | ✅ | ⬜ | ✅ | 🟡 | create-table only |
+| Introspection | ✅ | ✅ | 🟡 | ✅ | ✅ | ✅ | ✅ | 🟡 | ✅ | 🟡 | schema/index pull |
+| Drift | ✅ | ✅ | 🟡 | ✅ | ✅ | ✅ | ✅ | 🟡 | ✅ | 🟡 | structural vs legacy split |
+| Routines | 🟡 | ✅ | ✅ | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ✅ | 🟡 | advanced args deferred |
+| Observability | ✅ | ✅ | ✅ | — | — | — | ✅ | 🟡 | ✅ | ✅ | spans/logs/metrics |
+| PostgreSQL | ✅ | ✅ | ✅ | — | ✅ | — | ✅ | 🟡 | ✅ | ✅ | node-postgres + postgres.js |
+| SQLite | ✅ | ✅ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ | ✅ | node:sqlite + bun:sqlite |
+| MySQL | 🟡 | ✅ | ✅ | — | — | ✅ | ✅ | 🟡 | ✅ | 🟡 | non-transactional DDL |
+| CLI | ✅ | ✅ | — | 🟡 | 🟡 | 🟡 | ✅ | ⬜ | ✅ | ✅ | 15 stable commands |
+| Skills | ✅ | ✅ | — | — | — | — | ✅ | ⬜ | ✅ | 🟡 | 10 SKILL.md, generated |
+| Package publishing | ✅ | — | — | — | — | — | ✅ | ✅ | ✅ | ✅ | packed Node+Bun consumer |
+
+A feature is not marked stable (`St`) unless its API surface is in
+[api-manifest.json](./api-manifest.json) at `@stable`.
 
 ## Runtime & database support
 

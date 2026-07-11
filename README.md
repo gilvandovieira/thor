@@ -5,9 +5,12 @@ You describe your tables and queries in plain, fluent TypeScript; Thor gives you
 back fully-typed results and runs them against **PostgreSQL, SQLite, or MySQL** —
 the same code, three databases.
 
-Thor is currently an **early beta**, not a production-ready stable release. The
-core pipeline is substantial, but streaming and several migration, routine,
-resource-lifecycle, and release-gate guarantees remain under remediation.
+Thor is currently **`0.1.0-alpha.1`** — an alpha, not a production-ready stable
+release. The core pipeline is substantial and the release-blocking correctness
+work is done and tested, but streaming is deferred and migration generation,
+routines, and some resource-lifecycle guarantees remain partial. See
+[docs/limitations.md](docs/limitations.md) for the exact conformance state, and
+reserve `1.0.0` for a deliberate stable release after external application use.
 
 Two ideas make it different from most query builders:
 
@@ -304,7 +307,7 @@ typed builder → runtime IR → capability check → compile → execute → de
 | Query builder (select/insert/update/delete, predicates, params) | ✅ Done |
 | Advanced queries (joins, aggregation, windows, CTEs, sets, upserts) | ✅ Done |
 | Guards & capability checks | ✅ Done |
-| Dialects | ✅ PostgreSQL + SQLite production targets; MySQL 8 compatibility target is explicitly partial (see `docs/dialects.md`) |
+| Dialects | ✅ PostgreSQL + SQLite primary targets; MySQL 8 compatibility target is explicitly partial (see `docs/dialects.md`). Conformance levels per feature: [docs/limitations.md](docs/limitations.md) |
 | Effect execution + drivers (2 Postgres drivers, Node & Bun SQLite, mysql2) | ✅ Done |
 | Prepared handles & performance modes | ✅ Done |
 | Benchmarks + CI regression gate | ✅ Done |
