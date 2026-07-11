@@ -36,12 +36,20 @@ const posts = t.table("posts", {
 const m1 = defineMigration({
   id: "0001_create_users",
   name: "create_users",
+  safety: "additive",
+  phase: "expand",
+  downSafety: "destructive",
+  downPhase: "contract",
   up: sql`create table users (id uuid primary key default gen_random_uuid(), email text not null unique, name text);`,
   down: sql`drop table users;`
 })
 const m2 = defineMigration({
   id: "0002_add_created_at",
   name: "add_created_at",
+  safety: "additive",
+  phase: "expand",
+  downSafety: "destructive",
+  downPhase: "contract",
   up: sql`alter table users add column created_at timestamptz not null default now();`,
   down: sql`alter table users drop column created_at;`
 })
@@ -49,6 +57,10 @@ const m3 = defineMigration({
   id: "0003_backfill_names",
   name: "backfill_names",
   revision: "1",
+  safety: "additive",
+  phase: "expand",
+  downSafety: "additive",
+  downPhase: "expand",
   up: rawSql`update users set name = email where name is null`,
   down: rawSql`select 1`
 })
@@ -57,7 +69,16 @@ describe.skipIf(!DATABASE_URL)("live migrator e2e (spec §13)", () => {
   let client: pg.Client
   let app: Layer.Layer<Migrator | Database>
 
-  const config = { migrations: [m1, m2, m3], schema: [users, posts], policy: "safe-only" as const }
+  // These tests exercise migration mechanics (apply/idempotent/rollback/journal),
+  // including rolling back a destructive `down`; policy *enforcement* is covered
+  // in migration-policy.test.ts. Run under a reviewed policy so a destructive
+  // rollback is permitted.
+  const config = {
+    migrations: [m1, m2, m3],
+    schema: [users, posts],
+    policy: "allow-reviewed-destructive" as const,
+    reviewed: true
+  }
 
   const mig = <A, E>(f: (m: MigratorService) => Effect.Effect<A, E>) => Effect.flatMap(Migrator, f)
   const run = <A, E>(eff: Effect.Effect<A, E, Migrator | Database>) => Effect.runPromise(Effect.provide(eff, app))
