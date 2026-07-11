@@ -27,7 +27,7 @@ import {
 import { capabilityBit, type Capability, bitsToCapabilities, noCapabilities } from "../capabilities/capability.js"
 import type { Dialect } from "../dialect.js"
 import { PostgresDialect } from "../postgres/dialect.js"
-import type { QueryError, NotFoundError, TooManyRowsError } from "../errors/index.js"
+import { GuardError, type QueryError, type NotFoundError, type TooManyRowsError } from "../errors/index.js"
 import { Database } from "../execution/database.js"
 import { atMostOne, exactlyOne, executeCompiledRows, executeRows } from "../execution/run.js"
 import type { CompiledStatement } from "../execution/driver.js"
@@ -136,6 +136,24 @@ const sourceVisibleName = (source: QuerySource): string => {
 
 /** @param field - Selected field. @returns A copy accepting SQL null. */
 const nullableField = (field: SelectionField): SelectionField => ({ ...field, codec: Schema.NullOr(field.codec) })
+
+/**
+ * Rejects pagination values that would compile to invalid SQL (`LIMIT NaN`,
+ * `LIMIT Infinity`, negative pagination, or fractional counts) before any IR is
+ * built (spec §6, P0.6).
+ *
+ * @param clause - `"limit"` or `"offset"`, used in the error message.
+ * @param n - Candidate pagination value.
+ * @throws {GuardError} When `n` is not a finite, non-negative safe integer.
+ */
+const assertPaginationValue = (clause: "limit" | "offset", n: number): void => {
+  if (!Number.isSafeInteger(n) || n < 0) {
+    throw new GuardError({
+      guard: `${clause}-shape`,
+      message: `${clause} must be a finite, non-negative safe integer, received ${n}`
+    })
+  }
+}
 
 /**
  * @param fields - Current decoder selection.
@@ -520,18 +538,22 @@ class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = Select
   }
 
   /**
-   * @param n - Maximum number of rows.
+   * @param n - Maximum number of rows. Must be a finite, non-negative safe integer.
    * @returns A new select query.
+   * @throws {GuardError} When `n` is negative, non-integer, `NaN`, or `Infinity`.
    */
   limit(n: number): SelectQuery<A, P, F> {
+    assertPaginationValue("limit", n)
     return this.clone({ limit: n, cardinality: n === 1 ? "one" : this.ir.cardinality })
   }
 
   /**
-   * @param n - Number of rows to skip.
+   * @param n - Number of rows to skip. Must be a finite, non-negative safe integer.
    * @returns A new select query.
+   * @throws {GuardError} When `n` is negative, non-integer, `NaN`, or `Infinity`.
    */
   offset(n: number): SelectQuery<A, P, F> {
+    assertPaginationValue("offset", n)
     return this.clone({ offset: n })
   }
 
