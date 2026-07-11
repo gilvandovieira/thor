@@ -70,12 +70,19 @@ copies are not promised to work across copies.
 
 ## Verification for this reconciliation
 
-Only commands actually run after these documentation edits belong here:
-
 | Command | Result |
 |---|---|
+| `pnpm build` | Passed |
+| `pnpm typecheck` / `pnpm test:types` | Passed |
+| Adversarial suite | 12 files, 37 passed, zero failed/skipped |
+| `pnpm test` | 926 passed; 147 environment-gated live tests skipped here and executed separately |
+| `pnpm test:property` | 22 passed |
+| `pnpm quality:check` | Passed after formatting the added concurrency test |
 | `pnpm docs:check` | Passed: documentation/API audits, 11 README syntax checks plus 1 executable query, generated capabilities, and 10 installable skills current |
+| `pnpm test:runtime:node` | 13 passed |
+| `pnpm test:runtime:bun` | 68 passed |
+| `pnpm e2e` | 147 passed against live PostgreSQL/MySQL, zero skipped |
 
-No live PostgreSQL, MySQL, Node SQLite, Bun SQLite, package-consumer, unit,
-property, coverage, quality, or benchmark command is claimed as run by this
-reconciliation. Historical reports retain their own dated execution records.
+Coverage, packed-package consumers, benchmark gates, dedicated live prepared
+stress, two-copy fixture, relation boundary matrix, identifier live matrix, and
+live redo failure matrices were not rerun or completed in this remediation pass.
