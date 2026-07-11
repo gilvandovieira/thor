@@ -1,9 +1,9 @@
 # Thor limitations & maturity
 
 > **Maturity: `0.1.0-alpha.1` (alpha).** The v1 feature surface is largely
-> implemented and the release-blocking correctness work is done and tested, but
-> streaming is deferred and migration generation, routines, and some
-> resource-lifecycle guarantees remain partial. Do not treat Thor as
+> implemented and the completed adversarial remediation has focused regression
+> coverage, but streaming is deferred and migration generation, routines,
+> relation scaling, and live resource-stress coverage remain partial. Do not treat Thor as
 > production-ready solely because the v1 feature list exists. Reserve `1.0.0`
 > for a deliberate stable release after external application use.
 
@@ -58,6 +58,9 @@ A feature is not marked stable (`St`) unless its API surface is in
   (they are **not** silently dropped or misaligned). <a id="params"></a>
 - Every application value — inline (`eq(col, x)`) or named (`param(...)`) — is
   validated and encoded through its declared codec before reaching the driver.
+- Inline arrays, plain records, and dates are recursively copied when they enter
+  query IR. Opaque class instances retain identity because their codecs may rely
+  on prototypes; use named execution parameters for mutable opaque values.
 - `.compile()`/`.prepare()` use a **shape-only** model: a query that captures an
   inline value cannot be compiled; use `param(name, schema)` and supply the value
   at `execute()`.
@@ -108,10 +111,10 @@ A feature is not marked stable (`St`) unless its API surface is in
   cursor driver contract exists. Use `.all()` with explicit pagination until a
   cursor-backed, interruptible streaming API ships.
 - `SELECT.one()` and `SELECT.maybeOne()` probe at most two rows. DML
-  `RETURNING.one()` and `RETURNING.maybeOne()` cannot be capped portably: the
-  mutation executes and all returned rows are decoded before cardinality is
-  checked. Use `.all()` for multi-row writes, and use a transaction when a
-  cardinality failure must roll the mutation back.
+  `RETURNING.one()` and `RETURNING.maybeOne()` pass `maxRows: 2` through the
+  driver contract, so Thor materializes and decodes at most two returned rows.
+  This bounds result consumption; it does not undo the mutation when cardinality
+  fails. Use a transaction when that failure must roll the mutation back.
 
 ## Prepared statements & pooling
 
@@ -122,8 +125,29 @@ A feature is not marked stable (`St`) unless its API surface is in
 - `preparedStatements: false` disables prepared execution: mysql2 uses
   `query(sql, values)` instead of `execute(sql, values)`. Bounded query caches
   use an independently configured `preparedMaxSize` (100 by default) to bound
-  actual per-connection prepared admission; SQLite/mysql2 evictions release
-  client resources where their runtimes expose that operation.
+  actual per-connection prepared admission. Entries are leased across driver
+  execution and active entries are not evicted. SQLite/mysql2 evictions release
+  client resources where their runtimes expose that operation; a MySQL client
+  without `unprepare` stops admitting new prepared shapes at the bound and runs
+  them unprepared instead. SQLite collision fallbacks and unnamed statements are
+  transient and finalized on success or failure when the runtime exposes
+  `finalize` or `Symbol.dispose`.
+
+## Relations
+
+- Batched `query` loading targets 800 bound key values per statement. The batch
+  size is `floor(800 / keyColumnCount)`, with a minimum of one. A composite key
+  wider than 800 columns therefore exceeds the target in its one-row batch. The
+  budget is conservative and not dialect-aware; backend parameter, expression,
+  and packet limits still require application-specific testing.
+
+## Identifiers
+
+- Thor treats schema DSL names as opaque single identifiers and safely doubles
+  the active dialect's quote delimiter. It does not currently reject empty, NUL,
+  overlength, reserved, or backend-truncation-colliding names, nor does it parse
+  dots in ordinary table/column names as qualification. Use explicit schema/name
+  APIs where provided and choose portable identifiers in application schemas.
 
 ## Raw SQL trust boundary
 
@@ -131,6 +155,12 @@ A feature is not marked stable (`St`) unless its API surface is in
   text must pass through `unsafeSql` — including custom window frames, SQL
   defaults, generated/check expressions, and routine type/language/body syntax.
   Prefer the structured window-frame constructors such as `rowsBetween(...)`.
+- `SqlStatement` migration values are immutable and authenticated by their
+  constructor; structural `{ _tag: "SqlStatement", sql: ... }` objects are
+  rejected. Package copies have isolated authenticity registries. The CLI treats
+  loaded migration modules as trusted authored source, validates the SQL field,
+  and re-authenticates it in the executing package copy; arbitrary cross-copy
+  runtime values do not interoperate.
 
 ## Stability classification
 

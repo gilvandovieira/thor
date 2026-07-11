@@ -18,6 +18,15 @@ export interface SqlStatement {
   readonly sql: string
 }
 
+const sqlStatements = new WeakSet<object>()
+
+/** @param text - Trusted migration SQL. @returns An immutable authenticated statement. */
+const registerSqlStatement = (text: string): SqlStatement => {
+  const statement: SqlStatement = Object.freeze({ _tag: "SqlStatement", sql: text })
+  sqlStatements.add(statement)
+  return statement
+}
+
 /**
  * The two supported migration step forms. Effect steps run inside the migration
  * transaction with the `Database` service available (use `rawSql` for SQL).
@@ -91,11 +100,23 @@ export type MigrationDefinition =
 export const defineMigration = (definition: MigrationDefinition): MigrationDefinition => definition
 
 /**
- * @param step - Migration step to inspect.
- * @returns Whether the step is a tagged SQL statement.
+ * @param step - Value to inspect.
+ * @returns Whether the value was created by a supported SQL statement constructor.
  */
-export const isSqlStatement = (step: MigrationStep): step is SqlStatement =>
-  typeof step === "object" && step !== null && "_tag" in step && (step as SqlStatement)._tag === "SqlStatement"
+export const isSqlStatement = (step: unknown): step is SqlStatement =>
+  typeof step === "object" && step !== null && sqlStatements.has(step)
+
+/**
+ * Constructs a migration statement from trusted, already-compiled SQL.
+ *
+ * @param text - SQL produced by Thor's migration compiler.
+ * @returns An authenticated immutable SQL statement.
+ * @remarks Prefer the {@link sql} template for manually authored migrations.
+ */
+export const sqlStatement = (text: string): SqlStatement => {
+  if (typeof text !== "string") throw new TypeError("Migration SQL statement must be a string")
+  return registerSqlStatement(text)
+}
 
 /**
  * Authors a trusted SQL migration step.
@@ -117,7 +138,7 @@ export const sql = (strings: TemplateStringsArray, ...values: ReadonlyArray<Unsa
       out += value.sql
     }
   })
-  return { _tag: "SqlStatement", sql: out.trim() }
+  return registerSqlStatement(out.trim())
 }
 
 /**

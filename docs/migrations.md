@@ -36,6 +36,14 @@ pre-migration structural drift report. Drift blocks an otherwise up-to-date run;
 when migrations are pending it is reported as advisory because the intended
 pending DDL normally explains the difference.
 
+Migration `SqlStatement` values must come from `sql` or `sqlStatement`; a plain
+object with the same `_tag` is not accepted at runtime. Statements are frozen and
+authenticated by a package-private registry. Because TypeScript migration modules
+may be evaluated through a separate physical Thor copy, the CLI validates the
+loaded statement's tag and string payload as trusted authored source, then
+reconstructs it with its own `sqlStatement` constructor. This is a deliberate CLI
+source boundary, not general cross-copy value interoperability.
+
 `generate`, `diff`, and `plan` currently compare table presence and produce
 create-table operations only. They do not infer column changes, renames,
 standalone index/constraint changes, or reverse operations. Author reviewed

@@ -347,7 +347,12 @@ export const preparedNameFor = (db: DatabaseService, compiled: CompiledStatement
 export const hasCompiled = (caches: QueryCaches, ir: QueryIR, dialect: Dialect): boolean =>
   (caches.compile.peek(ir) as Map<Dialect, CompiledStatement> | undefined)?.has(dialect) ?? false
 
-const preparedByDriver = new WeakMap<object, Map<string, string>>()
+interface PreparedRegistryEntry {
+  readonly sql: string
+  leases: number
+}
+
+const preparedByDriver = new WeakMap<object, Map<string, PreparedRegistryEntry>>()
 
 /**
  * @param driver - Active driver.
@@ -362,6 +367,8 @@ export interface PreparedExecution {
   readonly name: string | undefined
   /** Actual connection-scoped prepared-registry outcome. */
   readonly outcome: QueryCacheOutcome
+  /** Finalizer for the registry lease covering the driver operation. */
+  readonly release: Effect.Effect<void>
 }
 
 /**
@@ -379,33 +386,44 @@ export const prepareForExecution = (
 ): Effect.Effect<PreparedExecution, DriverError | ConstraintError> =>
   Effect.gen(function* () {
     const requested = preparedNameFor(db, compiled)
-    if (!requested) return { name: undefined, outcome: "not-used" }
+    if (!requested) return { name: undefined, outcome: "not-used", release: Effect.void }
     const scope = preparedScopeOf(db.driver)
     let prepared = preparedByDriver.get(scope)
     if (!prepared) {
       prepared = new Map()
       preparedByDriver.set(scope, prepared)
     }
-    const priorSql = prepared.get(requested)
-    if (priorSql === compiled.sql) {
+    const prior = prepared.get(requested)
+    if (prior?.sql === compiled.sql) {
+      prior.leases++
       prepared.delete(requested)
-      prepared.set(requested, compiled.sql)
+      prepared.set(requested, prior)
       if (db.recordPreparedCache !== false) caches.notePrepared("hit", prepared.size, 0)
-      return { name: requested, outcome: db.recordPreparedCache === false ? "not-used" : "hit" }
+      return {
+        name: requested,
+        outcome: db.recordPreparedCache === false ? "not-used" : "hit",
+        release: Effect.sync(() => {
+          prior.leases--
+        })
+      }
     }
-    if (priorSql !== undefined) {
+    if (prior !== undefined) {
       if (db.recordPreparedCache !== false) caches.notePrepared("miss", prepared.size, 0)
-      return { name: undefined, outcome: db.recordPreparedCache === false ? "not-used" : "miss" }
+      return { name: undefined, outcome: db.recordPreparedCache === false ? "not-used" : "miss", release: Effect.void }
     }
 
     const evictedNames: string[] = []
     const maxSize = caches.preparedMaxSize
     const releasePrepared = db.driver.releasePrepared
     while (prepared.size >= maxSize) {
-      const oldest = prepared.keys().next().value as string | undefined
-      if (!oldest || !releasePrepared) {
+      const oldest = Array.from(prepared).find(([, entry]) => entry.leases === 0)?.[0]
+      if (oldest === undefined || !releasePrepared) {
         if (db.recordPreparedCache !== false) caches.notePrepared("miss", prepared.size, 0)
-        return { name: undefined, outcome: db.recordPreparedCache === false ? "not-used" : "miss" }
+        return {
+          name: undefined,
+          outcome: db.recordPreparedCache === false ? "not-used" : "miss",
+          release: Effect.void
+        }
       }
       prepared.delete(oldest)
       evictedNames.push(oldest)
@@ -413,7 +431,8 @@ export const prepareForExecution = (
 
     // Complete registry admission synchronously before release effects can yield,
     // so concurrent executions always observe a registry within its bound.
-    prepared.set(requested, compiled.sql)
+    const admitted: PreparedRegistryEntry = { sql: compiled.sql, leases: 1 }
+    prepared.set(requested, admitted)
     if (releasePrepared) {
       for (const name of evictedNames) {
         // Release failure is housekeeping, not a reason to fail the unrelated query.
@@ -421,7 +440,13 @@ export const prepareForExecution = (
       }
     }
     if (db.recordPreparedCache !== false) caches.notePrepared("miss", prepared.size, evictedNames.length)
-    return { name: requested, outcome: db.recordPreparedCache === false ? "not-used" : "miss" }
+    return {
+      name: requested,
+      outcome: db.recordPreparedCache === false ? "not-used" : "miss",
+      release: Effect.sync(() => {
+        admitted.leases--
+      })
+    }
   })
 
 /** @returns Fresh mutable facts scoped to one execution. */

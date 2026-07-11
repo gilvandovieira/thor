@@ -251,7 +251,7 @@ describe("fake driver execution (spec §14.9)", () => {
     ).resolves.toStrictEqual(Option.none())
     const error = await runFailure(db.delete(users).returning({ id: users.id }).one(), many)
 
-    expect(error).toMatchObject({ _tag: "TooManyRowsError", count: 3 })
+    expect(error).toMatchObject({ _tag: "TooManyRowsError", count: 2 })
     expect(none.calls[0]?.sql).not.toMatch(/LIMIT/)
     expect(many.calls[0]?.sql).not.toMatch(/LIMIT/)
   })

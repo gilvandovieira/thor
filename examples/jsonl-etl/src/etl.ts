@@ -1,7 +1,7 @@
 import { Cause, Console, Effect, Exit } from "effect"
 import { Database, SQLiteDialect, db, excluded } from "@gilvandovieira/thor"
 import { makeIntrospector } from "@gilvandovieira/thor/introspect"
-import { compilePlan, defineMigration, makeMigrator, tableToCreateOp } from "@gilvandovieira/thor/migrate"
+import { compilePlan, defineMigration, makeMigrator, sqlStatement, tableToCreateOp } from "@gilvandovieira/thor/migrate"
 import { readInput } from "./data.js"
 import {
   FindEvent,
@@ -36,11 +36,10 @@ const initialMigration = defineMigration({
   phase: "expand",
   downSafety: "destructive",
   downPhase: "contract",
-  up: { _tag: "SqlStatement", sql: compilePlan(initialPlan, SQLiteDialect) },
-  down: {
-    _tag: "SqlStatement",
-    sql: "drop table if exists import_runs; drop table if exists daily_metrics; drop table if exists raw_events; drop table if exists sources;"
-  }
+  up: sqlStatement(compilePlan(initialPlan, SQLiteDialect)),
+  down: sqlStatement(
+    "drop table if exists import_runs; drop table if exists daily_metrics; drop table if exists raw_events; drop table if exists sources;"
+  )
 })
 
 const chunks = <A>(values: ReadonlyArray<A>, size: number): ReadonlyArray<ReadonlyArray<A>> => {

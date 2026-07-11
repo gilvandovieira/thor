@@ -83,6 +83,10 @@ const observeRefined = <A, B, E2>(
  */
 const allRows = <A>(rows: ReadonlyArray<A>): Effect.Effect<ReadonlyArray<A>, never> => Effect.succeed(rows)
 
+/** @param ir - Query shape being refined. @returns A two-row driver probe for DML, or no bound for selects. */
+const mutationCardinalityProbe = (ir: QueryIR): number | undefined =>
+  ir._tag === "Insert" || ir._tag === "Update" || ir._tag === "Delete" ? 2 : undefined
+
 /**
  * Executes a prepared row-returning plan with per-call values.
  *
@@ -91,13 +95,15 @@ const allRows = <A>(rows: ReadonlyArray<A>): Effect.Effect<ReadonlyArray<A>, nev
  * @param db - Active database service.
  * @param args - Named parameter values for this call only.
  * @param state - Mutable observation state populated during execution.
+ * @param maxRows - Optional driver-level row bound for mutation cardinality probes.
  * @returns An Effect yielding decoded rows.
  */
 const preparedRowsExecution = <A>(
   plan: PreparedExecutionPlan,
   db: DatabaseService,
   args: QueryArgs,
-  state: QueryObservationState
+  state: QueryObservationState,
+  maxRows?: number
 ): Effect.Effect<ReadonlyArray<A>, QueryError> =>
   Effect.gen(function* () {
     const failure = plan.guard(db.dialect, db.allowEmulation)
@@ -110,7 +116,7 @@ const preparedRowsExecution = <A>(
     state.values = values
     const prepared = yield* prepareForExecution(db, cachesFor(db), compiled)
     state.preparedCache = prepared.outcome
-    const rows = yield* db.driver.query(compiled.sql, values, prepared.name)
+    const rows = yield* Effect.ensuring(db.driver.query(compiled.sql, values, prepared.name, maxRows), prepared.release)
     const trusted = resolveDecodeMode(db.mode ?? DEFAULT_EXECUTION_MODE, db.decodeMode) === "trusted"
     return trusted ? (rows as ReadonlyArray<A>) : ((yield* plan.decode(rows)) as ReadonlyArray<A>)
   })
@@ -149,8 +155,13 @@ export const executePreparedOne = <A>(
 ): Effect.Effect<A, QueryError | NotFoundError | TooManyRowsError> =>
   Effect.suspend(() => {
     const state = observationState()
-    return observeRefined(db, plan.ir, args, state, preparedRowsExecution<A>(plan, db, args, state), (rows) =>
-      exactlyOne(rows, operation)
+    return observeRefined(
+      db,
+      plan.ir,
+      args,
+      state,
+      preparedRowsExecution<A>(plan, db, args, state, mutationCardinalityProbe(plan.ir)),
+      (rows) => exactlyOne(rows, operation)
     )
   })
 
@@ -169,8 +180,13 @@ export const executePreparedMaybeOne = <A>(
 ): Effect.Effect<Option.Option<A>, QueryError | TooManyRowsError> =>
   Effect.suspend(() => {
     const state = observationState()
-    return observeRefined(db, plan.ir, args, state, preparedRowsExecution<A>(plan, db, args, state), (rows) =>
-      atMostOne(rows, operation)
+    return observeRefined(
+      db,
+      plan.ir,
+      args,
+      state,
+      preparedRowsExecution<A>(plan, db, args, state, mutationCardinalityProbe(plan.ir)),
+      (rows) => atMostOne(rows, operation)
     )
   })
 
@@ -200,7 +216,7 @@ export const executePreparedCommand = (
       state.values = values
       const prepared = yield* prepareForExecution(db, cachesFor(db), compiled)
       state.preparedCache = prepared.outcome
-      return yield* db.driver.execute(compiled.sql, values, prepared.name)
+      return yield* Effect.ensuring(db.driver.execute(compiled.sql, values, prepared.name), prepared.release)
     })
     return observeQuery(db, plan.ir, args, state, execution, (result) => result.rowCount)
   })
@@ -216,6 +232,7 @@ export const executePreparedCommand = (
  * @param db - Active database service.
  * @param args - Named values supplied for this execution only.
  * @param state - Mutable observation state populated during execution.
+ * @param maxRows - Optional driver-level row bound for mutation cardinality probes.
  * @returns An Effect yielding decoded rows.
  */
 const compiledRowsExecution = <A>(
@@ -223,7 +240,8 @@ const compiledRowsExecution = <A>(
   compiled: CompiledStatement,
   db: DatabaseService,
   args: QueryArgs,
-  state: QueryObservationState
+  state: QueryObservationState,
+  maxRows?: number
 ): Effect.Effect<ReadonlyArray<A>, QueryError> => {
   state.compileCache = "hit"
   state.compiledSql = compiled.sql
@@ -233,7 +251,7 @@ const compiledRowsExecution = <A>(
     state.values = values
     const prepared = yield* prepareForExecution(db, cachesFor(db), compiled)
     state.preparedCache = prepared.outcome
-    const rows = yield* db.driver.query(compiled.sql, values, prepared.name)
+    const rows = yield* Effect.ensuring(db.driver.query(compiled.sql, values, prepared.name, maxRows), prepared.release)
     const trusted = resolveDecodeMode(db.mode ?? DEFAULT_EXECUTION_MODE, db.decodeMode) === "trusted"
     return trusted ? (rows as ReadonlyArray<A>) : ((yield* plan.decode(rows)) as ReadonlyArray<A>)
   })
@@ -277,8 +295,13 @@ export const executeCompiledOne = <A>(
 ): Effect.Effect<A, QueryError | NotFoundError | TooManyRowsError> =>
   Effect.suspend(() => {
     const state = observationState()
-    return observeRefined(db, plan.ir, args, state, compiledRowsExecution<A>(plan, compiled, db, args, state), (rows) =>
-      exactlyOne(rows, operation)
+    return observeRefined(
+      db,
+      plan.ir,
+      args,
+      state,
+      compiledRowsExecution<A>(plan, compiled, db, args, state, mutationCardinalityProbe(plan.ir)),
+      (rows) => exactlyOne(rows, operation)
     )
   })
 
@@ -298,8 +321,13 @@ export const executeCompiledMaybeOne = <A>(
 ): Effect.Effect<Option.Option<A>, QueryError | TooManyRowsError> =>
   Effect.suspend(() => {
     const state = observationState()
-    return observeRefined(db, plan.ir, args, state, compiledRowsExecution<A>(plan, compiled, db, args, state), (rows) =>
-      atMostOne(rows, operation)
+    return observeRefined(
+      db,
+      plan.ir,
+      args,
+      state,
+      compiledRowsExecution<A>(plan, compiled, db, args, state, mutationCardinalityProbe(plan.ir)),
+      (rows) => atMostOne(rows, operation)
     )
   })
 
@@ -329,7 +357,7 @@ export const executeCompiledCommand = (
       state.values = values
       const prepared = yield* prepareForExecution(db, cachesFor(db), compiled)
       state.preparedCache = prepared.outcome
-      return yield* db.driver.execute(compiled.sql, values, prepared.name)
+      return yield* Effect.ensuring(db.driver.execute(compiled.sql, values, prepared.name), prepared.release)
     })
     return observeQuery(db, plan.ir, args, state, execution, (result) => result.rowCount)
   })
@@ -344,6 +372,7 @@ export const executeCompiledCommand = (
  * @param db - Active database service.
  * @param args - Named parameter values.
  * @param state - Mutable observation state populated during execution.
+ * @param maxRows - Optional driver-level row bound for mutation cardinality probes.
  * @returns An Effect yielding decoded rows or a typed query error.
  */
 const directRowsExecution = <A>(
@@ -351,7 +380,8 @@ const directRowsExecution = <A>(
   fields: ReadonlyArray<SelectionField>,
   db: DatabaseService,
   args: QueryArgs,
-  state: QueryObservationState
+  state: QueryObservationState,
+  maxRows?: number
 ): Effect.Effect<ReadonlyArray<A>, QueryError> =>
   Effect.gen(function* () {
     const caches = cachesFor(db)
@@ -365,7 +395,7 @@ const directRowsExecution = <A>(
     state.values = values
     const prepared = yield* prepareForExecution(db, caches, compiled)
     state.preparedCache = prepared.outcome
-    const rows = yield* db.driver.query(compiled.sql, values, prepared.name)
+    const rows = yield* Effect.ensuring(db.driver.query(compiled.sql, values, prepared.name, maxRows), prepared.release)
     return (yield* decodeForMode(caches, fields, rows, db)) as ReadonlyArray<A>
   })
 
@@ -409,8 +439,13 @@ export const executeOne = <A>(
 ): Effect.Effect<A, QueryError | NotFoundError | TooManyRowsError> =>
   Effect.suspend(() => {
     const state = observationState()
-    return observeRefined(db, ir, args, state, directRowsExecution<A>(ir, fields, db, args, state), (rows) =>
-      exactlyOne(rows, operation)
+    return observeRefined(
+      db,
+      ir,
+      args,
+      state,
+      directRowsExecution<A>(ir, fields, db, args, state, mutationCardinalityProbe(ir)),
+      (rows) => exactlyOne(rows, operation)
     )
   })
 
@@ -432,8 +467,13 @@ export const executeMaybeOne = <A>(
 ): Effect.Effect<Option.Option<A>, QueryError | TooManyRowsError> =>
   Effect.suspend(() => {
     const state = observationState()
-    return observeRefined(db, ir, args, state, directRowsExecution<A>(ir, fields, db, args, state), (rows) =>
-      atMostOne(rows, operation)
+    return observeRefined(
+      db,
+      ir,
+      args,
+      state,
+      directRowsExecution<A>(ir, fields, db, args, state, mutationCardinalityProbe(ir)),
+      (rows) => atMostOne(rows, operation)
     )
   })
 
@@ -464,7 +504,7 @@ export const executeCommand = (
       state.values = values
       const prepared = yield* prepareForExecution(db, caches, compiled)
       state.preparedCache = prepared.outcome
-      return yield* db.driver.execute(compiled.sql, values, prepared.name)
+      return yield* Effect.ensuring(db.driver.execute(compiled.sql, values, prepared.name), prepared.release)
     })
     return observeQuery(db, ir, args, state, execution, (result) => result.rowCount)
   })

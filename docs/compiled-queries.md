@@ -75,6 +75,12 @@ FindMany.toSql()
 - Inline values are rejected during compilation. Use `param(name, schema)` and
   pass each value to `execute`.
 
+Direct terminals snapshot inline arrays, plain records, and dates when the value
+is converted into query IR. Mutating those source values after constructing the
+terminal therefore cannot change a later lazy execution. Opaque class instances
+retain identity and should be passed as named execution arguments when mutation
+between construction and execution is possible.
+
 `.prepare(name)` remains available as the v0 named multi-dialect handle. Use
 `.compile(dialect)` when a stable public handle bound to one known dialect is the
 desired hot-path boundary.

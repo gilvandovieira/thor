@@ -5,7 +5,14 @@
  */
 import { Schema } from "effect"
 import { type AnyColumn, Column, columnParamCodec } from "../schema/column.js"
-import type { ColumnRefNode, ExprNode, LiteralNode, OrderByTerm, ParamNode } from "../ir/query-ir.js"
+import {
+  snapshotInlineValue,
+  type ColumnRefNode,
+  type ExprNode,
+  type LiteralNode,
+  type OrderByTerm,
+  type ParamNode
+} from "../ir/query-ir.js"
 
 declare const ParamType: unique symbol
 
@@ -173,7 +180,7 @@ export const toValueNode = (value: unknown, leftColumn?: AnyColumn): ExprNode =>
   if (isParamNode(value)) return value
   if (isExpr(value)) return value.node
   const codec = leftColumn ? columnParamCodec(leftColumn) : Schema.Unknown
-  return { _tag: "Param", name: `p${++anonCounter}`, codec, value } satisfies ParamNode
+  return { _tag: "Param", name: `p${++anonCounter}`, codec, value: snapshotInlineValue(value) } satisfies ParamNode
 }
 
 /**
@@ -190,5 +197,5 @@ export const toValueNodeWithCodec = (value: unknown, codec: Schema.Schema<any, a
   if (isColumn(value)) return columnRef(value)
   if (isParamNode(value)) return value
   if (isExpr(value)) return value.node
-  return { _tag: "Param", name: `p${++anonCounter}`, codec, value } satisfies ParamNode
+  return { _tag: "Param", name: `p${++anonCounter}`, codec, value: snapshotInlineValue(value) } satisfies ParamNode
 }

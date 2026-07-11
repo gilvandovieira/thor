@@ -43,6 +43,47 @@ describe("SQLite prepared resource lifecycle", () => {
     expect(second).toEqual([{ sql: "select 2" }])
     expect(prepared).toEqual(["select 1", "select 2"])
   })
+
+  it("finalizes transient query and execute statements on every completion path", async () => {
+    const finalized: string[] = []
+    const client = {
+      prepare: (sql: string) => ({
+        all: () => {
+          if (sql.includes("fail")) throw new Error("boom")
+          return []
+        },
+        run: () => {
+          if (sql.includes("fail")) throw new Error("boom")
+          return { changes: 0 }
+        },
+        finalize: () => finalized.push(sql)
+      }),
+      exec: () => undefined
+    }
+    const driver = makeSQLiteDriver(client)
+
+    await Effect.runPromise(driver.query("cached query", [], "query-collision"))
+    await Effect.runPromise(driver.query("query collision", [], "query-collision"))
+    await Effect.runPromiseExit(driver.query("query collision fail", [], "query-collision"))
+    await Effect.runPromise(driver.execute("cached execute", [], "execute-collision"))
+    await Effect.runPromise(driver.execute("execute collision", [], "execute-collision"))
+    await Effect.runPromiseExit(driver.execute("execute collision fail", [], "execute-collision"))
+    await Effect.runPromise(driver.query("unnamed query", []))
+    await Effect.runPromiseExit(driver.query("unnamed query fail", []))
+    await Effect.runPromise(driver.execute("unnamed execute", []))
+    await Effect.runPromiseExit(driver.execute("unnamed execute fail", []))
+
+    expect(finalized).toEqual([
+      "query collision",
+      "query collision fail",
+      "execute collision",
+      "execute collision fail",
+      "unnamed query",
+      "unnamed query fail",
+      "unnamed execute",
+      "unnamed execute fail"
+    ])
+  })
 })
 
 const supportsNodeSqlite = Number(process.versions.node.split(".")[0]) >= 22

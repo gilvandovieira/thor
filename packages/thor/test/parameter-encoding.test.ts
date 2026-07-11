@@ -9,7 +9,8 @@ import { FakeDatabaseLayer, FakeDriver } from "@gilvandovieira/thor/testing"
 const events = pg.table("events", {
   id: pg.uuid("id").primaryKey().defaultRandom(),
   at: pg.timestamp("at").notNull(),
-  name: pg.text("name").nullable()
+  name: pg.text("name").nullable(),
+  metadata: pg.jsonb("metadata").nullable()
 })
 
 const TimestampSchema = events.at.def.codec
@@ -81,6 +82,17 @@ describe("consistent parameter encoding (P0.2)", () => {
     await run(db.insert(events).values({ at: when, name: null }).run(), driver)
     // name encodes null through Schema.NullOr; at passes the Date through
     expect(driver.calls[0]!.params).toContain(null)
-    expect(driver.calls[0]!.params).toContain(when)
+    expect(driver.calls[0]!.params).toContainEqual(when)
+  })
+
+  it("snapshots mutable inline values when constructing a direct terminal", async () => {
+    const metadata = { tags: ["original"] }
+    const effect = db.insert(events).values({ at: when, metadata }).run()
+    metadata.tags[0] = "mutated"
+    const driver = new FakeDriver().enqueue({ rowCount: 1 })
+
+    await run(effect, driver)
+
+    expect(driver.calls[0]!.params).toContainEqual({ tags: ["original"] })
   })
 })

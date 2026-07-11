@@ -6,9 +6,10 @@ back fully-typed results and runs them against **PostgreSQL, SQLite, or MySQL** 
 the same code, three databases.
 
 Thor is currently **`0.1.0-alpha.1`** — an alpha, not a production-ready stable
-release. The core pipeline is substantial and the release-blocking correctness
-work is done and tested, but streaming is deferred and migration generation,
-routines, and some resource-lifecycle guarantees remain partial. See
+release. The core pipeline is substantial and the completed adversarial
+remediation is regression-tested, but streaming is deferred and migration
+generation, routines, relation scaling, and live resource-stress coverage remain
+partial. See
 [docs/limitations.md](docs/limitations.md) for the exact conformance state, and
 reserve `1.0.0` for a deliberate stable release after external application use.
 
@@ -260,6 +261,10 @@ const migrations = [
   defineMigration({
     id: "0001_create_authors",
     name: "create_authors",
+    safety: "additive",
+    phase: "expand",
+    downSafety: "destructive",
+    downPhase: "contract",
     up: sql`create table authors (id uuid primary key, name text not null);`,
     down: sql`drop table authors;`
   })
@@ -390,3 +395,4 @@ pnpm db:up        # or start postgres@5433 + mysql@3307 yourself
 - [`docs/api-stability.md`](docs/api-stability.md) — `@stable`/`@experimental`/`@internal` boundaries
 - [`docs/api-documentation.md`](docs/api-documentation.md) — JSDoc conventions
 - [`docs/thor-project-v1-spec.md`](docs/thor-project-v1-spec.md) — the specification · [`docs/roadmap.md`](docs/roadmap.md) — progress by epic
+- [`docs/remediation-adversarial-report.md`](docs/remediation-adversarial-report.md) — final adversarial remediation status and remaining high-value work

@@ -1,5 +1,10 @@
 # Thor adversarial test audit
 
+> **Historical discovery report.** The red failures and blocker list below record
+> the state at audit time. The completed fixes and remaining work are reconciled
+> in [remediation-adversarial-report.md](./remediation-adversarial-report.md). Do
+> not read this report's retained reproductions as current implementation status.
+
 Date: 2026-07-11
 
 Scope: current working tree, including pre-existing uncommitted remediation work.
@@ -223,7 +228,7 @@ repository quality checking still pass.
 | Hypothesis | Verdict | Evidence / disposition |
 |---|---|---|
 | A. Prepared snapshots mutable | **Confirmed, Critical.** | `prepared-snapshot-mutation.test.ts`: post-prepare raw-string mutation changes SQL to include `DROP TABLE`; parameter-name mutation makes prepared and compiled handles bind `undefined`. Driver reached for parameter cases. Stable/RC blocker. |
-| B. Inline mutable values | **Ambiguous contract, risky implementation.** | `ParameterPlan` encodes inline values once and may retain mutable object references. Compiled/prepared handles reject captured inline values. Snapshot-at-construction vs read-per-execution is undocumented; no assertion was imposed without that decision. |
+| B. Inline mutable values | **Resolved with construction-time snapshots.** | Direct terminals recursively snapshot arrays, plain records, and dates when values enter query IR; `parameter-encoding.test.ts` proves later source mutation is not observed. Opaque instances retain identity and should be supplied as named execution arguments when they may mutate. Compiled/prepared handles continue to reject captured inline values. |
 | C. SQLite collision leak | **Confirmed, High.** | `sqlite-collision-leak.test.ts`: collision fallback, unnamed query/command, and failure paths never finalize transient statements. Driver reached. Blocks beta/stable for long-lived SQLite connections. |
 | D. Prepared eviction race | **Confirmed, High.** | `prepared-eviction-race.test.ts` deterministically records release of an active prepared name. Blocks beta/stable. |
 | E. Cache collision/dialect leakage | **Wrong-SQL collision reuse disproved for current adapters.** | Registry compares name and SQL and falls back unnamed. SQLite fallback leaks (C). Mutable custom dialect objects can still make identity-keyed direct compile caches stale; not executed here. |

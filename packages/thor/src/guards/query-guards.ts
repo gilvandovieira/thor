@@ -15,8 +15,7 @@ import {
   type ExprNode,
   type QueryIR,
   type QuerySource,
-  type SelectIR,
-  type SelectionField
+  type SelectIR
 } from "../ir/query-ir.js"
 import { CapabilityError, GuardError } from "../errors/index.js"
 
@@ -72,13 +71,6 @@ const columnRefsIn = (node: ExprNode | undefined, out: ColumnRefNode[] = []): Co
   }
   return out
 }
-
-/**
- * @param fields - Optional selected fields.
- * @returns Every column referenced by their expressions.
- */
-const refsInSelection = (fields: ReadonlyArray<SelectionField> | undefined): ColumnRefNode[] =>
-  (fields ?? []).flatMap((f) => columnRefsIn(f.expr))
 
 /**
  * Enforces the table-scope guard from spec §8.1.
@@ -338,6 +330,29 @@ const validateSelect = (ir: SelectIR, outerScope: ReadonlySet<string>, out: Guar
 }
 
 /**
+ * Validates mutation expressions and any correlated selects nested within them.
+ *
+ * @param expressions - Expressions evaluated by the mutation.
+ * @param scope - Mutation relations visible to direct references and correlations.
+ * @param out - Mutable guard-error accumulator.
+ * @returns Nothing.
+ */
+const validateMutationExpressions = (
+  expressions: ReadonlyArray<ExprNode>,
+  scope: ReadonlySet<string>,
+  out: GuardError[]
+): void => {
+  checkScope(
+    scope,
+    expressions.flatMap((expression) => columnRefsIn(expression)),
+    out
+  )
+  for (const expression of expressions) {
+    visitSubqueries(expression, (query) => validateSelect(query, scope, out))
+  }
+}
+
+/**
  * Runs guards that depend only on the immutable query shape.
  *
  * @param ir - Query representation to validate.
@@ -390,7 +405,14 @@ export const collectStructuralViolations = (ir: QueryIR): ReadonlyArray<GuardErr
           })
         )
       }
-      checkScope(new Set([ir.into.name]), refsInSelection(ir.returning), out)
+      const targetScope = new Set([ir.into.name])
+      validateMutationExpressions(ir.rows.flat(), new Set(), out)
+      validateMutationExpressions(ir.conflict?.set.map((assignment) => assignment.value) ?? [], targetScope, out)
+      validateMutationExpressions(
+        (ir.returning ?? []).map((field) => field.expr),
+        targetScope,
+        out
+      )
       break
     }
     case "Update": {
@@ -398,12 +420,24 @@ export const collectStructuralViolations = (ir: QueryIR): ReadonlyArray<GuardErr
         out.push(new GuardError({ guard: "update-shape", message: "Update has an empty SET clause" }))
       }
       const scope = new Set([ir.table.name])
-      checkScope(scope, [...columnRefsIn(ir.where), ...refsInSelection(ir.returning)], out)
+      validateMutationExpressions(
+        [
+          ...ir.set.map((assignment) => assignment.value),
+          ...(ir.where ? [ir.where] : []),
+          ...(ir.returning ?? []).map((field) => field.expr)
+        ],
+        scope,
+        out
+      )
       break
     }
     case "Delete": {
       const scope = new Set([ir.from.name])
-      checkScope(scope, [...columnRefsIn(ir.where), ...refsInSelection(ir.returning)], out)
+      validateMutationExpressions(
+        [...(ir.where ? [ir.where] : []), ...(ir.returning ?? []).map((field) => field.expr)],
+        scope,
+        out
+      )
       break
     }
     case "Call": {

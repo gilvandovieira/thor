@@ -57,6 +57,15 @@ admitting new prepared shapes at the bound and executes them unprepared. Owned
 scoped SQLite/MySQL layers clear all retained statements before releasing the
 connection. Separate physical connections always have separate registries.
 
+Each admitted entry holds an execution lease from admission/reuse until the
+driver Effect completes, including failure or interruption. Eviction considers
+only entries with zero leases; when every candidate is active, the new shape runs
+unprepared instead of releasing an in-flight native statement. A mysql2-compatible
+client that does not expose `unprepare` is treated as non-releasable and follows
+the same no-new-admission rule. SQLite statements created for unnamed execution
+or a prepared-name collision are transient and finalized in a `finally` path
+where the runtime exposes an explicit finalizer.
+
 These are distinct resources: the compile cache retains SQL text; the prepared
 observation counters report real connection-registry outcomes; the client cache
 owns statement handles; and a database server may own parsed statement state.

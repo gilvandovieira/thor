@@ -212,7 +212,10 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
     // schema upgrade (e.g. widening a legacy checksum column) before it is
     // read or written. History rows are never rewritten.
     const upgradeJournal = dialect.upgradeJournal?.(JOURNAL)
-    const ensureJournal = exec(dialect.ensureJournal(JOURNAL)).pipe(
+    // Call only while the caller owns the migration lock or transaction.
+    // Public read paths serialize this operation with their journal read so
+    // concurrent legacy upgrades cannot race.
+    const ensureJournalUnlocked = exec(dialect.ensureJournal(JOURNAL)).pipe(
       Effect.zipRight(
         upgradeJournal
           ? Effect.flatMap(queryRows(upgradeJournal.probe.sql, upgradeJournal.probe.params ?? []), (rows) =>
@@ -258,7 +261,9 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
     ): Effect.Effect<void, MigrationError> =>
       isSqlStatement(step)
         ? execScript(step.sql).pipe(Effect.asVoid)
-        : Effect.provideService(step, Database, migrationDatabase(migrationId, database))
+        : Effect.isEffect(step)
+          ? Effect.provideService(step, Database, migrationDatabase(migrationId, database))
+          : Effect.fail(new MigrationError({ message: `migration "${migrationId}" has an invalid step`, migrationId }))
 
     const observeMigration = <A, E>(operation: string, migrationId: string | undefined, effect: Effect.Effect<A, E>) =>
       observeLifecycle(db, "migration", operation, effect, {
@@ -304,10 +309,33 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
         )
       )
 
+    const serializeJournal = <A, E>(body: Effect.Effect<A, E>): Effect.Effect<A, E | MigrationError> =>
+      hasAdvisoryLock
+        ? withLock(body)
+        : dialect.transactionalDdl
+          ? withTx(body)
+          : Effect.fail(new MigrationError({ message: "Dialect cannot serialize migration journal access" }))
+
     const validateDefinitions = (defs: ReadonlyArray<MigrationDefinition>): Effect.Effect<void, MigrationError> =>
       Effect.gen(function* () {
         const seen = new Set<string>()
         for (const migration of defs) {
+          if (!isSqlStatement(migration.up) && !Effect.isEffect(migration.up)) {
+            return yield* Effect.fail(
+              new MigrationError({
+                message: `migration "${migration.id}" has an invalid up step`,
+                migrationId: migration.id
+              })
+            )
+          }
+          if (migration.down !== undefined && !isSqlStatement(migration.down) && !Effect.isEffect(migration.down)) {
+            return yield* Effect.fail(
+              new MigrationError({
+                message: `migration "${migration.id}" has an invalid down step`,
+                migrationId: migration.id
+              })
+            )
+          }
           if (seen.has(migration.id)) {
             return yield* Effect.fail(new MigrationError({ message: `duplicate migration id: ${migration.id}` }))
           }
@@ -406,17 +434,20 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
       return Effect.void
     }
 
-    const status: MigratorService["status"] = () => Effect.zipRight(ensureJournal, readApplied)
+    const status: MigratorService["status"] = () =>
+      serializeJournal(Effect.zipRight(ensureJournalUnlocked, readApplied))
 
     const check: MigratorService["check"] = () => {
       const defs = migrations()
-      return withLock(
-        Effect.gen(function* () {
-          yield* validateDefinitions(defs)
-          yield* ensureJournal
-          const applied = yield* readApplied
-          yield* validateApplied(defs, applied)
-        })
+      return Effect.zipRight(
+        validateDefinitions(defs),
+        serializeJournal(
+          Effect.gen(function* () {
+            yield* ensureJournalUnlocked
+            const applied = yield* readApplied
+            yield* validateApplied(defs, applied)
+          })
+        )
       )
     }
 
@@ -470,29 +501,31 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
       const defs = migrations()
 
       if (hasAdvisoryLock) {
-        return withLock(
-          Effect.gen(function* () {
-            yield* validateDefinitions(defs)
-            yield* ensureJournal
-            const appliedEntries = yield* readApplied
-            yield* validateApplied(defs, appliedEntries)
-            const applied = new Set(appliedEntries.map((entry) => entry.id))
-            const pending = defs.filter((migration) => !applied.has(migration.id))
-            yield* preflightPending(pending, options)
-            const entries: JournalEntry[] = []
-            for (const migration of pending) {
-              const scoped = migrationDatabase(migration.id)
-              entries.push(
-                yield* dialect.transactionalDdl
-                  ? withTx(
-                      Effect.flatMap(Database, (active) => applyOne(migration, active, options)),
-                      scoped
-                    )
-                  : applyOne(migration, scoped, options)
-              )
-            }
-            return entries
-          })
+        return Effect.zipRight(
+          validateDefinitions(defs),
+          withLock(
+            Effect.gen(function* () {
+              yield* ensureJournalUnlocked
+              const appliedEntries = yield* readApplied
+              yield* validateApplied(defs, appliedEntries)
+              const applied = new Set(appliedEntries.map((entry) => entry.id))
+              const pending = defs.filter((migration) => !applied.has(migration.id))
+              yield* preflightPending(pending, options)
+              const entries: JournalEntry[] = []
+              for (const migration of pending) {
+                const scoped = migrationDatabase(migration.id)
+                entries.push(
+                  yield* dialect.transactionalDdl
+                    ? withTx(
+                        Effect.flatMap(Database, (active) => applyOne(migration, active, options)),
+                        scoped
+                      )
+                    : applyOne(migration, scoped, options)
+                )
+              }
+              return entries
+            })
+          )
         )
       }
 
@@ -509,7 +542,7 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
         // Preflight the whole pending set before applying any (Finding 12).
         yield* withTx(
           Effect.gen(function* () {
-            yield* ensureJournal
+            yield* ensureJournalUnlocked
             const appliedEntries = yield* readApplied
             const applied = new Set(appliedEntries.map((item) => item.id))
             yield* preflightPending(
@@ -523,7 +556,7 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
           const entry = yield* withTx(
             Effect.gen(function* () {
               const active = yield* Database
-              yield* ensureJournal
+              yield* ensureJournalUnlocked
               const appliedEntries = yield* readApplied
               yield* validateApplied(defs, appliedEntries)
               const applied = new Set(appliedEntries.map((item) => item.id))
@@ -539,13 +572,12 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
     }
 
     const down: MigratorService["down"] = (options) => {
+      const defs = migrations()
       const downBody = (transactionalStep: boolean) =>
         Effect.gen(function* () {
           const active = yield* Database
-          yield* ensureJournal
+          yield* ensureJournalUnlocked
           const applied = yield* readApplied
-          const defs = migrations()
-          yield* validateDefinitions(defs)
           yield* validateApplied(defs, applied)
           const last = applied[applied.length - 1]
           if (!last) return
@@ -570,15 +602,14 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
         : dialect.transactionalDdl
           ? withTx(downBody(false))
           : Effect.provideService(downBody(false), Database, db)
-      return effect
+      return Effect.zipRight(validateDefinitions(defs), effect)
     }
 
     const redo: MigratorService["redo"] = (options) => {
       const defs = migrations()
       const body = Effect.gen(function* () {
         const active = yield* Database
-        yield* ensureJournal
-        yield* validateDefinitions(defs)
+        yield* ensureJournalUnlocked
         const applied = yield* readApplied
         yield* validateApplied(defs, applied)
         const last = applied[applied.length - 1]
@@ -607,7 +638,7 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
       const operation = dialect.transactionalDdl
         ? withTx(body, migrationDatabase("redo"))
         : Effect.provideService(body, Database, db)
-      return hasAdvisoryLock ? withLock(operation) : operation
+      return Effect.zipRight(validateDefinitions(defs), hasAdvisoryLock ? withLock(operation) : operation)
     }
 
     const diffOps = (previousTables?: ReadonlyArray<string>) =>
@@ -631,23 +662,28 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
 
     const generate: MigratorService["generate"] = plan
 
-    const dryRun: MigratorService["dryRun"] = () =>
-      Effect.gen(function* () {
-        yield* ensureJournal
-        const applied = yield* readApplied
-        const defs = migrations()
-        yield* validateDefinitions(defs)
-        const appliedIds = new Set(applied.map((entry) => entry.id))
-        const pending = defs
-          .filter((migration) => !appliedIds.has(migration.id))
-          .map(
-            (migration): DryRunStep =>
-              isSqlStatement(migration.up)
-                ? { id: migration.id, name: migration.name, kind: "sql", statements: [migration.up.sql] }
-                : { id: migration.id, name: migration.name, kind: "effect", statements: [] }
-          )
-        return { pending } satisfies DryRunReport
-      })
+    const dryRun: MigratorService["dryRun"] = () => {
+      const defs = migrations()
+      return Effect.zipRight(
+        validateDefinitions(defs),
+        serializeJournal(
+          Effect.gen(function* () {
+            yield* ensureJournalUnlocked
+            const applied = yield* readApplied
+            const appliedIds = new Set(applied.map((entry) => entry.id))
+            const pending = defs
+              .filter((migration) => !appliedIds.has(migration.id))
+              .map(
+                (migration): DryRunStep =>
+                  isSqlStatement(migration.up)
+                    ? { id: migration.id, name: migration.name, kind: "sql", statements: [migration.up.sql] }
+                    : { id: migration.id, name: migration.name, kind: "effect", statements: [] }
+              )
+            return { pending } satisfies DryRunReport
+          })
+        )
+      )
+    }
 
     const apply: MigratorService["apply"] = (plan, options) => {
       const violations = guardOperations(plan.operations, policy, guardOptions(options))
@@ -656,7 +692,7 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
       }
       const applyLocked = (transactionalStep: boolean) =>
         Effect.gen(function* () {
-          yield* ensureJournal
+          yield* ensureJournalUnlocked
           const applied = yield* readApplied
           if (applied.some((entry) => entry.id === plan.id)) {
             return yield* Effect.fail(

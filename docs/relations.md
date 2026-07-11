@@ -145,6 +145,10 @@ batches, never directly on the number of parent rows:
 `query` uses at most 800 bound key values per batch: its batch size is
 `floor(800 / keyColumnCount)`, with a minimum of one key. Duplicate parent keys
 are queried once, and an edge with no matchable keys issues no target query.
+The minimum means a composite relation wider than 800 key columns exceeds the
+target in its single-key batch. The 800-value budget is conservative rather than
+dialect-aware and does not guarantee compliance with every backend's expression,
+packet, or parameter limits; boundary-test production-like relation shapes.
 Selecting several `join` edges still emits one statement, but SQL joins can
 multiply flat rows before Thor groups them. Prefer `query` for large fan-outs;
 measure both strategies with production-like cardinalities.

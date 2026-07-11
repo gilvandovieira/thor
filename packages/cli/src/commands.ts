@@ -279,7 +279,7 @@ const migrationRunOptions = (command: string, args: ReadonlyArray<string>) => {
 
 /** @param plan - Generated plan identity. @param sql - Compiled trusted DDL. @returns Migration source. */
 const generatedMigration = (plan: { readonly id: string; readonly name: string }, sql: string): string =>
-  `import { defineMigration } from "@gilvandovieira/thor/migrate"
+  `import { defineMigration, sqlStatement } from "@gilvandovieira/thor/migrate"
 
 export default defineMigration({
   id: ${JSON.stringify(plan.id)},
@@ -287,7 +287,7 @@ export default defineMigration({
   irreversible: true,
   safety: "additive",
   phase: "expand",
-  up: { _tag: "SqlStatement", sql: ${JSON.stringify(sql)} }
+  up: sqlStatement(${JSON.stringify(sql)})
 })
 `
 

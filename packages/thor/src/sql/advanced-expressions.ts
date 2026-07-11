@@ -84,6 +84,17 @@ const boundaryRank = (boundary: WindowFrameBoundaryNode): number => {
   }
 }
 
+/** @param start - Inclusive start. @param end - Inclusive end. @returns Nothing when the frame is SQL-valid. */
+const assertBoundaryOrder = (start: WindowFrameBoundaryNode, end: WindowFrameBoundaryNode): void => {
+  if (start._tag === "UnboundedFollowing") {
+    throw new RangeError("Window frame start cannot be UNBOUNDED FOLLOWING")
+  }
+  if (end._tag === "UnboundedPreceding") {
+    throw new RangeError("Window frame end cannot be UNBOUNDED PRECEDING")
+  }
+  if (boundaryRank(start) > boundaryRank(end)) throw new RangeError("Window frame end cannot precede its start")
+}
+
 /**
  * @param unit - Window frame unit.
  * @param start - Inclusive starting boundary.
@@ -99,7 +110,7 @@ const frameBetween = (
   if (!isValidBoundary(start) || !isValidBoundary(end)) {
     throw new TypeError("Window frame boundaries must be valid structured boundary values")
   }
-  if (boundaryRank(start) > boundaryRank(end)) throw new RangeError("Window frame end cannot precede its start")
+  assertBoundaryOrder(start, end)
   return { _tag: "WindowFrame", unit, start, end }
 }
 
@@ -144,7 +155,7 @@ export const windowable = <A>(node: FunctionCallNode, codec: Schema.Schema<A, an
       function: node,
       partitionBy: (spec.partitionBy ?? []).map(toExprNode),
       orderBy: spec.orderBy ?? [],
-      ...(spec.frame ? { frame: assertWindowFrame(spec.frame) } : {})
+      ...(spec.frame !== undefined ? { frame: assertWindowFrame(spec.frame) } : {})
     },
     codec,
     [SqlInputBrand]: true
@@ -186,9 +197,7 @@ const assertWindowFrame = (frame: WindowFrameNode | UnsafeSqlNode): WindowFrameN
     isValidBoundary(frame.start) &&
     isValidBoundary(frame.end)
   ) {
-    if (boundaryRank(frame.start) > boundaryRank(frame.end)) {
-      throw new RangeError("Window frame end cannot precede its start")
-    }
+    assertBoundaryOrder(frame.start, frame.end)
     return frame
   }
   throw new TypeError("Window frame must come from rowsBetween/rangeBetween/groupsBetween or be explicit unsafeSql")

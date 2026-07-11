@@ -19,6 +19,7 @@ import {
   type SelectionField,
   type SelectIR,
   queryCapabilityBits,
+  snapshotInlineValue,
   nextId
 } from "../ir/query-ir.js"
 import { capabilityBit, type Capability, bitsToCapabilities, noCapabilities } from "../capabilities/capability.js"
@@ -185,7 +186,12 @@ const inputValueNode = (table: string, column: AnyColumn, value: unknown): ExprN
   // semantics. Look-alike application data — e.g. JSON containing a `node` key
   // or `_tag: "Param"` — is always bound as an encoded parameter instead.
   if (isSqlInput(value)) return toValueNode(value, column)
-  return { _tag: "Param", name: `${table}.${column.def.name}`, codec: columnParamCodec(column), value }
+  return {
+    _tag: "Param",
+    name: `${table}.${column.def.name}`,
+    codec: columnParamCodec(column),
+    value: snapshotInlineValue(value)
+  }
 }
 
 /**

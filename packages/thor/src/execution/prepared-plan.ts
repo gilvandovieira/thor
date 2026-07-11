@@ -13,6 +13,7 @@ import type { Effect } from "effect"
 import {
   collectQueryParams,
   queryCapabilityBits,
+  snapshotQueryIR,
   type ParamNode,
   type QueryIR,
   type SelectionField
@@ -65,58 +66,6 @@ interface CachedGuard {
 }
 
 /**
- * Takes a stable, shallowly frozen snapshot of query IR for a prepared handle.
- * Builder-produced expression nodes are already immutable; arrays and statement
- * records are copied so later builder activity cannot alter the handle.
- *
- * @param ir - Builder query representation.
- * @returns Frozen query-shape snapshot.
- */
-const snapshotQuery = (ir: QueryIR): QueryIR => {
-  const annotations = Object.freeze({ ...ir.annotations, tableNames: Object.freeze([...ir.annotations.tableNames]) })
-  switch (ir._tag) {
-    case "Select":
-      return Object.freeze({
-        ...ir,
-        from: Object.freeze({ ...ir.from }),
-        selection: Object.freeze([...ir.selection]),
-        orderBy: Object.freeze([...ir.orderBy]),
-        annotations
-      })
-    case "Insert":
-      return Object.freeze({
-        ...ir,
-        into: Object.freeze({ ...ir.into }),
-        columns: Object.freeze([...ir.columns]),
-        rows: Object.freeze(ir.rows.map((row) => Object.freeze([...row]))),
-        ...(ir.returning ? { returning: Object.freeze([...ir.returning]) } : {}),
-        annotations
-      })
-    case "Update":
-      return Object.freeze({
-        ...ir,
-        table: Object.freeze({ ...ir.table }),
-        set: Object.freeze([...ir.set]),
-        ...(ir.returning ? { returning: Object.freeze([...ir.returning]) } : {}),
-        annotations
-      })
-    case "Delete":
-      return Object.freeze({
-        ...ir,
-        from: Object.freeze({ ...ir.from }),
-        ...(ir.returning ? { returning: Object.freeze([...ir.returning]) } : {}),
-        annotations
-      })
-    case "Call":
-      return Object.freeze({
-        ...ir,
-        args: Object.freeze([...ir.args]),
-        annotations
-      })
-  }
-}
-
-/**
  * Per-handle execution plan with compile and guard caches scoped by dialect.
  *
  * The constructor performs all dialect-independent work. Dialect-specific work
@@ -143,7 +92,8 @@ export class PreparedExecutionPlan {
    * @throws {GuardError} When the query captures inline parameter values.
    */
   constructor(ir: QueryIR, fields: ReadonlyArray<SelectionField>) {
-    const params = collectQueryParams(ir)
+    this.ir = normalizeQuery(snapshotQueryIR(ir))
+    const params = collectQueryParams(this.ir)
     const captured = params.find((parameter) => "value" in parameter)
     if (captured) {
       throw new GuardError({
@@ -152,14 +102,13 @@ export class PreparedExecutionPlan {
       })
     }
 
-    this.ir = normalizeQuery(snapshotQuery(ir))
-    this.fields = Object.freeze([...fields])
+    this.fields = Object.freeze(fields.map((field) => Object.freeze({ ...field })))
     this.decoder = rowDecoderFor(this.fields)
     this.structuralHash = queryStructuralHash(this.ir)
     this.capabilityBits = queryCapabilityBits(this.ir)
     this.params = Object.freeze(params.map((parameter) => parameter.name))
     this.structuralFailure = collectStructuralViolations(this.ir)[0] ?? null
-    this.parameterPlan = new ParameterPlan(collectQueryParams(this.ir))
+    this.parameterPlan = new ParameterPlan(params)
   }
 
   /**

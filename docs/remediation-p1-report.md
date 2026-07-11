@@ -66,23 +66,30 @@ memoization; final validation records the post-remediation result separately.
 - Root cause: the `prepared` cache was an observation registry, not a lifecycle;
   the driver contract had no release/clear seam.
 - Correction: optional `Driver.releasePrepared` and `Driver.clearPrepared`
-  lifecycle hooks; connection-scoped LRU admission in `prepareForExecution`;
+  lifecycle hooks; connection-scoped bounded admission in `prepareForExecution`;
   SQLite finalization through `finalize`/`Symbol.dispose` where exposed; mysql2
   `unprepare(sql)`; scoped SQLite/MySQL cleanup before connection release. Drivers
   without a safe public deallocate/recreate contract stop admitting new shapes at
-  the configured bound and execute them unprepared.
+  the configured bound and execute them unprepared. A later adversarial follow-up
+  added per-execution leases, so active entries are not eviction candidates, and
+  made MySQL omit release support when `unprepare` is absent.
 - Collision behavior: the connection registry compares both name and SQL. A
   name collision is executed unprepared and never reuses the wrong statement.
 - Tests: `query-cache.test.ts` proves actual resources remain at the configured
   bound and LRU eviction calls release; `sqlite.test.ts` proves finalization and
   collision safety; `mysql.test.ts` proves release/clear; `scoped-layers.test.ts`
-  proves cleanup precedes owned connection release. Per-driver WeakMap keys keep
-  registries independent across physical connections.
+  proves cleanup precedes owned connection release. `preparedScope` keys keep
+  registries independent across physical connections and stable across driver
+  recreation for the same client. `prepared-eviction-race.test.ts` and
+  `prepared-default-bound.test.ts` cover the later lease/no-unprepare fixes.
 - Documentation: query-cache guide, v1 spec §9.5, limitations.
 - Residual limitation: Node's supported `node:sqlite` `StatementSync` API does
   not expose an explicit finalizer, so the database close remains the ultimate
   release boundary there. Compatible runtimes that expose `finalize` or
   `Symbol.dispose` are finalized on eviction.
+- Later transient cleanup: unnamed and collision-fallback SQLite statements use a
+  `finally` path and finalize on success/failure when the runtime exposes a
+  finalizer (`sqlite-collision-leak.test.ts`).
 
 ## P1.3 — MySQL prepared execution
 

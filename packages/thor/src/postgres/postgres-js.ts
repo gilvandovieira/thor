@@ -77,9 +77,11 @@ export const makePostgresJsDriver = (client: PostgresJsClient): Driver => {
   return {
     runtime: PostgresJsDriverRuntime,
     preparedScope: client,
-    query: (sql, params, name) =>
+    query: (sql, params, name, maxRows) =>
       Effect.tryPromise({ try: () => call(client, sql, params, name !== undefined), catch: mapDriverError }).pipe(
-        Effect.map((rows) => Array.from(rows) as ReadonlyArray<RawRow>)
+        Effect.map((rows) => {
+          return (maxRows === undefined ? Array.from(rows) : rows.slice(0, maxRows)) as ReadonlyArray<RawRow>
+        })
       ),
     execute: (sql, params, name) =>
       Effect.tryPromise({ try: () => call(client, sql, params, name !== undefined), catch: mapDriverError }).pipe(
