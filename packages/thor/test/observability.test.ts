@@ -200,6 +200,33 @@ describe("Epic S observability", () => {
     expect(Exit.isSuccess(spanExits[0]!)).toBe(true)
   })
 
+  it("does not copy credentials, driver messages, binary data, emails, or large JSON into default events", async () => {
+    const secrets = {
+      url: "postgres://admin:password@db.internal/app?token=secret-token",
+      email: "private.person@example.com",
+      binary: new Uint8Array([115, 101, 99, 114, 101, 116]),
+      json: { token: "x".repeat(20_000) }
+    }
+    const events: ObservabilityEvent[] = []
+    const driver = new FakeDriver().enqueue({
+      error: new DriverError({ message: `connection failed: ${secrets.url}` })
+    })
+    await Effect.runPromiseExit(
+      Effect.provide(
+        db.select({ id: users.id }).from(users).where(eq(users.email, secrets.email)).all(),
+        withObservability(FakeDatabaseLayer(driver), { onEvent: (event) => events.push(event) })
+      )
+    )
+
+    const rendered = JSON.stringify(events)
+    expect(rendered).not.toContain(secrets.url)
+    expect(rendered).not.toContain(secrets.email)
+    expect(rendered).not.toContain("secret-token")
+    expect(rendered).not.toContain(JSON.stringify(secrets.binary))
+    expect(rendered).not.toContain(secrets.json.token)
+    expect(events[0]).toMatchObject({ errorTag: "DriverError" })
+  })
+
   it("creates thor query and transaction spans with propagated transaction scope", async () => {
     const events: ObservabilityEvent[] = []
     const spanNames: string[] = []

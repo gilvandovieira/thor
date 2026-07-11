@@ -41,9 +41,10 @@ import type { CompiledStatement } from "../execution/driver.js"
 import { compilableEffect } from "../execution/compiled-query.js"
 import { withMode, withQueryCache } from "../execution/plan.js"
 import { withObservability } from "../observability/index.js"
-import { type Expr, type ParamsOf, SqlInputBrand, columnRef, isColumn } from "./expressions.js"
+import { type Expr, type ParamsOf, SqlInputBrand, authenticateSqlInput, columnRef, isColumn } from "./expressions.js"
 import type { ExpressionInput } from "./advanced-expressions.js"
 import { internIdentifier } from "../ir/identifiers.js"
+import { sourceIdentity } from "../ir/source-identity.js"
 import { transaction } from "../execution/transaction.js"
 import {
   argsFrom,
@@ -216,11 +217,11 @@ export class QueryReference<A> {
         ? this.source.alias
         : (this.source.alias ?? this.source.name)
     const dataType = field?.expr._tag === "ColumnRef" ? field.expr.dataType : "text"
-    return {
-      node: { _tag: "ColumnRef", table, column: name, dataType },
+    return authenticateSqlInput({
+      node: { _tag: "ColumnRef", table, column: name, dataType, sourceId: this.source.sourceId },
       [SqlInputBrand]: true,
       ...(field ? { codec: field.codec as Schema.Schema<A[K], any> } : {})
-    }
+    })
   }
 }
 
@@ -253,7 +254,7 @@ const resolveSource = (
   }
   const meta = tableMeta(input)
   return {
-    source: { name: meta.name, ...(meta.alias ? { alias: meta.alias } : {}) },
+    source: { name: meta.name, ...(meta.alias ? { alias: meta.alias } : {}), sourceId: meta.sourceId },
     tableNames: [meta.name],
     ctes: [],
     capabilities: noCapabilities
@@ -693,7 +694,10 @@ class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = Select
    * @returns A relation reference exposing selected fields through `.field()`.
    */
   as(name: string): QueryReference<A> {
-    return new QueryReference<A>({ _tag: "SubquerySource", query: this.ir, alias: internIdentifier(name) }, this.fields)
+    return new QueryReference<A>(
+      { _tag: "SubquerySource", query: this.ir, alias: internIdentifier(name), sourceId: sourceIdentity() },
+      this.fields
+    )
   }
 
   /**
@@ -704,7 +708,11 @@ class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = Select
   cte(name: string, recursive = false): QueryReference<A> {
     const cteName = internIdentifier(name)
     const definition: CommonTableExpression = { name: cteName, query: this.ir, recursive }
-    return new QueryReference<A>({ _tag: "CteSource", name: cteName }, this.fields, definition)
+    return new QueryReference<A>(
+      { _tag: "CteSource", name: cteName, sourceId: sourceIdentity() },
+      this.fields,
+      definition
+    )
   }
 }
 

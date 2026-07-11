@@ -86,7 +86,7 @@ const harness = () => {
   ) =>
     Effect.runPromiseExit(
       Effect.provide(
-        Effect.flatMap(makeMigrator({ migrations, policy, reviewed }), (m) => m.up()),
+        Effect.flatMap(makeMigrator({ migrations, policy }), (m) => m.up({ reviewed })),
         layer
       )
     )
@@ -98,7 +98,7 @@ const harness = () => {
   ) =>
     Effect.runPromiseExit(
       Effect.provide(
-        Effect.flatMap(makeMigrator({ migrations, policy, reviewed }), (m) => m.down()),
+        Effect.flatMap(makeMigrator({ migrations, policy }), (m) => m.down({ reviewed })),
         layer
       )
     )

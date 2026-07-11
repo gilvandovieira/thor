@@ -42,7 +42,7 @@ describe.skipIf(!DATABASE_URL)("driver contract suite across drivers (e2e)", () 
     name: "postgres.js",
     dialect: PostgresDialect,
     reset: POSTGRES_RESET,
-    layer: PostgresJsLayer({ unsafe: (query, params) => sql.unsafe(query, params as never) }),
+    layer: PostgresJsLayer({ unsafe: (query, params) => sql.unsafe(query, params as never), CLOSE: sql.CLOSE }),
     setup: () => {},
     teardown: () => sql.end({ timeout: 5 })
   })

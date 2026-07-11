@@ -17,7 +17,7 @@ import { type AnyTable, isTable } from "@gilvandovieira/thor/schema"
 import { NodeSQLiteLayer } from "@gilvandovieira/thor/sqlite"
 import { PostgresLayer } from "@gilvandovieira/thor/postgres"
 import { MySQLLayer } from "@gilvandovieira/thor/mysql"
-import type { MigrationDefinition } from "@gilvandovieira/thor/migrate"
+import { type MigrationDefinition, sqlStatement } from "@gilvandovieira/thor/migrate"
 
 /** Supported CLI database dialects. */
 export type DatabaseDialect = "postgres" | "sqlite" | "mysql"
@@ -129,6 +129,33 @@ const isMigration = (value: unknown): value is MigrationDefinition =>
   "up" in value
 
 /**
+ * Re-authenticate SQL authored in a tsx module loaded under a separate module identity.
+ *
+ * @param migration - Migration loaded from the configured source module.
+ * @returns A migration whose SQL steps belong to this package identity.
+ */
+const localizeMigration = (migration: MigrationDefinition): MigrationDefinition => {
+  const localize = (step: unknown) => {
+    if (
+      typeof step === "object" &&
+      step !== null &&
+      Object.hasOwn(step, "_tag") &&
+      Object.hasOwn(step, "sql") &&
+      (step as { _tag?: unknown })._tag === "SqlStatement" &&
+      typeof (step as { sql?: unknown }).sql === "string"
+    ) {
+      return sqlStatement((step as { sql: string }).sql)
+    }
+    return step
+  }
+  return {
+    ...migration,
+    up: localize(migration.up),
+    ...(migration.down ? { down: localize(migration.down) } : {})
+  } as MigrationDefinition
+}
+
+/**
  * Loads migration modules in deterministic filename order.
  *
  * @param cwd - Project root.
@@ -152,7 +179,7 @@ export const loadMigrations = async (
   for (const file of files) {
     const module = await tsImport(resolve(directory, file), import.meta.url)
     if (!isMigration(module.default)) throw new Error(`Migration ${file} must default-export defineMigration(...)`)
-    migrations.push(module.default)
+    migrations.push(localizeMigration(module.default))
   }
   return migrations
 }

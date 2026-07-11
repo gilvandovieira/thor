@@ -54,12 +54,14 @@ export interface Driver {
    * @param sql - Dialect-compiled SQL text.
    * @param params - Positional values in placeholder order.
    * @param preparedName - Optional stable identity for prepared-statement reuse.
+   * @param maxRows - Optional upper bound for a cardinality probe.
    * @returns An Effect yielding raw, undecoded rows.
    */
   readonly query: (
     sql: string,
     params: ReadonlyArray<unknown>,
-    preparedName?: string
+    preparedName?: string,
+    maxRows?: number
   ) => Effect.Effect<ReadonlyArray<RawRow>, DriverError | ConstraintError>
 
   /**

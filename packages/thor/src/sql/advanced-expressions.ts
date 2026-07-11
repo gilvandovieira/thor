@@ -17,7 +17,15 @@ import type {
   WindowFrameBoundaryNode,
   WindowFrameNode
 } from "../ir/query-ir.js"
-import { type ColumnValue, type Expr, SqlInputBrand, isColumn, toExprNode } from "./expressions.js"
+import { isUnsafeSqlNode } from "../ir/unsafe-sql.js"
+import {
+  type ColumnValue,
+  type Expr,
+  SqlInputBrand,
+  authenticateSqlInput,
+  isColumn,
+  toExprNode
+} from "./expressions.js"
 
 /** Structural select shape accepted by subquery helpers. */
 export interface SelectExpressionSource {
@@ -83,6 +91,17 @@ const boundaryRank = (boundary: WindowFrameBoundaryNode): number => {
   }
 }
 
+/** @param start - Inclusive start. @param end - Inclusive end. @returns Nothing when the frame is SQL-valid. */
+const assertBoundaryOrder = (start: WindowFrameBoundaryNode, end: WindowFrameBoundaryNode): void => {
+  if (start._tag === "UnboundedFollowing") {
+    throw new RangeError("Window frame start cannot be UNBOUNDED FOLLOWING")
+  }
+  if (end._tag === "UnboundedPreceding") {
+    throw new RangeError("Window frame end cannot be UNBOUNDED PRECEDING")
+  }
+  if (boundaryRank(start) > boundaryRank(end)) throw new RangeError("Window frame end cannot precede its start")
+}
+
 /**
  * @param unit - Window frame unit.
  * @param start - Inclusive starting boundary.
@@ -95,7 +114,10 @@ const frameBetween = (
   start: WindowFrameBoundaryNode,
   end: WindowFrameBoundaryNode
 ): WindowFrameNode => {
-  if (boundaryRank(start) > boundaryRank(end)) throw new RangeError("Window frame end cannot precede its start")
+  if (!isValidBoundary(start) || !isValidBoundary(end)) {
+    throw new TypeError("Window frame boundaries must be valid structured boundary values")
+  }
+  assertBoundaryOrder(start, end)
   return { _tag: "WindowFrame", unit, start, end }
 }
 
@@ -130,22 +152,24 @@ export interface WindowableExpr<A> extends Expr<A> {
  * @param codec - Selected-value decoder.
  * @returns Typed function expression with window support.
  */
-export const windowable = <A>(node: FunctionCallNode, codec: Schema.Schema<A, any>): WindowableExpr<A> => ({
-  node,
-  codec,
-  [SqlInputBrand]: true,
-  over: (spec = {}) => ({
-    node: {
-      _tag: "WindowFunction",
-      function: node,
-      partitionBy: (spec.partitionBy ?? []).map(toExprNode),
-      orderBy: spec.orderBy ?? [],
-      ...(spec.frame ? { frame: assertWindowFrame(spec.frame) } : {})
-    },
+export const windowable = <A>(node: FunctionCallNode, codec: Schema.Schema<A, any>): WindowableExpr<A> =>
+  authenticateSqlInput({
+    node,
     codec,
-    [SqlInputBrand]: true
+    [SqlInputBrand]: true,
+    over: (spec = {}) =>
+      authenticateSqlInput({
+        node: {
+          _tag: "WindowFunction",
+          function: node,
+          partitionBy: (spec.partitionBy ?? []).map(toExprNode),
+          orderBy: spec.orderBy ?? [],
+          ...(spec.frame !== undefined ? { frame: assertWindowFrame(spec.frame) } : {})
+        },
+        codec,
+        [SqlInputBrand]: true
+      })
   })
-})
 
 const FRAME_UNITS: ReadonlySet<string> = new Set(["rows", "range", "groups"])
 
@@ -174,7 +198,7 @@ const isValidBoundary = (boundary: WindowFrameBoundaryNode): boolean => {
  * @throws {TypeError} When the frame is not a valid structured or unsafe node.
  */
 const assertWindowFrame = (frame: WindowFrameNode | UnsafeSqlNode): WindowFrameNode | UnsafeSqlNode => {
-  if (frame && frame._tag === "UnsafeSql" && typeof frame.sql === "string") return frame
+  if (isUnsafeSqlNode(frame)) return frame
   if (
     frame &&
     frame._tag === "WindowFrame" &&
@@ -182,6 +206,7 @@ const assertWindowFrame = (frame: WindowFrameNode | UnsafeSqlNode): WindowFrameN
     isValidBoundary(frame.start) &&
     isValidBoundary(frame.end)
   ) {
+    assertBoundaryOrder(frame.start, frame.end)
     return frame
   }
   throw new TypeError("Window frame must come from rowsBetween/rangeBetween/groupsBetween or be explicit unsafeSql")
@@ -308,10 +333,11 @@ export const denseRank = (): WindowableExpr<number> =>
  * @param query - Query expected to return one selected value.
  * @returns A scalar-subquery expression.
  */
-export const scalar = <A = unknown>(query: SelectExpressionSource): Expr<A> => ({
-  node: { _tag: "ScalarSubquery", query: query.ir },
-  [SqlInputBrand]: true
-})
+export const scalar = <A = unknown>(query: SelectExpressionSource): Expr<A> =>
+  authenticateSqlInput({
+    node: { _tag: "ScalarSubquery", query: query.ir },
+    [SqlInputBrand]: true
+  })
 
 /**
  * @param query - Query tested for at least one row.
@@ -366,7 +392,8 @@ export const notInSubquery = <T extends AnyColumn>(value: T | Expr<ColumnValue<T
  * @param column - Inserted column to reference.
  * @returns Dialect-rendered excluded/candidate-row expression.
  */
-export const excluded = <T extends AnyColumn>(column: T): Expr<ColumnValue<T>> => ({
-  node: { _tag: "ExcludedRef", column: column.def.name },
-  [SqlInputBrand]: true
-})
+export const excluded = <T extends AnyColumn>(column: T): Expr<ColumnValue<T>> =>
+  authenticateSqlInput({
+    node: { _tag: "ExcludedRef", column: column.def.name },
+    [SqlInputBrand]: true
+  })

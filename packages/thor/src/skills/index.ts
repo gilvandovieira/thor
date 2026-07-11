@@ -433,6 +433,7 @@ export const SKILLS: ReadonlyArray<Skill> = [
         "Destructive migrations require a reviewed policy; production blocks them by default.",
         "Parameter logging defaults to none/redacted; `unsafe-full` is explicit.",
         "Routine names are never interpolated.",
+        "Inline mutable containers are snapshotted; mutable opaque class values use named execution parameters.",
         "Custom window frames, SQL defaults, generated/check expressions, and routine DDL syntax require `unsafeSql(...)`."
       ],
       safe: [

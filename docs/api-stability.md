@@ -33,7 +33,7 @@ helpers, and the shipped CLI commands:
   methods `all`/`one`/`maybeOne`/`run`
 - Compiled query: `CompiledQuery`, `CompileOptions`, and `execute`/`compile`/`compilePrepared`
 - Caching: `withQueryCache`
-- Migrations: `defineMigration`, `MigrationDefinition`, `Migrator`, `MigratorService`, `MigrationPlan`
+- Migrations: `defineMigration`, `MigrationDefinition`, `Migrator`, `MigratorService`, `MigrationRunOptions`, `MigrationPlan`
 - Errors: `ThorError` (and every tag — see [errors](errors.md))
 - Capabilities: `Capability`, `ALL_CAPABILITIES`
 - Dialect/driver: `Dialect`, `Driver`

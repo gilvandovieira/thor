@@ -178,6 +178,11 @@ describe("Epic J advanced query features", () => {
     expect(() => rowNumber().over({ frame: forgedBoundary as never })).toThrow(TypeError)
     const plainString = "ROWS CURRENT ROW"
     expect(() => rowNumber().over({ frame: plainString as never })).toThrow(TypeError)
+    const forgedUnsafe = { _tag: "UnsafeSql", sql: "ROWS CURRENT ROW) OR (1=1" }
+    expect(() => rowNumber().over({ frame: forgedUnsafe as never })).toThrow(TypeError)
+    const reversed = { _tag: "WindowFrame", unit: "rows", start: currentRow, end: preceding(1) }
+    expect(() => rowNumber().over({ frame: reversed as never })).toThrow(RangeError)
+    expect(() => rowsBetween({ _tag: "Preceding", offset: -1 } as never, currentRow)).toThrow(TypeError)
   })
 
   it("compiles CTEs, recursive CTEs, and set operations", () => {

@@ -108,6 +108,30 @@ const finishAfterFailure = <A, E>(
   })
 
 /**
+ * Preserves a nested body failure while attempting both rollback-to and release
+ * cleanup. `zipRight` is insufficient here because a rollback-to failure would
+ * skip `RELEASE SAVEPOINT`, retaining backend state until the outer rollback.
+ *
+ * @param bodyCause - Original nested-body failure.
+ * @param rollback - Rollback-to-savepoint cleanup.
+ * @param release - Savepoint release cleanup.
+ * @returns The sequential composition of every failure after both cleanups run.
+ */
+const finishSavepointAfterFailure = <A, E>(
+  bodyCause: Cause.Cause<E>,
+  rollback: Effect.Effect<void, TransactionError>,
+  release: Effect.Effect<void, TransactionError>
+): Effect.Effect<A, E | TransactionError> =>
+  Effect.gen(function* () {
+    let cause: Cause.Cause<E | TransactionError> = bodyCause
+    const rollbackExit = yield* Effect.exit(rollback)
+    if (Exit.isFailure(rollbackExit)) cause = Cause.sequential(cause, rollbackExit.cause)
+    const releaseExit = yield* Effect.exit(release)
+    if (Exit.isFailure(releaseExit)) cause = Cause.sequential(cause, releaseExit.cause)
+    return yield* Effect.failCause(cause)
+  })
+
+/**
  * Runs an Effect against a specific database service inside a transaction.
  * Nested calls use savepoints and the same driver connection.
  *
@@ -170,11 +194,10 @@ export const runTransaction = <A, E, R>(
             yield* lifecycle(nestedDatabase, `release savepoint ${name}`, "savepoint release")
             return bodyExit.value
           }
-          return yield* finishAfterFailure<A, E>(
+          return yield* finishSavepointAfterFailure<A, E>(
             bodyExit.cause,
-            lifecycle(nestedDatabase, `rollback to savepoint ${name}`, "savepoint rollback").pipe(
-              Effect.zipRight(lifecycle(nestedDatabase, `release savepoint ${name}`, "savepoint release"))
-            )
+            lifecycle(nestedDatabase, `rollback to savepoint ${name}`, "savepoint rollback"),
+            lifecycle(nestedDatabase, `release savepoint ${name}`, "savepoint release")
           )
         }
 

@@ -36,6 +36,14 @@ pre-migration structural drift report. Drift blocks an otherwise up-to-date run;
 when migrations are pending it is reported as advisory because the intended
 pending DDL normally explains the difference.
 
+Migration `SqlStatement` values must come from `sql` or `sqlStatement`; a plain
+object with the same `_tag` is not accepted at runtime. Statements are frozen and
+authenticated by a versioned same-realm weak registry, so compatible physical
+Thor copies recognize genuine constructor-produced statements. The CLI still
+validates the loaded tag/string payload and reconstructs it defensively. The
+threat boundary is untrusted data, not arbitrary same-realm code; cross-realm or
+incompatible-protocol values must be reconstructed.
+
 `generate`, `diff`, and `plan` currently compare table presence and produce
 create-table operations only. They do not infer column changes, renames,
 standalone index/constraint changes, or reverse operations. Author reviewed
@@ -77,8 +85,13 @@ A policy gates what a run may do. Pass it in `MigratorConfig.policy`:
 `apply` is guarded too, so a hand-built destructive plan cannot bypass policy:
 
 ```ts
-MigratorLive({ policy: "allow-reviewed-destructive", reviewed: true })
+const migrator = yield* makeMigrator({ policy: "allow-reviewed-destructive" })
+yield* migrator.apply(plan, { reviewed: true })
 ```
+
+Review approval belongs to one invocation, not project configuration. The CLI
+equivalent is `thor up --reviewed`, `thor down --reviewed`, or
+`thor redo --reviewed`.
 
 Operation plans are structurally classified. Manual SQL and Effect migrations
 are opaque, so policy relies on their explicit `safety` and `phase` metadata;
@@ -113,8 +126,9 @@ rolling an additive change back is often destructive (Finding 3).
 - `safety: "destructive"` — blocked under `safe-only`/`expand-only`; runs only
   under `allow-reviewed-destructive` with `reviewed: true`.
 - **omitted `safety`** — treated as *unchecked*: blocked under
-  `safe-only`/`expand-only` unless the run is reviewed. Thor cannot prove opaque
-  SQL is additive, so it is **never silently treated as safe** (Finding 2).
+  `safe-only`/`expand-only`; it requires `allow-reviewed-destructive` and an
+  explicitly reviewed invocation. Thor cannot prove opaque SQL is additive, so
+  it is **never silently treated as safe** (Finding 2).
 - `phase: "contract"` — blocked under `expand-only`.
 - `disabled` / `validate-only` — no manual migration runs at all.
 
@@ -216,3 +230,13 @@ The migrator wraps each step in a transaction on dialects with transactional DDL
 (PostgreSQL, SQLite) and applies without one where the backend does not support
 it (MySQL), where a failed step can leave earlier DDL in place. This is driven by
 the dialect's `transactionalDdl` capability, not a per-migration flag.
+
+`redo` holds one named lock on MySQL but cannot make DDL atomic. If `down`
+succeeds and reapply fails, the old journal row is gone; any DDL completed by the
+new `up` remains. Inspect schema and `_thor_migrations` before retrying. Recovery
+is an idempotent `up` when the migration uses convergent DDL such as
+`CREATE ... IF NOT EXISTS`; otherwise author a reviewed repair migration or
+manually restore the exact precondition, then rerun. Never insert a journal row
+by hand without verifying the current checksum and full schema state. The live
+failure-point test records the schema-present/journal-missing state and its
+idempotent recovery.

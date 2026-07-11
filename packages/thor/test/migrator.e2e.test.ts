@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { Effect, Exit, Layer } from "effect"
 import pg from "pg"
-import { type Database, db, eq, param, pg as t } from "@gilvandovieira/thor"
+import { type Database, MigrationError, db, eq, param, pg as t } from "@gilvandovieira/thor"
 import { PostgresLayer } from "@gilvandovieira/thor/postgres"
 import {
   Migrator,
@@ -76,8 +76,7 @@ describe.skipIf(!DATABASE_URL)("live migrator e2e (spec §13)", () => {
   const config = {
     migrations: [m1, m2, m3],
     schema: [users, posts],
-    policy: "allow-reviewed-destructive" as const,
-    reviewed: true
+    policy: "allow-reviewed-destructive" as const
   }
 
   const mig = <A, E>(f: (m: MigratorService) => Effect.Effect<A, E>) => Effect.flatMap(Migrator, f)
@@ -128,8 +127,8 @@ describe.skipIf(!DATABASE_URL)("live migrator e2e (spec §13)", () => {
 
   it("down() rolls back the last migration and un-journals it", async () => {
     await run(mig((m) => m.up()))
-    await run(mig((m) => m.down())) // rolls back m3 (no-op)
-    await run(mig((m) => m.down())) // rolls back m2 (drop created_at)
+    await run(mig((m) => m.down({ reviewed: true }))) // rolls back m3 (no-op)
+    await run(mig((m) => m.down({ reviewed: true }))) // rolls back m2 (drop created_at)
 
     const cols = await q("select column_name from information_schema.columns where table_name = 'users'")
     expect(cols.map((c) => c.column_name)).not.toContain("created_at")
@@ -142,6 +141,7 @@ describe.skipIf(!DATABASE_URL)("live migrator e2e (spec §13)", () => {
     const bad = defineMigration({
       id: "0001_bad",
       name: "bad",
+      safety: "additive",
       up: sql`create table ok (id int); create table ok (id int);` // duplicate -> fails
     })
     const badApp = Layer.provideMerge(MigratorLive({ migrations: [bad] }), PostgresLayer(client))
@@ -163,6 +163,42 @@ describe.skipIf(!DATABASE_URL)("live migrator e2e (spec §13)", () => {
       expect(rows).toEqual([])
     }
     expect(tables.map((t2) => t2.table_name)).not.toContain("ok")
+  })
+
+  it("keeps PostgreSQL schema and journal atomic when redo reapply fails", async () => {
+    let applications = 0
+    const unstable = defineMigration({
+      id: "0001_redo_probe",
+      name: "redo_probe",
+      revision: "1",
+      safety: "additive",
+      phase: "expand",
+      downSafety: "destructive",
+      downPhase: "contract",
+      up: Effect.suspend(() => {
+        applications++
+        return applications === 1
+          ? rawSql`create table redo_probe (id integer primary key)`
+          : Effect.fail(new MigrationError({ message: "reapply failed", migrationId: "0001_redo_probe" }))
+      }),
+      down: rawSql`drop table redo_probe`
+    })
+    const redoApp = Layer.provideMerge(
+      MigratorLive({ migrations: [unstable], policy: "allow-reviewed-destructive" }),
+      PostgresLayer(client)
+    )
+    const operation = Effect.flatMap(Migrator, (migrator) => migrator.up())
+    await Effect.runPromise(Effect.provide(operation, redoApp))
+
+    const exit = await Effect.runPromiseExit(
+      Effect.provide(
+        Effect.flatMap(Migrator, (migrator) => migrator.redo({ reviewed: true })),
+        redoApp
+      )
+    )
+    expect(Exit.isFailure(exit)).toBe(true)
+    expect(await q("select to_regclass('public.redo_probe') as name")).toEqual([{ name: "redo_probe" }])
+    expect((await q("select id from _thor_migrations order by id")).map((row) => row.id)).toEqual(["0001_redo_probe"])
   })
 
   it("check() fails hard on a journal checksum mismatch (spec §13.9)", async () => {

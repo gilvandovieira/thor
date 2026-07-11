@@ -40,6 +40,8 @@ export interface ColumnRefNode {
   readonly table: string
   readonly column: string
   readonly dataType: SqlDataType
+  /** Opaque lexical source identity; names alone cannot distinguish shadowing. */
+  readonly sourceId: object
 }
 
 /** Named or inline-bound parameter carried through compilation. */
@@ -206,6 +208,8 @@ export type ExprNode =
 export interface TableSource {
   readonly name: string
   readonly alias?: string
+  /** Opaque lexical source identity shared with its column references. */
+  readonly sourceId: object
 }
 
 /** Derived table backed by a complete select query. */
@@ -213,6 +217,7 @@ export interface SubquerySource {
   readonly _tag: "SubquerySource"
   readonly query: SelectIR
   readonly alias: string
+  readonly sourceId: object
 }
 
 /** Reference to a named common-table expression. */
@@ -220,6 +225,7 @@ export interface CteSource {
   readonly _tag: "CteSource"
   readonly name: string
   readonly alias?: string
+  readonly sourceId: object
 }
 
 /** Declared table-valued function used as a relation source. */
@@ -233,6 +239,7 @@ export interface TableFunctionSource {
   readonly alias: string
   readonly columns: ReadonlyArray<string>
   readonly capabilities: CapabilityBits
+  readonly sourceId: object
 }
 
 /** Any relation allowed in a `FROM` or `JOIN` clause. */
@@ -359,6 +366,304 @@ export interface CallIR extends BaseIR {
 
 /** @internal Low-level query IR is inspectable but not a v1 compatibility surface. */
 export type QueryIR = SelectIR | InsertIR | UpdateIR | DeleteIR | CallIR
+
+// --- snapshots ---------------------------------------------------------------
+
+/**
+ * Snapshots ordinary mutable application data captured by an inline parameter.
+ * Arrays, records, dates, binary views, maps, and sets are copied recursively.
+ * Mutable opaque class instances are rejected: retaining them would make a
+ * reusable query observe later mutation, while cloning them can violate private
+ * fields and constructor invariants. Frozen opaque values are retained as an
+ * explicit immutable domain-value boundary.
+ *
+ * @param value - Inline application value.
+ * @returns A frozen copy when the value has well-defined copy semantics.
+ * @internal
+ */
+export const snapshotInlineValue = (value: unknown): unknown => {
+  const seen = new WeakMap<object, unknown>()
+  const visit = (current: unknown): unknown => {
+    if (typeof current !== "object" || current === null) return current
+    const cached = seen.get(current)
+    if (cached !== undefined) return cached
+    if (current instanceof Date) {
+      const copy = new Date(current.getTime())
+      seen.set(current, copy)
+      return Object.freeze(copy)
+    }
+    if (current instanceof ArrayBuffer) {
+      const copy = current.slice(0)
+      seen.set(current, copy)
+      return copy
+    }
+    if (ArrayBuffer.isView(current)) {
+      const copy =
+        current instanceof DataView
+          ? new DataView(current.buffer.slice(current.byteOffset, current.byteOffset + current.byteLength))
+          : (current.constructor as unknown as { from: (value: ArrayLike<unknown>) => ArrayBufferView }).from(
+              current as unknown as ArrayLike<unknown>
+            )
+      seen.set(current, copy)
+      return copy
+    }
+    if (current instanceof Map) {
+      const copy = new Map<unknown, unknown>()
+      seen.set(current, copy)
+      for (const [key, item] of current) copy.set(visit(key), visit(item))
+      return copy
+    }
+    if (current instanceof Set) {
+      const copy = new Set<unknown>()
+      seen.set(current, copy)
+      for (const item of current) copy.add(visit(item))
+      return copy
+    }
+    if (Array.isArray(current)) {
+      const copy: unknown[] = []
+      seen.set(current, copy)
+      for (const item of current) copy.push(visit(item))
+      return Object.freeze(copy)
+    }
+    const prototype = Object.getPrototypeOf(current)
+    if (prototype !== Object.prototype && prototype !== null) {
+      if (Object.isFrozen(current)) return current
+      throw new TypeError(
+        `Mutable inline ${current.constructor?.name ?? "object"} values are unsupported; use an immutable value or a named parameter`
+      )
+    }
+    const copy = Object.create(prototype) as Record<PropertyKey, unknown>
+    seen.set(current, copy)
+    for (const key of Reflect.ownKeys(current)) {
+      const descriptor = Object.getOwnPropertyDescriptor(current, key)
+      if (!descriptor) continue
+      Object.defineProperty(copy, key, {
+        configurable: false,
+        enumerable: descriptor.enumerable ?? false,
+        writable: false,
+        value: visit("value" in descriptor ? descriptor.value : Reflect.get(current, key))
+      })
+    }
+    return Object.freeze(copy)
+  }
+  return visit(value)
+}
+
+/**
+ * Creates an owned, deeply frozen query graph. Every IR record and collection is
+ * copied, including parameter nodes and nested queries. Schema codecs remain
+ * shared by identity: they are executable descriptors, not mutable query data.
+ *
+ * @param ir - Query graph owned by a builder or caller.
+ * @returns A deeply frozen graph safe to retain in a terminal handle.
+ * @internal
+ */
+export const snapshotQueryIR = (ir: QueryIR): QueryIR => {
+  const queries = new WeakMap<QueryIR, QueryIR>()
+  const parameters = new WeakMap<ParamNode, ParamNode>()
+
+  const expression = (node: ExprNode): ExprNode => {
+    switch (node._tag) {
+      case "ColumnRef":
+      case "Literal":
+      case "ExcludedRef":
+        return Object.freeze({ ...node })
+      case "Param": {
+        const cached = parameters.get(node)
+        if (cached) return cached
+        const copy = Object.freeze({
+          ...node,
+          ...(Object.hasOwn(node, "value") ? { value: snapshotInlineValue(node.value) } : {})
+        })
+        parameters.set(node, copy)
+        return copy
+      }
+      case "Comparison":
+        return Object.freeze({ ...node, left: expression(node.left), right: expression(node.right) })
+      case "InList":
+        return Object.freeze({
+          ...node,
+          expr: expression(node.expr),
+          values: Object.freeze(node.values.map(expression))
+        })
+      case "Logical":
+        return Object.freeze({ ...node, operands: Object.freeze(node.operands.map(expression)) })
+      case "Not":
+      case "IsNull":
+        return Object.freeze({ ...node, expr: expression(node.expr) })
+      case "RawExpr":
+        return Object.freeze({
+          ...node,
+          strings: Object.freeze([...node.strings]),
+          values: Object.freeze(
+            node.values.map((value) =>
+              value._tag === "Param" ? (expression(value) as ParamNode) : Object.freeze({ ...value })
+            )
+          )
+        })
+      case "ScalarSubquery":
+      case "Exists":
+        return Object.freeze({ ...node, query: query(node.query) as SelectIR })
+      case "InSubquery":
+        return Object.freeze({ ...node, expr: expression(node.expr), query: query(node.query) as SelectIR })
+      case "FunctionCall":
+        return Object.freeze({ ...node, args: Object.freeze(node.args.map(expression)) })
+      case "WindowFunction":
+        return Object.freeze({
+          ...node,
+          function: expression(node.function) as FunctionCallNode,
+          partitionBy: Object.freeze(node.partitionBy.map(expression)),
+          orderBy: Object.freeze(node.orderBy.map((term) => Object.freeze({ ...term, expr: expression(term.expr) }))),
+          ...(node.frame
+            ? {
+                frame:
+                  node.frame._tag === "UnsafeSql"
+                    ? Object.freeze({ ...node.frame })
+                    : Object.freeze({
+                        ...node.frame,
+                        start: Object.freeze({ ...node.frame.start }),
+                        end: Object.freeze({ ...node.frame.end })
+                      })
+              }
+            : {})
+        })
+    }
+  }
+
+  const source = (value: QuerySource): QuerySource => {
+    if (!("_tag" in value)) return Object.freeze({ ...value })
+    switch (value._tag) {
+      case "SubquerySource":
+        return Object.freeze({ ...value, query: query(value.query) as SelectIR })
+      case "CteSource":
+        return Object.freeze({ ...value })
+      case "TableFunctionSource":
+        return Object.freeze({
+          ...value,
+          args: Object.freeze(value.args.map(expression)),
+          argTypes: Object.freeze([...value.argTypes]),
+          columns: Object.freeze([...value.columns])
+        })
+    }
+  }
+  const selection = (fields: ReadonlyArray<SelectionField>): ReadonlyArray<SelectionField> =>
+    Object.freeze(fields.map((field) => Object.freeze({ ...field, expr: expression(field.expr) })))
+  const annotations = (value: QueryAnnotations): QueryAnnotations =>
+    Object.freeze({
+      ...value,
+      tableNames: Object.freeze([...value.tableNames]),
+      ...(value.tracing
+        ? {
+            tracing: Object.freeze({
+              ...value.tracing,
+              attributes: Object.freeze({ ...value.tracing.attributes })
+            })
+          }
+        : {})
+    })
+  const assignments = (values: ReadonlyArray<AssignmentTerm>): ReadonlyArray<AssignmentTerm> =>
+    Object.freeze(values.map((item) => Object.freeze({ ...item, value: expression(item.value) })))
+
+  const query = (value: QueryIR): QueryIR => {
+    const cached = queries.get(value)
+    if (cached) return cached
+    let copy: QueryIR
+    switch (value._tag) {
+      case "Select":
+        copy = Object.freeze({
+          ...value,
+          annotations: annotations(value.annotations),
+          from: source(value.from),
+          selection: selection(value.selection),
+          ...(value.ctes
+            ? {
+                ctes: Object.freeze(
+                  value.ctes.map((cte) => Object.freeze({ ...cte, query: query(cte.query) as SelectIR }))
+                )
+              }
+            : {}),
+          ...(value.joins
+            ? {
+                joins: Object.freeze(
+                  value.joins.map((join) =>
+                    Object.freeze({
+                      ...join,
+                      source: source(join.source),
+                      ...(join.on ? { on: expression(join.on) } : {})
+                    })
+                  )
+                )
+              }
+            : {}),
+          ...(value.where ? { where: expression(value.where) } : {}),
+          ...(value.groupBy ? { groupBy: Object.freeze(value.groupBy.map(expression)) } : {}),
+          ...(value.having ? { having: expression(value.having) } : {}),
+          ...(value.setOperations
+            ? {
+                setOperations: Object.freeze(
+                  value.setOperations.map((operation) =>
+                    Object.freeze({ ...operation, query: query(operation.query) as SelectIR })
+                  )
+                )
+              }
+            : {}),
+          orderBy: Object.freeze(value.orderBy.map((term) => Object.freeze({ ...term, expr: expression(term.expr) })))
+        })
+        break
+      case "Insert":
+        copy = Object.freeze({
+          ...value,
+          annotations: annotations(value.annotations),
+          into: Object.freeze({ ...value.into }),
+          columns: Object.freeze([...value.columns]),
+          rows: Object.freeze(value.rows.map((row) => Object.freeze(row.map(expression)))),
+          ...(value.conflict
+            ? {
+                conflict: Object.freeze({
+                  ...value.conflict,
+                  ...(value.conflict.kind === "onConflict"
+                    ? { target: Object.freeze([...value.conflict.target]) }
+                    : {}),
+                  set: assignments(value.conflict.set)
+                })
+              }
+            : {}),
+          ...(value.returning ? { returning: selection(value.returning) } : {})
+        })
+        break
+      case "Update":
+        copy = Object.freeze({
+          ...value,
+          annotations: annotations(value.annotations),
+          table: Object.freeze({ ...value.table }),
+          set: assignments(value.set),
+          ...(value.where ? { where: expression(value.where) } : {}),
+          ...(value.returning ? { returning: selection(value.returning) } : {})
+        })
+        break
+      case "Delete":
+        copy = Object.freeze({
+          ...value,
+          annotations: annotations(value.annotations),
+          from: Object.freeze({ ...value.from }),
+          ...(value.where ? { where: expression(value.where) } : {}),
+          ...(value.returning ? { returning: selection(value.returning) } : {})
+        })
+        break
+      case "Call":
+        copy = Object.freeze({
+          ...value,
+          annotations: annotations(value.annotations),
+          args: Object.freeze(value.args.map(expression))
+        })
+        break
+    }
+    queries.set(value, copy)
+    return copy
+  }
+
+  return query(ir)
+}
 
 // --- ids --------------------------------------------------------------------
 

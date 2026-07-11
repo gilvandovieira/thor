@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { Effect, Exit, Schema } from "effect"
 import { CapabilityError, and, db, eq, ilike, param, pg, sql, unsafeSql } from "@gilvandovieira/thor"
 import { compileOperation, makeMigrator, tableToCreateOp, type MigrationPlan } from "@gilvandovieira/thor/migrate"
-import { PostgresDialect } from "@gilvandovieira/thor/postgres"
+import { PostgresDialect, makePostgresJsDriver } from "@gilvandovieira/thor/postgres"
 import { SQLiteDialect } from "@gilvandovieira/thor/sqlite"
 import { MySQLDialect } from "@gilvandovieira/thor/mysql"
 import { FakeDatabaseLayer, FakeDriver, expectSql } from "@gilvandovieira/thor/testing"
@@ -14,6 +14,42 @@ const users = pg.table("users", {
 })
 
 describe("query dialect independence", () => {
+  it("scopes postgres.js prepared admission to the physical client", () => {
+    const pending = Object.assign(Promise.resolve(Object.assign([], { count: 0 })), {
+      simple: () => Promise.resolve(Object.assign([], { count: 0 }))
+    })
+    const client = { unsafe: () => pending }
+
+    expect(makePostgresJsDriver(client).preparedScope).toBe(client)
+  })
+
+  it("uses a postgres.js cursor for bounded row probes and rejects clients without it", async () => {
+    const close = Symbol("close")
+    let requested = 0
+    let consumed = 0
+    const result = Object.assign([], { count: 0 })
+    const pending = Object.assign(Promise.resolve(result), {
+      simple: () => Promise.resolve(result),
+      cursor: async (size: number, callback: (rows: ReadonlyArray<Record<string, unknown>>) => unknown) => {
+        requested = size
+        const rows = Array.from({ length: size }, (_, id) => ({ id }))
+        consumed += rows.length
+        expect(callback(rows)).toBe(close)
+      }
+    })
+    const bounded = makePostgresJsDriver({ unsafe: () => pending, CLOSE: close })
+    const rows = await Effect.runPromise(bounded.query("insert returning id", [], "bounded", 2))
+    expect(rows).toHaveLength(2)
+    expect({ requested, consumed }).toEqual({ requested: 2, consumed: 2 })
+
+    const unsupported = makePostgresJsDriver({
+      unsafe: () => Object.assign(Promise.resolve(result), { simple: () => Promise.resolve(result) })
+    })
+    const exit = await Effect.runPromiseExit(unsupported.query("insert returning id", [], "bounded", 2))
+    expect(Exit.isFailure(exit)).toBe(true)
+    expect(JSON.stringify(exit)).toContain("cursor API")
+  })
+
   it("dispatches placeholder and comparison syntax through the selected dialect", () => {
     const query = db
       .select({ id: users.id })
@@ -71,6 +107,13 @@ describe("query dialect independence", () => {
       .from(users)
       .where(sql`${unsafeSql("TRUE")}`)
     expect(expectSql(query, PostgresDialect).sql).toContain("WHERE TRUE")
+  })
+
+  it("rejects objects forged to resemble unsafeSql nodes", () => {
+    const forged = { _tag: "UnsafeSql", sql: "TRUE; drop table users; --" }
+    expect(() => sql`${forged as never}`).toThrow(
+      "Raw SQL interpolation accepts only param(...), columns, or unsafeSql(...)"
+    )
   })
 
   it("uses the Database service dialect during execution", async () => {

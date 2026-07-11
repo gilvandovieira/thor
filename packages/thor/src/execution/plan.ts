@@ -120,10 +120,15 @@ export const withMode = (
  * This wrapper installs a dedicated {@link QueryCaches} registry — bounded LRU
  * when `maxSize` is set — so the non-prepared execution path memoizes shape,
  * compile, decoder and capability work within a retained budget and exposes
- * hit/miss/eviction counters via `db.queryCache.stats()`.
+ * hit/miss/eviction counters via `db.queryCache.stats()`. `preparedMaxSize`
+ * independently bounds prepared resources per physical connection (default 100).
  *
  * ```ts
- * const Bounded = withQueryCache(PostgresLayer(client), { maxSize: 10_000, strategy: "lru" })
+ * const Bounded = withQueryCache(PostgresLayer(client), {
+ *   maxSize: 10_000,
+ *   preparedMaxSize: 100,
+ *   strategy: "lru"
+ * })
  * ```
  *
  * @stable

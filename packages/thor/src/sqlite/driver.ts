@@ -41,6 +41,8 @@ export interface SQLiteStatement {
    * @returns All raw result rows.
    */
   readonly all: (...params: ReadonlyArray<SQLiteValue>) => ReadonlyArray<RawRow>
+  /** @param params - Positional values. @returns Lazily produced raw result rows. */
+  readonly iterate?: (...params: ReadonlyArray<SQLiteValue>) => Iterable<RawRow>
   /**
    * @param params - Positional values.
    * @returns The affected-row result.
@@ -145,25 +147,55 @@ const makeDriver = (client: SQLiteClient, runtime: RuntimeRequirements, profile:
     if (statement.finalize) statement.finalize()
     else statement[Symbol.dispose]?.()
   }
-  const statementFor = (sql: string, name?: string): SQLiteStatement => {
-    if (!name) return client.prepare(sql)
+  const statementFor = (
+    sql: string,
+    name?: string
+  ): { readonly statement: SQLiteStatement; readonly transient: boolean } => {
+    if (!name) return { statement: client.prepare(sql), transient: true }
     const cached = prepared.get(name)
-    if (cached?.sql === sql) return cached.statement
+    if (cached?.sql === sql) return { statement: cached.statement, transient: false }
     const statement = client.prepare(sql)
-    if (!cached) prepared.set(name, { sql, statement })
-    return statement
+    if (!cached) {
+      prepared.set(name, { sql, statement })
+      return { statement, transient: false }
+    }
+    return { statement, transient: true }
+  }
+  const withStatement = <A>(sql: string, name: string | undefined, use: (statement: SQLiteStatement) => A): A => {
+    const { statement, transient } = statementFor(sql, name)
+    if (!transient) return use(statement)
+    try {
+      return use(statement)
+    } finally {
+      finalize(statement)
+    }
   }
   return {
     runtime,
-    query: (sql, params, name) =>
+    query: (sql, params, name, maxRows) =>
       Effect.try({
-        try: () => statementFor(sql, name).all(...params.map(encodeValue)),
+        try: () =>
+          withStatement(sql, name, (statement) => {
+            const encoded = params.map(encodeValue)
+            if (maxRows === undefined) return statement.all(...encoded)
+            if (!statement.iterate) {
+              throw new TypeError(
+                "Bounded SQLite row probes require a statement iterate() API; use returning(...).all() on this runtime"
+              )
+            }
+            const rows: RawRow[] = []
+            for (const row of statement.iterate(...encoded)) {
+              rows.push(row)
+              if (rows.length === maxRows) break
+            }
+            return rows
+          }),
         catch: mapSQLiteError
       }),
     execute: (sql, params, name) =>
       Effect.try({
         try: (): CommandResult => {
-          const result = statementFor(sql, name).run(...params.map(encodeValue))
+          const result = withStatement(sql, name, (statement) => statement.run(...params.map(encodeValue)))
           return { rowCount: Number(result.changes) }
         },
         catch: mapSQLiteError
@@ -181,16 +213,18 @@ const makeDriver = (client: SQLiteClient, runtime: RuntimeRequirements, profile:
         try: () => {
           const cached = prepared.get(name)
           if (!cached) return
-          prepared.delete(name)
           finalize(cached.statement)
+          prepared.delete(name)
         },
         catch: mapSQLiteError
       }),
     clearPrepared: () =>
       Effect.try({
         try: () => {
-          for (const { statement } of prepared.values()) finalize(statement)
-          prepared.clear()
+          for (const [name, { statement }] of prepared) {
+            finalize(statement)
+            prepared.delete(name)
+          }
         },
         catch: mapSQLiteError
       })

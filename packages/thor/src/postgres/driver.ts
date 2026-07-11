@@ -25,6 +25,7 @@ export interface PgQueryConfig {
   readonly text: string
   readonly values?: ReadonlyArray<unknown>
   readonly name?: string
+  readonly rows?: number
 }
 
 /** The slice of a pg client Thor needs. Both call forms exist on `pg.Client`. */
@@ -84,15 +85,25 @@ const makeCall = (client: PgClient) => {
     seenByClient.set(client, seen)
   }
   const known = seen
-  return (sql: string, params: ReadonlyArray<unknown>, name?: string): Promise<PgResult> => {
-    if (params.length === 0) return client.query(sql)
+  return (sql: string, params: ReadonlyArray<unknown>, name?: string, maxRows?: number): Promise<PgResult> => {
+    let preparedName: string | undefined
     if (name) {
       const priorText = known.get(name)
       if (priorText === undefined) known.set(name, sql)
       if (priorText === undefined || priorText === sql) {
-        return client.query({ text: sql, values: params, name })
+        preparedName = name
       }
     }
+    if (maxRows !== undefined) {
+      return client.query({
+        text: sql,
+        ...(params.length === 0 ? {} : { values: params }),
+        ...(preparedName === undefined ? {} : { name: preparedName }),
+        rows: maxRows
+      })
+    }
+    if (params.length === 0) return client.query(sql)
+    if (preparedName) return client.query({ text: sql, values: params, name: preparedName })
     return client.query(sql, params)
   }
 }
@@ -109,8 +120,10 @@ export const makePostgresDriver = (client: PgClient): Driver => {
   return {
     runtime: PostgresDriverRuntime,
     preparedScope: client,
-    query: (sql, params, name) =>
-      Effect.tryPromise({ try: () => call(sql, params, name), catch: mapDriverError }).pipe(Effect.map((r) => r.rows)),
+    query: (sql, params, name, maxRows) =>
+      Effect.tryPromise({ try: () => call(sql, params, name, maxRows), catch: mapDriverError }).pipe(
+        Effect.map((r) => (maxRows === undefined ? r.rows : r.rows.slice(0, maxRows)))
+      ),
     execute: (sql, params, name) =>
       Effect.tryPromise({ try: () => call(sql, params, name), catch: mapDriverError }).pipe(
         Effect.map((r): CommandResult => ({ rowCount: r.rowCount ?? 0 }))

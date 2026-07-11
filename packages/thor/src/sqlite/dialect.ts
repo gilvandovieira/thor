@@ -9,6 +9,7 @@ import { compileQuery } from "../sql/compiler.js"
 import { SQLiteMigrations } from "./migrations.js"
 import { dialectProfileHash } from "../capabilities/profile.js"
 import { TransactionError } from "../errors/index.js"
+import { validateIdentifier } from "../ir/identifiers.js"
 
 const version = "3"
 
@@ -22,7 +23,7 @@ export const SQLiteDialect: Dialect = {
    * @param name - Untrusted SQL identifier.
    * @returns Double-quoted SQLite identifier.
    */
-  quoteIdent: (name) => `"${name.replace(/"/g, '""')}"`,
+  quoteIdent: (name) => `"${validateIdentifier(name).replace(/"/g, '""')}"`,
   /**
    * @param _index - One-based bind position, unused by SQLite.
    * @returns The SQLite positional placeholder.

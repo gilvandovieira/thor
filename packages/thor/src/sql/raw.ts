@@ -6,6 +6,7 @@
  */
 import type { AnyColumn } from "../schema/column.js"
 import type { ParamNode, RawExprInterpolation, RawExprNode, UnsafeSqlNode } from "../ir/query-ir.js"
+import { createUnsafeSqlNode, isUnsafeSqlNode } from "../ir/unsafe-sql.js"
 import { SqlInputBrand, columnRef, isColumn } from "./expressions.js"
 
 /**
@@ -15,10 +16,6 @@ import { SqlInputBrand, columnRef, isColumn } from "./expressions.js"
 const isParam = (value: unknown): value is ParamNode =>
   typeof value === "object" && value !== null && (value as { _tag?: string })._tag === "Param" && SqlInputBrand in value
 
-/** @param value - Unknown runtime value. @returns Whether it is explicitly unsafe SQL text. */
-const isUnsafeSql = (value: unknown): value is UnsafeSqlNode =>
-  typeof value === "object" && value !== null && (value as { _tag?: string })._tag === "UnsafeSql"
-
 /**
  * Marks dynamic text for deliberate, unescaped inclusion in SQL.
  *
@@ -26,7 +23,7 @@ const isUnsafeSql = (value: unknown): value is UnsafeSqlNode =>
  * @returns An explicitly unsafe structural SQL fragment.
  * @remarks Never pass request data or other untrusted input to this function.
  */
-export const unsafeSql = (sql: string): UnsafeSqlNode => ({ _tag: "UnsafeSql", sql })
+export const unsafeSql = (sql: string): UnsafeSqlNode => createUnsafeSqlNode(sql)
 
 /** Values accepted inside a raw SQL tagged template. */
 export type RawInterpolation = ParamNode | AnyColumn | UnsafeSqlNode
@@ -50,7 +47,7 @@ export const rawExpr = (strings: TemplateStringsArray, ...values: ReadonlyArray<
   values: values.map((value): RawExprInterpolation => {
     if (isParam(value)) return value
     if (isColumn(value)) return columnRef(value)
-    if (isUnsafeSql(value)) return value
+    if (isUnsafeSqlNode(value)) return value
     throw new TypeError("Raw SQL interpolation accepts only param(...), columns, or unsafeSql(...)")
   })
 })

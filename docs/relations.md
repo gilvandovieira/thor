@@ -142,9 +142,14 @@ batches, never directly on the number of parent rows:
 | one `query` edge | 1 root + key batches |
 | mixed strategies | 1 joined root + batches/manual loader work |
 
-`query` uses at most 800 bound key values per batch: its batch size is
-`floor(800 / keyColumnCount)`, with a minimum of one key. Duplicate parent keys
-are queried once, and an edge with no matchable keys issues no target query.
+`query` derives the active dialect's native placeholder budget and caps relation
+predicates at 800 bound key values per batch. Its batch size is
+`floor(availableBudget / keyColumnCount)`. Duplicate parent keys are queried
+once, and an edge with no matchable keys issues no target query. A composite key
+wider than the available budget fails with `GuardError` before the root query or
+target driver call; there is no oversized one-key batch and no N+1 fallback.
+The conservative cap also limits expression depth and practical MySQL packet
+growth; boundary-test production-like row widths and payload sizes.
 Selecting several `join` edges still emits one statement, but SQL joins can
 multiply flat rows before Thor groups them. Prefer `query` for large fan-outs;
 measure both strategies with production-like cardinalities.

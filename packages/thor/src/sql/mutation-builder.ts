@@ -19,6 +19,7 @@ import {
   type SelectionField,
   type SelectIR,
   queryCapabilityBits,
+  snapshotInlineValue,
   nextId
 } from "../ir/query-ir.js"
 import { capabilityBit, type Capability, bitsToCapabilities, noCapabilities } from "../capabilities/capability.js"
@@ -185,7 +186,12 @@ const inputValueNode = (table: string, column: AnyColumn, value: unknown): ExprN
   // semantics. Look-alike application data — e.g. JSON containing a `node` key
   // or `_tag: "Param"` — is always bound as an encoded parameter instead.
   if (isSqlInput(value)) return toValueNode(value, column)
-  return { _tag: "Param", name: `${table}.${column.def.name}`, codec: columnParamCodec(column), value }
+  return {
+    _tag: "Param",
+    name: `${table}.${column.def.name}`,
+    codec: columnParamCodec(column),
+    value: snapshotInlineValue(value)
+  }
 }
 
 /**
@@ -385,7 +391,7 @@ export class InsertValues<T extends AnyTable, P extends NamedParams = {}> {
     return {
       _tag: "Insert",
       id: nextId("Insert"),
-      into: { name: meta.name },
+      into: { name: meta.name, sourceId: meta.sourceId },
       columns: this.columns,
       rows: this.rows,
       ...(this.conflict ? { conflict: this.conflict } : {}),
@@ -555,7 +561,7 @@ export class UpdateValues<T extends AnyTable, P extends NamedParams = {}> {
     return {
       _tag: "Update",
       id: nextId("Update"),
-      table: { name: meta.name },
+      table: { name: meta.name, sourceId: meta.sourceId },
       set: this.assignments,
       ...(this.whereNode ? { where: this.whereNode } : {}),
       ...(returning ? { returning } : {}),
@@ -649,7 +655,7 @@ export class DeleteBuilder<T extends AnyTable, P extends NamedParams = {}> {
     return {
       _tag: "Delete",
       id: nextId("Delete"),
-      from: { name: meta.name },
+      from: { name: meta.name, sourceId: meta.sourceId },
       ...(this.whereNode ? { where: this.whereNode } : {}),
       ...(returning ? { returning } : {}),
       capabilities: returning ? capabilityBit("delete.returning") : noCapabilities,

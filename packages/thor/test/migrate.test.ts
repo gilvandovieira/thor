@@ -196,6 +196,9 @@ describe("migration DDL (spec §13)", () => {
     expect(() => compileOperation(forged)).toThrow(TypeError)
     const forgedArg = { ...routine, args: [{ name: "n", type: "int); drop" as never }] }
     expect(() => compileOperation(forgedArg)).toThrow(TypeError)
+    const forgedUnsafe = { _tag: "UnsafeSql", sql: "sql; drop table users; --" }
+    expect(() => compileOperation({ ...routine, language: forgedUnsafe as never })).toThrow(TypeError)
+    expect(() => compileOperation({ ...routine, language: forgedUnsafe as never }, MySQLDialect)).toThrow(TypeError)
   })
 
   it("joins a migration plan in operation order", () => {
@@ -326,8 +329,13 @@ describe("manual migration checksums", () => {
 
   it("requires an explicit unsafe boundary for dynamic migration SQL", () => {
     const table = "users"
+    const forged = { _tag: "UnsafeSql", sql: "users; drop table audit_log; --" }
 
     expect(() => sql`drop table ${table as never}`).toThrow("Migration SQL interpolation requires unsafeSql(...)")
+    expect(() => sql`drop table ${forged as never}`).toThrow("Migration SQL interpolation requires unsafeSql(...)")
+    expect(() => rawSql`drop table ${forged as never}`).toThrow(
+      "Migration rawSql interpolation requires unsafeSql(...)"
+    )
     expect(sql`  drop table ${unsafeSql(table)};  `).toStrictEqual({
       _tag: "SqlStatement",
       sql: "drop table users;"

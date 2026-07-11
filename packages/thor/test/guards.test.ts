@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { db, eq, pg } from "@gilvandovieira/thor"
+import { count, db, eq, pg, sql } from "@gilvandovieira/thor"
 import { PostgresCapabilities, defineCapabilities } from "@gilvandovieira/thor/capabilities"
 import { expectGuardViolations } from "@gilvandovieira/thor/testing"
 
@@ -30,6 +30,37 @@ describe("query guards (spec §8.1)", () => {
         message: 'Column "posts"."id" is not in query scope {users}'
       })
     ])
+  })
+
+  it("finds out-of-scope columns interpolated into raw expressions", () => {
+    const query = db.select({ id: users.id }).from(users).where(sql`${posts.id} IS NOT NULL`)
+
+    expect(expectGuardViolations(query.ir, PostgresCapabilities)).toContainEqual(
+      expect.objectContaining({
+        _tag: "GuardError",
+        guard: "table-scope",
+        message: 'Column "posts"."id" is not in query scope {users}'
+      })
+    )
+  })
+
+  it("finds ungrouped columns interpolated into raw aggregate-scope expressions", () => {
+    const query = db.select({ total: count() }).from(users).having(sql`${users.email} IS NOT NULL`)
+
+    expect(expectGuardViolations(query.ir, PostgresCapabilities)).toContainEqual(
+      expect.objectContaining({
+        _tag: "GuardError",
+        guard: "aggregation-scope",
+        message: 'Column "users"."email" must appear in groupBy or an aggregate'
+      })
+    )
+  })
+
+  it("recognizes raw-expression column interpolations in groupBy", () => {
+    const query = db.select({ email: users.email, total: count() }).from(users)
+    const ir = { ...query.ir, groupBy: [sql`${users.email}`] }
+
+    expect(expectGuardViolations(ir, PostgresCapabilities)).toEqual([])
   })
 
   it("checks returning selections for table scope", () => {

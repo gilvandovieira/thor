@@ -13,6 +13,8 @@
 import { Schema } from "effect"
 import { internIdentifier } from "../ir/identifiers.js"
 import type { UnsafeSqlNode } from "../ir/query-ir.js"
+import { isUnsafeSqlNode } from "../ir/unsafe-sql.js"
+import { authenticitySet } from "../ir/authenticity.js"
 
 /** Logical column data types rendered independently by each dialect. */
 export type SqlDataType =
@@ -61,6 +63,8 @@ export interface ColumnDef {
   readonly name: string
   /** Owning table name; `""` until the column is attached to a table. */
   readonly table: string
+  /** Opaque lexical identity of the owning table/alias; absent before binding. */
+  readonly sourceId?: object
   readonly dataType: SqlDataType
   readonly codec: Schema.Schema<any, any>
   readonly notNull: boolean
@@ -96,6 +100,7 @@ type Patch<C, P> = Omit<C, keyof P> & P
 type ConfigData<C> = C extends { readonly data: infer D } ? D : unknown
 
 const PHANTOM: unique symbol = Symbol.for("thor/column-config")
+const columns = authenticitySet("column")
 
 /**
  * Immutable schema column descriptor and query expression.
@@ -110,7 +115,9 @@ export class Column<C = ColumnConfig> {
   /**
    * @param def - Complete runtime column definition.
    */
-  constructor(readonly def: ColumnDef) {}
+  constructor(readonly def: ColumnDef) {
+    columns.add(this)
+  }
 
   /**
    * @param patch - Runtime definition fields to replace.
@@ -191,7 +198,7 @@ export class Column<C = ColumnConfig> {
    * @returns A new column whose insert field is optional.
    */
   defaultSql(sql: UnsafeSqlNode): Column<Patch<C, { hasDefault: true }>> {
-    if (sql?._tag !== "UnsafeSql") throw new TypeError("SQL defaults require unsafeSql(...)")
+    if (!isUnsafeSqlNode(sql)) throw new TypeError("SQL defaults require unsafeSql(...)")
     return this.with<{ hasDefault: true }>({ hasDefault: true, defaultValue: { kind: "sql", sql: sql.sql } })
   }
 
@@ -216,7 +223,7 @@ export class Column<C = ColumnConfig> {
    * @returns A new column omitted from insert and update types.
    */
   generatedAlwaysAs(sql: UnsafeSqlNode): Column<Patch<C, { generated: true; hasDefault: true }>> {
-    if (sql?._tag !== "UnsafeSql") throw new TypeError("Generated column expressions require unsafeSql(...)")
+    if (!isUnsafeSqlNode(sql)) throw new TypeError("Generated column expressions require unsafeSql(...)")
     return this.with<{ generated: true; hasDefault: true }>({
       generated: true,
       hasDefault: true,
@@ -227,6 +234,10 @@ export class Column<C = ColumnConfig> {
 
 /** Any column, regardless of config. */
 export type AnyColumn = Column<any>
+
+/** @param value - Candidate runtime value. @returns Whether it is an authentic compatible Thor column. @internal */
+export const isAuthenticColumn = (value: unknown): value is AnyColumn =>
+  typeof value === "object" && value !== null && columns.has(value)
 
 /**
  * The codec used to validate and encode an application value bound to this

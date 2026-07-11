@@ -72,12 +72,15 @@ export class FakeDriver {
   get driver(): Driver {
     return {
       runtime: FakeDriverRuntime,
-      query: (sql, params, name) =>
+      query: (sql, params, name, maxRows) =>
         Effect.suspend(() => {
           this.calls.push({ sql, params })
           this.preparedNames.push(name)
           const result = this.next()
-          return result.error ? Effect.fail(result.error) : Effect.succeed(result.rows ?? [])
+          const rows = result.rows ?? []
+          return result.error
+            ? Effect.fail(result.error)
+            : Effect.succeed(maxRows === undefined ? rows : rows.slice(0, maxRows))
         }),
       execute: (sql, params, name) =>
         Effect.suspend(() => {

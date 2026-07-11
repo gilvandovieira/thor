@@ -10,11 +10,22 @@ import { createHash } from "node:crypto"
 import { MigrationError } from "../errors/index.js"
 import { Database } from "../execution/database.js"
 import type { UnsafeSqlNode } from "../ir/query-ir.js"
+import { isUnsafeSqlNode } from "../ir/unsafe-sql.js"
+import { authenticitySet } from "../ir/authenticity.js"
 
 /** A raw SQL statement (from the `sql` tagged template). */
 export interface SqlStatement {
   readonly _tag: "SqlStatement"
   readonly sql: string
+}
+
+const sqlStatements = authenticitySet("migration-sql-statement")
+
+/** @param text - Trusted migration SQL. @returns An immutable authenticated statement. */
+const registerSqlStatement = (text: string): SqlStatement => {
+  const statement: SqlStatement = Object.freeze({ _tag: "SqlStatement", sql: text })
+  sqlStatements.add(statement)
+  return statement
 }
 
 /**
@@ -90,11 +101,23 @@ export type MigrationDefinition =
 export const defineMigration = (definition: MigrationDefinition): MigrationDefinition => definition
 
 /**
- * @param step - Migration step to inspect.
- * @returns Whether the step is a tagged SQL statement.
+ * @param step - Value to inspect.
+ * @returns Whether the value was created by a supported SQL statement constructor.
  */
-export const isSqlStatement = (step: MigrationStep): step is SqlStatement =>
-  typeof step === "object" && step !== null && "_tag" in step && (step as SqlStatement)._tag === "SqlStatement"
+export const isSqlStatement = (step: unknown): step is SqlStatement =>
+  typeof step === "object" && step !== null && sqlStatements.has(step)
+
+/**
+ * Constructs a migration statement from trusted, already-compiled SQL.
+ *
+ * @param text - SQL produced by Thor's migration compiler.
+ * @returns An authenticated immutable SQL statement.
+ * @remarks Prefer the {@link sql} template for manually authored migrations.
+ */
+export const sqlStatement = (text: string): SqlStatement => {
+  if (typeof text !== "string") throw new TypeError("Migration SQL statement must be a string")
+  return registerSqlStatement(text)
+}
 
 /**
  * Authors a trusted SQL migration step.
@@ -110,13 +133,13 @@ export const sql = (strings: TemplateStringsArray, ...values: ReadonlyArray<Unsa
     out += chunk
     if (i < values.length) {
       const value = values[i]
-      if (value?._tag !== "UnsafeSql") {
+      if (!isUnsafeSqlNode(value)) {
         throw new TypeError("Migration SQL interpolation requires unsafeSql(...)")
       }
       out += value.sql
     }
   })
-  return { _tag: "SqlStatement", sql: out.trim() }
+  return registerSqlStatement(out.trim())
 }
 
 /**
@@ -137,7 +160,7 @@ export const rawSql = (
     text += chunk
     if (i < values.length) {
       const value = values[i]
-      if (value?._tag !== "UnsafeSql") {
+      if (!isUnsafeSqlNode(value)) {
         throw new TypeError("Migration rawSql interpolation requires unsafeSql(...)")
       }
       text += value.sql

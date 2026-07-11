@@ -4,8 +4,16 @@
  * @module sql/expressions
  */
 import { Schema } from "effect"
-import { type AnyColumn, Column, columnParamCodec } from "../schema/column.js"
-import type { ColumnRefNode, ExprNode, LiteralNode, OrderByTerm, ParamNode } from "../ir/query-ir.js"
+import { type AnyColumn, type Column, columnParamCodec, isAuthenticColumn } from "../schema/column.js"
+import { authenticitySet } from "../ir/authenticity.js"
+import {
+  snapshotInlineValue,
+  type ColumnRefNode,
+  type ExprNode,
+  type LiteralNode,
+  type OrderByTerm,
+  type ParamNode
+} from "../ir/query-ir.js"
 
 declare const ParamType: unique symbol
 
@@ -20,6 +28,13 @@ declare const ParamType: unique symbol
  * @internal
  */
 export const SqlInputBrand: unique symbol = Symbol.for("@gilvandovieira/thor/sql-input")
+const sqlInputs = authenticitySet("sql-input")
+
+/** @param value - Constructed parameter or expression. @returns The registered value. @internal */
+export const authenticateSqlInput = <A extends object>(value: A): A => {
+  sqlInputs.add(value)
+  return value
+}
 
 /** A bound query parameter carrying its literal name and phantom runtime type. */
 export type Param<Name extends string, A> = ParamNode & {
@@ -77,7 +92,7 @@ export const param = <const Name extends string, S extends Schema.Schema.AnyNoCo
   name: Name,
   schema: S
 ): Param<Name, Schema.Schema.Type<S>> =>
-  ({
+  authenticateSqlInput({
     _tag: "Param",
     name,
     codec: schema as Schema.Schema<any, any>,
@@ -94,28 +109,37 @@ export const columnRef = (column: AnyColumn): ColumnRefNode => ({
   _tag: "ColumnRef",
   table: column.def.table,
   column: column.def.name,
-  dataType: column.def.dataType
+  dataType: column.def.dataType,
+  sourceId:
+    column.def.sourceId ??
+    (() => {
+      throw new TypeError("Column must be bound to a table or alias")
+    })()
 })
 
 /**
  * @param value - Unknown runtime value.
  * @returns Whether `value` is a Thor column (a class instance, never a structural look-alike).
  */
-export const isColumn = (value: unknown): value is AnyColumn => value instanceof Column
+export const isColumn = (value: unknown): value is AnyColumn => isAuthenticColumn(value)
 
 /**
  * @param value - Unknown runtime value.
  * @returns Whether `value` is a parameter node produced by `param(...)` (brand required).
  */
 export const isParamNode = (value: unknown): value is ParamNode =>
-  typeof value === "object" && value !== null && (value as { _tag?: string })._tag === "Param" && SqlInputBrand in value
+  typeof value === "object" &&
+  value !== null &&
+  (value as { _tag?: string })._tag === "Param" &&
+  SqlInputBrand in value &&
+  sqlInputs.has(value)
 
 /**
  * @param value - Unknown runtime value.
  * @returns Whether `value` is an expression wrapper produced by a Thor constructor (brand required).
  */
 export const isExpr = (value: unknown): value is Expr<unknown> =>
-  typeof value === "object" && value !== null && "node" in value && SqlInputBrand in value
+  typeof value === "object" && value !== null && "node" in value && SqlInputBrand in value && sqlInputs.has(value)
 
 /**
  * @param value - Unknown runtime value.
@@ -173,7 +197,7 @@ export const toValueNode = (value: unknown, leftColumn?: AnyColumn): ExprNode =>
   if (isParamNode(value)) return value
   if (isExpr(value)) return value.node
   const codec = leftColumn ? columnParamCodec(leftColumn) : Schema.Unknown
-  return { _tag: "Param", name: `p${++anonCounter}`, codec, value } satisfies ParamNode
+  return { _tag: "Param", name: `p${++anonCounter}`, codec, value: snapshotInlineValue(value) } satisfies ParamNode
 }
 
 /**
@@ -190,5 +214,5 @@ export const toValueNodeWithCodec = (value: unknown, codec: Schema.Schema<any, a
   if (isColumn(value)) return columnRef(value)
   if (isParamNode(value)) return value
   if (isExpr(value)) return value.node
-  return { _tag: "Param", name: `p${++anonCounter}`, codec, value } satisfies ParamNode
+  return { _tag: "Param", name: `p${++anonCounter}`, codec, value: snapshotInlineValue(value) } satisfies ParamNode
 }

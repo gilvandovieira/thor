@@ -9,12 +9,13 @@
  */
 import { Effect } from "effect"
 import { GuardError, type QueryError } from "../errors/index.js"
-import type { Database } from "../execution/database.js"
+import { Database } from "../execution/database.js"
 import { type AnyColumn, columnParamCodec } from "../schema/column.js"
 import { alias, type AnyTable, type Select, type Table, tableMeta } from "../schema/table.js"
 import type { ExprNode } from "../ir/query-ir.js"
 import { columnRef } from "../sql/expressions.js"
 import { db } from "../sql/query-builder.js"
+import { RELATION_PARAMETER_CEILING, relationParameterBudget } from "./parameter-budget.js"
 
 /** @experimental Explicit relation loading strategy. */
 export type RelationStrategy = "join" | "query" | "manual"
@@ -353,6 +354,12 @@ const selectedRelations = (
         message: `Joined relation "${name}" requires a target primary key`
       })
     }
+    if (load.strategy === "query" && descriptor.references.length > RELATION_PARAMETER_CEILING) {
+      throw new GuardError({
+        guard: "relation-parameter-budget",
+        message: `Relation "${name}" has ${descriptor.references.length} key columns, exceeding the ${RELATION_PARAMETER_CEILING}-parameter relation budget`
+      })
+    }
     selected.push([name, descriptor, load])
   }
   return selected
@@ -450,20 +457,31 @@ const executeQueryBatches = (
   keys: ReadonlyArray<ReadonlyArray<unknown>>
 ): Effect.Effect<ReadonlyArray<Row>, QueryError, Database> => {
   if (keys.length === 0) return Effect.succeed([])
-  const batchSize = Math.max(1, Math.floor(800 / descriptor.references.length))
-  return Effect.map(
-    Effect.forEach(
-      chunks(keys, batchSize),
-      (batch) =>
-        db
-          .select(columnsOf(descriptor.target))
-          .from(descriptor.target)
-          .where(keysPredicate(descriptor.references, batch))
-          .all() as Effect.Effect<ReadonlyArray<Row>, QueryError, Database>,
-      { concurrency: 1 }
-    ),
-    (batches) => batches.flat()
-  )
+  return Effect.flatMap(Database, (database) => {
+    const budget = relationParameterBudget(database.dialect.id)
+    if (descriptor.references.length > budget) {
+      return Effect.fail(
+        new GuardError({
+          guard: "relation-parameter-budget",
+          message: `Relation key width ${descriptor.references.length} exceeds the ${database.dialect.id} parameter budget ${budget}`
+        })
+      )
+    }
+    const batchSize = Math.floor(budget / descriptor.references.length)
+    return Effect.map(
+      Effect.forEach(
+        chunks(keys, batchSize),
+        (batch) =>
+          db
+            .select(columnsOf(descriptor.target))
+            .from(descriptor.target)
+            .where(keysPredicate(descriptor.references, batch))
+            .all() as Effect.Effect<ReadonlyArray<Row>, QueryError, Database>,
+        { concurrency: 1 }
+      ),
+      (batches) => batches.flat()
+    )
+  })
 }
 
 /** @param parents - Root rows. @param rootTable - Root table. @param selected - Query/manual edges. @returns Rows with loaded relations. */

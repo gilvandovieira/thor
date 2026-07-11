@@ -91,6 +91,12 @@
       "stability": "stable",
       "since": "0.1.0"
     },
+    {
+      "file": "packages/thor/src/migrate/migrator.ts",
+      "symbol": "MigrationRunOptions",
+      "stability": "stable",
+      "since": "0.1.0"
+    },
     { "file": "packages/thor/src/migrate/migrator.ts", "symbol": "Migrator", "stability": "stable", "since": "0.1.0" },
     {
       "file": "packages/thor/src/migrate/migration-ir.ts",

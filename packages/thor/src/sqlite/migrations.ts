@@ -4,13 +4,14 @@
  * @module sqlite/migrations
  */
 import type { MigrationDialect } from "../dialect.js"
+import { validateIdentifier } from "../ir/identifiers.js"
 import type { ColumnDefault, ColumnSpec, DefaultLiteral, MigrationOperation } from "../migrate/migration-ir.js"
 
 /**
  * @param name - Identifier to escape.
  * @returns Double-quoted SQLite identifier.
  */
-const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`
+const quoteIdent = (name: string): string => `"${validateIdentifier(name).replace(/"/g, '""')}"`
 
 /**
  * @param type - Logical column type.

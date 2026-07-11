@@ -5,13 +5,13 @@
 > as the acceptance reference for the delivered Epics A–J foundation. See
 > [`README.md`](./README.md) for the full docs index.
 
-**Status:** Current — authoritative early-beta contract (supersedes the v0 spec)
+**Status:** Current — authoritative alpha contract (supersedes the v0 spec)
 **Project placeholder name:** Thor Project
 **Package scope placeholder:** `@gilvandovieira`
 **Primary package:** `@gilvandovieira/thor`
 **CLI package:** `@gilvandovieira/cli`
 **CLI binary:** `thor`
-**Primary v1 goal:** Production-readiness work for the Effect-native ORM/database toolkit defined in the v0 specification. This document distinguishes shipped early-beta behavior from deferred stable-release requirements.
+**Primary v1 goal:** Production-readiness work for the Effect-native ORM/database toolkit defined in the v0 specification. This document distinguishes shipped alpha behavior from deferred stable-release requirements.
 
 ---
 
@@ -495,6 +495,14 @@ Values are supplied at execution time through parameters. Compiled queries
 must not bake user input into cache keys or SQL strings.
 ```
 
+Compiled and prepared handles own a deeply frozen snapshot of their query graph,
+including raw-template arrays, parameter nodes, nested queries, and selections.
+Mutation of builder inputs after handle construction must not alter SQL, binding,
+guards, metadata, or decoding. Direct inline arrays, records, dates, binary
+values, maps, and sets are snapshotted when they enter IR. Frozen opaque domain
+instances are accepted by identity; mutable class instances are rejected and
+must be passed as named execution values.
+
 ---
 
 ## 9. Query Cache and Precompilation
@@ -545,6 +553,7 @@ where users.email = 'lucas@example.com'
 ```ts
 db.withQueryCache({
   maxSize: 10_000,
+  preparedMaxSize: 100,
   strategy: "lru"
 })
 
@@ -570,12 +579,19 @@ compileUnsafeHot()
 ### 9.5 Prepared-resource lifecycle
 
 Prepared resources are scoped to a physical connection, not merely a query
-shape. A bounded query cache must also bound actual prepared admission on each
-connection. Eviction releases the client statement where the adapter exposes a
+shape. `preparedMaxSize` independently bounds actual prepared admission on each
+connection and defaults to 100; `maxSize` retains its shape-cache-only semantics.
+Eviction releases the client statement where the adapter exposes a
 safe release operation; otherwise the adapter executes non-admitted shapes
 unprepared rather than growing an unrelated resource cache. Scoped connection
 disposal clears retained resources. Compile-cache entries, observation counters,
 client handles, and server prepared statements are distinct concepts.
+Prepared entries are leased for the complete driver Effect. An active entry is
+not eligible for eviction; if no idle entry can be safely released, execution of
+the new shape is unprepared. Adapters must not advertise release support when the
+client lacks it (for example, mysql2-compatible clients without `unprepare`).
+Transient SQLite statements are finalized on every completion path when the
+runtime exposes an explicit finalizer.
 
 ---
 
@@ -903,6 +919,12 @@ Thor must not perform hidden N+1 queries. If a relation query would produce
 N+1 behavior, Thor must reject it, batch it, or require explicit opt-in.
 ```
 
+The shipped batched strategy targets at most 800 bound key values per statement
+using `floor(800 / keyColumnCount)`, with a minimum batch size of one. Thus a
+composite key wider than 800 columns exceeds that target. The budget is not a
+dialect capability and does not replace live testing against backend parameter,
+expression-depth, or packet limits.
+
 ### 13.5 Relation non-goals for v1
 
 ```txt
@@ -1087,6 +1109,13 @@ Migrator.drift() // legacy create-missing-table operations, not structural drift
 Migrator.dryRun()
 Migrator.apply(plan)
 ```
+
+`SqlStatement` is an immutable authenticated value produced by `sql` or
+`sqlStatement`; structural lookalikes are rejected. Compatible physical package
+copies in one JavaScript realm share a versioned weak authenticity registry for
+SQL-bearing and schema/query values. The threat model is untrusted data, not
+hostile same-realm code (which can already invoke unsafe constructors).
+Cross-realm or incompatible-protocol values must be reconstructed.
 
 ### 15.4 Migration policies
 
@@ -1501,6 +1530,11 @@ Property tests should cover IR/compiler invariants:
 - SQL identifiers are quoted consistently
 - empty/invalid mutations fail guards
 ```
+
+Identifier policy rejects empty and NUL-bearing names before compilation. Other
+names are opaque single identifiers: delimiter characters are escaped, reserved
+words and Unicode are quoted, and dots are not parsed as schema qualification.
+Backend-specific byte limits and truncation collisions remain backend-enforced.
 
 ### 18.8 Testing invariant
 

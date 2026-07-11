@@ -4,6 +4,7 @@
  * @module postgres/migrations
  */
 import type { MigrationDialect } from "../dialect.js"
+import { validateIdentifier } from "../ir/identifiers.js"
 import type { MigrationOperation } from "../migrate/migration-ir.js"
 import { type ColumnDefault, type DefaultLiteral, unsafeSyntax } from "../migrate/migration-ir.js"
 
@@ -11,7 +12,7 @@ import { type ColumnDefault, type DefaultLiteral, unsafeSyntax } from "../migrat
  * @param name - Identifier to escape.
  * @returns Double-quoted PostgreSQL identifier.
  */
-const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`
+const quoteIdent = (name: string): string => `"${validateIdentifier(name).replace(/"/g, '""')}"`
 
 /** @param value - Typed default literal. @returns PostgreSQL literal SQL. */
 const literal = (value: DefaultLiteral): string => {
@@ -102,11 +103,10 @@ const compilePostgresOperation = (operation: MigrationOperation): string => {
         .map((arg) => `${arg.name ? `${quote(arg.name)} ` : ""}${unsafeSyntax(arg.type, "argument type")}`)
         .join(", ")
       const header = `create ${operation.replace ? "or replace " : ""}${operation.routine} ${quote(operation.name)}(${args})`
-      const returns =
-        operation.routine === "function" && operation.returns
-          ? ` returns ${unsafeSyntax(operation.returns, "return type")}`
-          : ""
-      return `${header}${returns} language ${unsafeSyntax(operation.language, "language")} as $$${unsafeSyntax(operation.body, "body")}$$;`
+      const returns = operation.returns ? unsafeSyntax(operation.returns, "return type") : undefined
+      const language = unsafeSyntax(operation.language, "language")
+      const body = unsafeSyntax(operation.body, "body")
+      return `${header}${operation.routine === "function" && returns ? ` returns ${returns}` : ""} language ${language} as $$${body}$$;`
     }
     case "DropRoutine": {
       const args = operation.args

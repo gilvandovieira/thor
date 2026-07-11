@@ -12,7 +12,7 @@ epics' acceptance criteria still point at them.
 
 | Spec | Status | Scope |
 |---|---|---|
-| [`thor-project-v1-spec.md`](./thor-project-v1-spec.md) | **Current** | The authoritative early-beta v1 contract and production-readiness target, including explicit deferred work. |
+| [`thor-project-v1-spec.md`](./thor-project-v1-spec.md) | **Current** | The authoritative alpha v1 contract and production-readiness target, including explicit deferred work. |
 | [`thor-project-spec-v0.md`](./thor-project-spec-v0.md) | 🗄️ **Archived** | The delivered v0 foundation (Epics A–J). Retained as that foundation's acceptance reference and for its historical section numbers; superseded by the v1 spec. |
 
 [`roadmap.md`](./roadmap.md) tracks progress against both specs as epics.
@@ -37,6 +37,7 @@ epics' acceptance criteria still point at them.
 - [Errors](./errors.md) — the tagged error set and `catchTag` guidance.
 - [API stability](./api-stability.md) — `@stable`/`@experimental`/`@internal` levels.
 - [Priority 1 remediation report](./remediation-p1-report.md) — verified resource, checksum, pooling, MySQL, and SQL-boundary findings.
+- [Final adversarial remediation report](./remediation-adversarial-report.md) — reconciled completed fixes, evidence boundaries, and remaining high-value work.
 - [LLM skills](./skills.md) — the shipped agent guidance files.
 
 **Performance**

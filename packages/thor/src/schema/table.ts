@@ -11,9 +11,13 @@
 import type { AnyColumn, BoundColumn, Column } from "./column.js"
 import { internIdentifier } from "../ir/identifiers.js"
 import type { UnsafeSqlNode } from "../ir/query-ir.js"
+import { isUnsafeSqlNode } from "../ir/unsafe-sql.js"
+import { authenticitySet } from "../ir/authenticity.js"
+import { sourceIdentity } from "../ir/source-identity.js"
 
 /** Non-enumerable key carrying a table's runtime metadata. */
 export const TableMeta: unique symbol = Symbol.for("thor/table-meta")
+const tables = authenticitySet("table")
 
 /** Runtime description of a table index. */
 export interface TableIndex {
@@ -69,6 +73,7 @@ export interface TableMetadata {
   readonly name: string
   /** Visible SQL alias used by query scope and column references. */
   readonly alias?: string
+  readonly sourceId: object
   readonly columns: Readonly<Record<string, AnyColumn>>
   readonly primaryKey: ReadonlyArray<string>
   readonly indexes: ReadonlyArray<TableIndex>
@@ -93,6 +98,7 @@ export type Table<Name extends string, Cols extends Columns> = Cols & {
   readonly [TableMeta]: {
     readonly name: Name
     readonly alias?: string
+    readonly sourceId: object
     readonly columns: Cols
     readonly primaryKey: ReadonlyArray<string>
     readonly indexes: ReadonlyArray<TableIndex>
@@ -197,6 +203,7 @@ export const defineTable = <Name extends string, Cols extends Columns>(
   options: TableOptions<Cols> = {}
 ): Table<Name, BoundColumns<Name, Cols>> => {
   const tableName = internIdentifier(name) as Name
+  const sourceId = sourceIdentity()
   const boundColumns: Record<string, AnyColumn> = {}
   const primaryKey: string[] = []
 
@@ -204,7 +211,8 @@ export const defineTable = <Name extends string, Cols extends Columns>(
     const bound = new (column.constructor as typeof Column)({
       ...column.def,
       name: internIdentifier(column.def.name),
-      table: tableName
+      table: tableName,
+      sourceId
     })
     boundColumns[key] = bound
     if (column.def.primaryKey) primaryKey.push(column.def.name)
@@ -241,6 +249,7 @@ export const defineTable = <Name extends string, Cols extends Columns>(
 
   const meta: TableMetadata = {
     name: tableName,
+    sourceId,
     columns: boundColumns,
     primaryKey,
     indexes: (options.indexes ?? []).map((index) => ({
@@ -253,7 +262,7 @@ export const defineTable = <Name extends string, Cols extends Columns>(
       columns: constraint.columns.map((key) => columns[key]!.def.name)
     })),
     checks: (options.checks ?? []).map((check) => {
-      if (check.expression?._tag !== "UnsafeSql") throw new TypeError("Table check expressions require unsafeSql(...)")
+      if (!isUnsafeSqlNode(check.expression)) throw new TypeError("Table check expressions require unsafeSql(...)")
       return {
         ...(check.name ? { name: internIdentifier(check.name) } : {}),
         expression: check.expression
@@ -266,6 +275,7 @@ export const defineTable = <Name extends string, Cols extends Columns>(
 
   const table = { ...boundColumns } as Record<PropertyKey, unknown>
   Object.defineProperty(table, TableMeta, { value: meta, enumerable: false })
+  tables.add(table)
   return table as Table<Name, BoundColumns<Name, Cols>>
 }
 
@@ -273,7 +283,10 @@ export const defineTable = <Name extends string, Cols extends Columns>(
  * @param table - Thor table value.
  * @returns Hidden runtime table metadata.
  */
-export const tableMeta = (table: AnyTable): TableMetadata => table[TableMeta]
+export const tableMeta = (table: AnyTable): TableMetadata => {
+  if (!tables.has(table)) throw new TypeError("Expected a Thor table from a compatible package protocol")
+  return table[TableMeta]
+}
 
 /**
  * Creates an immutable table reference with a query-local SQL alias.
@@ -286,16 +299,19 @@ export const tableMeta = (table: AnyTable): TableMetadata => table[TableMeta]
 export const alias = <T extends AnyTable, const Name extends string>(table: T, name: Name): T => {
   const source = tableMeta(table)
   const aliasName = internIdentifier(name)
+  const sourceId = sourceIdentity()
   const columns: Record<string, AnyColumn> = {}
   for (const [key, column] of Object.entries(source.columns)) {
     columns[key] = new (column.constructor as typeof Column)({
       ...column.def,
-      table: aliasName
+      table: aliasName,
+      sourceId
     })
   }
   const meta: TableMetadata = {
     name: source.name,
     alias: aliasName,
+    sourceId,
     columns,
     primaryKey: source.primaryKey,
     indexes: source.indexes,
@@ -305,6 +321,7 @@ export const alias = <T extends AnyTable, const Name extends string>(table: T, n
   }
   const value = { ...columns } as Record<PropertyKey, unknown>
   Object.defineProperty(value, TableMeta, { value: meta, enumerable: false })
+  tables.add(value)
   return value as T
 }
 
@@ -314,4 +331,4 @@ export const alias = <T extends AnyTable, const Name extends string>(table: T, n
 
  */
 export const isTable = (value: unknown): value is AnyTable =>
-  typeof value === "object" && value !== null && TableMeta in value
+  typeof value === "object" && value !== null && tables.has(value)

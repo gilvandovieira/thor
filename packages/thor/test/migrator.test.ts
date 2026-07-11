@@ -10,6 +10,7 @@ interface HarnessOptions {
   readonly failCommit?: boolean
   readonly failRollback?: boolean
   readonly loseLock?: boolean
+  readonly legacyJournal?: boolean
   readonly journal?: ReadonlyArray<JournalEntry>
 }
 
@@ -17,6 +18,7 @@ const harness = (options: HarnessOptions = {}) => {
   const journal = [...(options.journal ?? [])]
   const calls: string[] = []
   let locked = false
+  let checksumWidth = options.legacyJournal ? 64 : 255
   const waiters: Array<() => void> = []
 
   const acquire = (): Effect.Effect<ReadonlyArray<RawRow>, DriverError> =>
@@ -40,6 +42,11 @@ const harness = (options: HarnessOptions = {}) => {
   const migrationDialect: MigrationDialect = {
     compileOperation: () => "ddl",
     ensureJournal: () => "ensure",
+    upgradeJournal: () => ({
+      probe: { sql: "probe" },
+      needsUpgrade: (rows) => Number(rows[0]?.len) < 255,
+      upgrade: "upgrade"
+    }),
     readJournal: () => "read",
     insertJournal: () => "insert",
     deleteJournal: () => "delete",
@@ -67,6 +74,10 @@ const harness = (options: HarnessOptions = {}) => {
       Effect.suspend(() => {
         if (statement === "lock") return acquire()
         if (statement === "unlock") return Effect.succeed(release())
+        if (statement === "probe") {
+          calls.push("probe")
+          return Effect.succeed([{ len: checksumWidth }])
+        }
         if (statement === "read") {
           calls.push("read")
           return Effect.succeed(
@@ -87,6 +98,7 @@ const harness = (options: HarnessOptions = {}) => {
         calls.push(statement)
         if (statement === "commit" && options.failCommit) return Effect.fail(failure("commit failed"))
         if (statement === "rollback" && options.failRollback) return Effect.fail(failure("rollback failed"))
+        if (statement === "upgrade") checksumWidth = 255
         if (statement === "insert") {
           journal.push({
             id: String(params[0]),
@@ -141,6 +153,20 @@ describe("migration concurrency and failure invariants", () => {
     expect([a.length, b.length].sort(), JSON.stringify(test.calls)).toEqual([0, 1])
     expect(test.calls.filter((call) => call === "script:first")).toHaveLength(1)
     expect(test.journal.map((entry) => entry.id)).toEqual([migration.id])
+  })
+
+  it("serializes concurrent status/dryRun journal upgrades without recursively locking", async () => {
+    const test = harness({ legacyJournal: true })
+    const first = await test.service([migration])
+    const second = await test.service([migration])
+
+    const [status, report] = await Effect.runPromise(Effect.all([first.status(), second.dryRun()], { concurrency: 2 }))
+
+    expect(status).toEqual([])
+    expect(report.pending.map((entry) => entry.id)).toEqual([migration.id])
+    expect(test.calls.filter((call) => call === "upgrade")).toHaveLength(1)
+    expect(test.calls.filter((call) => call === "lock")).toHaveLength(2)
+    expect(test.calls.filter((call) => call === "unlock")).toHaveLength(2)
   })
 
   it("surfaces commit failure and retains both body/rollback failures", async () => {
@@ -226,5 +252,37 @@ describe("migration concurrency and failure invariants", () => {
 
     expect(test.calls).toContain("rollback")
     expect(test.calls).toContain("unlock")
+  })
+
+  it("redo rolls back and reapplies under one lock and one transaction", async () => {
+    const reversible = defineMigration({
+      id: "0001_reversible",
+      name: "reversible",
+      safety: "additive",
+      downSafety: "additive",
+      up: sql`apply`,
+      down: sql`revert`
+    })
+    const entry: JournalEntry = {
+      id: reversible.id,
+      name: reversible.name,
+      checksum: legacyChecksum(reversible),
+      appliedAt: new Date(0),
+      executionTimeMs: 0
+    }
+    const test = harness({ journal: [entry] })
+    const service = await test.service([reversible])
+
+    const reapplied = await Effect.runPromise(service.redo())
+
+    expect(reapplied?.id).toBe(reversible.id)
+    expect(test.calls.filter((call) => call === "lock")).toHaveLength(1)
+    expect(test.calls.filter((call) => call === "unlock")).toHaveLength(1)
+    expect(test.calls.filter((call) => call === "begin")).toHaveLength(1)
+    expect(test.calls.filter((call) => call === "commit")).toHaveLength(1)
+    expect(test.calls.indexOf("script:revert")).toBeLessThan(test.calls.indexOf("delete"))
+    expect(test.calls.indexOf("delete")).toBeLessThan(test.calls.indexOf("script:apply"))
+    expect(test.calls.indexOf("script:apply")).toBeLessThan(test.calls.indexOf("insert"))
+    expect(test.journal.map((item) => item.id)).toEqual([reversible.id])
   })
 })

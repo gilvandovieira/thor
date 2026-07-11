@@ -148,6 +148,7 @@ const rowCountOf = (result: unknown): number => {
  */
 export const makeMySQLDriver = (client: MySQLClient): Driver => {
   assertRuntimeCapabilities(MySQLDriverRuntime)
+  const unprepare = client.unprepare?.bind(client)
   let registry = preparedByClient.get(client)
   if (!registry) {
     registry = new Map<string, string>()
@@ -167,9 +168,12 @@ export const makeMySQLDriver = (client: MySQLClient): Driver => {
   return {
     runtime: MySQLDriverRuntime,
     preparedScope: client,
-    query: (sql, params, name) =>
+    query: (sql, params, name, maxRows) =>
       Effect.tryPromise({
-        try: async () => rowsOf((await call(sql, params, name))[0]),
+        try: async () => {
+          const rows = rowsOf((await call(sql, params, name))[0])
+          return maxRows === undefined ? rows : rows.slice(0, maxRows)
+        },
         catch: mapMySQLDriverError
       }),
     execute: (sql, params, name) =>
@@ -184,21 +188,31 @@ export const makeMySQLDriver = (client: MySQLClient): Driver => {
         try: async (): Promise<CommandResult> => ({ rowCount: rowCountOf((await client.query(sql))[0]) }),
         catch: mapMySQLDriverError
       }),
-    releasePrepared: (name) =>
-      Effect.try({
-        try: () => {
-          const sql = prepared.get(name)
-          if (!sql) return
-          prepared.delete(name)
-          client.unprepare?.(sql)
-        },
-        catch: mapMySQLDriverError
-      }),
+    ...(unprepare
+      ? {
+          releasePrepared: (name: string) =>
+            Effect.try({
+              try: () => {
+                const sql = prepared.get(name)
+                if (!sql) return
+                unprepare(sql)
+                prepared.delete(name)
+              },
+              catch: mapMySQLDriverError
+            })
+        }
+      : {}),
     clearPrepared: () =>
       Effect.try({
         try: () => {
-          if (client.unprepare) for (const sql of prepared.values()) client.unprepare(sql)
-          prepared.clear()
+          if (!unprepare) {
+            prepared.clear()
+            return
+          }
+          for (const [name, sql] of prepared) {
+            unprepare(sql)
+            prepared.delete(name)
+          }
         },
         catch: mapMySQLDriverError
       })

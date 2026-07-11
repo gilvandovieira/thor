@@ -17,7 +17,7 @@ valid**, **Disproved**, or **Reframed**, with the correction and its test.
 | P0.2 | Inconsistent parameter encoding | **Confirmed, fixed (+ critical follow-up)** | `ParameterPlan` encodes inline values through the column codec exactly like named params. **Adversarial review found a residual injection hole**: object values structurally imitating a node (`{node:…}`, `{_tag:"Param"}`) bypassed the codec. Fixed with a non-forgeable `SqlInputBrand` symbol on every Thor-constructed wrapper/param; value positions bind unbranded objects as parameters. `parameter-encoding.test.ts`, `sql-input-brand.test.ts`. |
 | P0.3 | Compiled-query value semantics | **Already fixed (shape-only)** | `.compile()`/`.prepare()` throw `GuardError guard:"prepared-values"` on captured inline values; `inspectIr` separates params from constants. `compiled-constants.test.ts`. |
 | P0.4 | Migration policy on manual exec | **Confirmed, fixed** | `guardManualMigration` runs per step before SQL reaches the driver; the whole pending set is preflighted; `up`/`down` gated independently by `safety`/`phase` and `downSafety`/`downPhase`; unmarked = blocked under `safe-only`. `migration-policy.test.ts`. |
-| P0.5 | `.one()`/`.maybeOne()` cardinality | **Confirmed, fixed** | Memoized cardinality-probe IR capped at `LIMIT 2`, preserving tighter user limits; set-operation operands carrying ORDER BY/LIMIT/OFFSET are rejected (they would compile invalid SQL). `cardinality-probe.test.ts`, `cardinality-observability.test.ts`, `invalid-shapes.test.ts`. |
+| P0.5 | `.one()`/`.maybeOne()` cardinality | **Confirmed, fixed for SELECT and DML result consumption** | SELECT uses a memoized `LIMIT 2` probe. DML `RETURNING.one()`/`.maybeOne()` passes `maxRows: 2` through the driver contract, bounding materialization and decoding without pretending to undo the mutation. `cardinality-probe.test.ts`, `returning-cardinality.test.ts`, `cardinality-observability.test.ts`. |
 | P0.6 | Degenerate public shapes | **Confirmed, fixed** | Empty `inArray`/`or` → FALSE, empty `notInArray`/`and` → TRUE; pagination rejects non-finite/negative/fractional; empty inserts rejected. `invalid-shapes.test.ts`, property invariants. |
 
 ## Priority 1 — resource & concurrency hardening
@@ -25,7 +25,7 @@ valid**, **Disproved**, or **Reframed**, with the correction and its test.
 | # | Finding | Verdict | Correction & tests |
 |---|---|---|---|
 | P1.1 | Misleading pool layers | **Reframed** | Renamed to `PostgresDedicatedPoolConnectionLayer` / `MySQLDedicatedPoolConnectionLayer` with explicit one-connection semantics. `scoped-layers.test.ts`. |
-| P1.2 | Unbounded prepared resources | **Confirmed, fixed (+ follow-up)** | `Driver.releasePrepared`/`clearPrepared` + connection-scoped LRU admission. **Review found the registry and node-postgres collision guard were keyed per driver, not per physical connection** — fixed with `Driver.preparedScope` (keyed by the pooled client), so registries survive driver re-creation across leases; eviction removes the registry entry before releasing (no double-evict) and a release failure no longer fails the user query. `query-cache.test.ts`, `sqlite.test.ts`, `mysql.test.ts`. |
+| P1.2 | Unbounded prepared resources | **Confirmed, fixed (+ adversarial follow-up)** | `Driver.releasePrepared`/`clearPrepared` + connection-scoped bounded admission. `Driver.preparedScope` keys by physical client; execution leases prevent active eviction; clients without safe release (including MySQL without `unprepare`) stop admitting at the bound; SQLite transient statements finalize on every completion path where supported. `query-cache.test.ts`, `prepared-default-bound.test.ts`, `prepared-eviction-race.test.ts`, `sqlite-collision-leak.test.ts`, `sqlite.test.ts`, `mysql.test.ts`. |
 | P1.3 | MySQL prepared semantics | **Confirmed, fixed** | `preparedStatements:false` → `query(sql,values)`; enabled → `execute`; `undefined` binds normalized to `null` so both paths agree. `mysql.test.ts`. |
 | P1.4 | Weak migration checksums | **Confirmed, fixed (+ follow-up)** | `sha256:v1:<digest>` over canonical id/name/up/down/revision/irreversible/safety/phase/downSafety/downPhase; legacy FNV rows verified read-only. **Review found no upgrade path for legacy MySQL `varchar(64)` journals** (a 74-char digest would overflow) — fixed with an in-place `upgradeJournal` that widens the column before the first sha256 write. `migrate.test.ts`, `migrator.test.ts`, property. |
 | P1.5 | Implicit unsafe SQL paths | **Confirmed, fixed (+ follow-up)** | Structured window-frame DSL; SQL defaults/generated/check/routine-DDL require `unsafeSql`. **Review found `over()` and routine-DDL fields lacked runtime tag checks, and MySQL literal defaults didn't escape backslashes** — all fixed (`assertWindowFrame`, `unsafeSyntax`, backslash escaping). `advanced-query.test.ts`, `migrate.test.ts`, `schema.test.ts`. |
@@ -58,6 +58,15 @@ valid**, **Disproved**, or **Reframed**, with the correction and its test.
 - **P4.3** [limitations.md](./limitations.md) records runtime/database support, migration/drift/routine/streaming/prepared/pool limits, and the raw-SQL trust boundary.
 - **P4.4** Review reference [thor-repository-review.md](./thor-repository-review.md) present; `docs:check` confirms all links resolve.
 
+## Adversarial follow-up
+
+The later [adversarial audit](./adversarial-test-audit.md) found additional
+snapshot, prepared-lifecycle, scope, migration-authenticity, and documentation
+defects. Their reconciled status and the work still not implemented are recorded
+in [remediation-adversarial-report.md](./remediation-adversarial-report.md). This
+project remains alpha; the historical validation below is not evidence that live
+database lanes were rerun for the later fixes.
+
 ## Final validation
 
 Run on this host (Node 26, Bun 1.3, Docker available):
@@ -83,13 +92,15 @@ real databases.
 
 ## Recommendation
 
-**Ready for beta.** All six release-blocking P0 defects — including the
+**Alpha remediation baseline complete.** All six release-blocking P0 defects — including the
 object-value injection hole the adversarial review surfaced — are fixed and
 regression-tested; P1 resource/concurrency hardening is complete with the
 per-connection and journal-upgrade follow-ups; the spec, exports, drift, and
 streaming claims are reconciled; and coverage, repo-wide quality, a
 manifest-driven API gate, expanded property tests, a typed packed-consumer
-check, and both live-database and dual-runtime lanes are green. Promotion to a
+check, and the live-database and dual-runtime lanes recorded in this historical
+pass were green. Promotion beyond alpha should wait on the remaining work in the
+final adversarial report, including live stress and boundary verification. Promotion to a
 release candidate should wait on: the deferred migration-generation, routine,
 and streaming surfaces being either implemented or held as explicit non-goals;
 and branch protection being enabled on `main` (owner action). Reserve `1.0.0`

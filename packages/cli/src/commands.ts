@@ -35,7 +35,6 @@ interface ThorConfig {
   readonly database?: DatabaseConfig
   readonly journalTable?: string
   readonly policy?: AutoMigrationPolicy
-  readonly reviewed?: boolean
 }
 
 const defaultConfig: ThorConfig = { migrationsDir: "migrations", schema: "src/schema.ts" }
@@ -263,13 +262,24 @@ const loadMigratorConfig = async (cwd: string, cfg: ThorConfig): Promise<Migrato
   migrations: await loadMigrations(cwd, cfg.migrationsDir),
   schema: await loadSchemaTables(cwd, cfg.schema),
   ...(cfg.journalTable ? { journalTable: cfg.journalTable } : {}),
-  ...(cfg.policy ? { policy: cfg.policy } : {}),
-  ...(cfg.reviewed !== undefined ? { reviewed: cfg.reviewed } : {})
+  ...(cfg.policy ? { policy: cfg.policy } : {})
 })
+
+/**
+ * @param command - Migration command used in usage errors.
+ * @param args - Command arguments to validate.
+ * @returns Invocation-scoped destructive-migration approval.
+ */
+const migrationRunOptions = (command: string, args: ReadonlyArray<string>) => {
+  if (args.some((arg) => arg !== "--reviewed") || args.filter((arg) => arg === "--reviewed").length > 1) {
+    throw new Error(`Usage: thor ${command} [--reviewed]`)
+  }
+  return { reviewed: args.includes("--reviewed") }
+}
 
 /** @param plan - Generated plan identity. @param sql - Compiled trusted DDL. @returns Migration source. */
 const generatedMigration = (plan: { readonly id: string; readonly name: string }, sql: string): string =>
-  `import { defineMigration } from "@gilvandovieira/thor/migrate"
+  `import { defineMigration, sqlStatement } from "@gilvandovieira/thor/migrate"
 
 export default defineMigration({
   id: ${JSON.stringify(plan.id)},
@@ -277,12 +287,13 @@ export default defineMigration({
   irreversible: true,
   safety: "additive",
   phase: "expand",
-  up: { _tag: "SqlStatement", sql: ${JSON.stringify(sql)} }
+  up: sqlStatement(${JSON.stringify(sql)})
 })
 `
 
-/** Apply every pending migration after validation and drift surfacing. @stable @param cwd - Project root. @returns Nothing. */
-export const up = async (cwd: string): Promise<void> => {
+/** Apply every pending migration after validation and drift surfacing. @stable @param cwd - Project root. @param args - Optional `--reviewed` approval. @returns Nothing. */
+export const up = async (cwd: string, args: ReadonlyArray<string> = []): Promise<void> => {
+  const options = migrationRunOptions("up", args)
   const cfg = loadConfig(cwd)
   const database = requireDatabase(cfg)
   const migratorConfig = await loadMigratorConfig(cwd, cfg)
@@ -305,15 +316,16 @@ export const up = async (cwd: string): Promise<void> => {
         log(
           `Warning: pre-migration drift has ${report.changes.length} change(s) alongside ${pending.pending.length} pending migration(s).`
         )
-      const applied = yield* migrator.up()
+      const applied = yield* migrator.up(options)
       if (applied.length === 0) log("Database is up to date.")
       else for (const entry of applied) log(`Applied ${entry.id} ${entry.name}`)
     })
   )
 }
 
-/** Roll back the latest applied migration. @stable @param cwd - Project root. @returns Nothing. */
-export const down = async (cwd: string): Promise<void> => {
+/** Roll back the latest applied migration. @stable @param cwd - Project root. @param args - Optional `--reviewed` approval. @returns Nothing. */
+export const down = async (cwd: string, args: ReadonlyArray<string> = []): Promise<void> => {
+  const options = migrationRunOptions("down", args)
   const cfg = loadConfig(cwd)
   const migratorConfig = await loadMigratorConfig(cwd, cfg)
   await runWithDatabase(
@@ -324,7 +336,7 @@ export const down = async (cwd: string): Promise<void> => {
       const applied = yield* migrator.status()
       const latest = applied[applied.length - 1]
       if (!latest) return log("No applied migrations to roll back.")
-      yield* migrator.down()
+      yield* migrator.down(options)
       log(`Rolled back ${latest.id} ${latest.name}`)
     })
   )
@@ -358,10 +370,17 @@ export const status = async (cwd: string): Promise<void> => {
   for (const migration of result.pending) log(`  pending ${migration.id} ${migration.name}`)
 }
 
-/** Roll back and reapply the latest migration. @stable @param cwd - Project root. @returns Nothing. */
-export const redo = async (cwd: string): Promise<void> => {
-  await down(cwd)
-  await up(cwd)
+/** Roll back and reapply the latest migration. @stable @param cwd - Project root. @param args - Optional `--reviewed` approval. @returns Nothing. */
+export const redo = async (cwd: string, args: ReadonlyArray<string> = []): Promise<void> => {
+  const options = migrationRunOptions("redo", args)
+  const cfg = loadConfig(cwd)
+  const migratorConfig = await loadMigratorConfig(cwd, cfg)
+  const entry = await runWithDatabase(
+    requireDatabase(cfg),
+    Effect.flatMap(makeMigrator(migratorConfig), (migrator) => migrator.redo(options))
+  )
+  if (!entry) log("No applied migrations to redo.")
+  else log(`Reapplied ${entry.id} ${entry.name}`)
 }
 
 /** Generate a create-table-only irreversible migration from live schema. @stable @param cwd - Project root. @param name - Migration name. @returns Nothing. */

@@ -76,6 +76,73 @@ describe("relation declarations (spec §13.2)", () => {
 })
 
 describe("relation planner (spec §13.3-13.4)", () => {
+  it.each([0, 1, 799, 800, 801])("keeps %i distinct keys within the relation parameter budget", async (count) => {
+    const parentRows = Array.from({ length: count }, (_, index) => ({
+      id: `u${index}`,
+      email: `user${index}@example.com`
+    }))
+    const driver = new FakeDriver().enqueue(
+      { rows: parentRows },
+      ...Array.from({ length: Math.ceil(count / 800) }, () => ({ rows: [] }))
+    )
+
+    await run(
+      withRelations(relations)
+        .relation(users)
+        .findMany({ with: { posts: { strategy: "query" } } }),
+      driver
+    )
+
+    const relationCalls = driver.calls.slice(1)
+    expect(relationCalls).toHaveLength(Math.ceil(count / 800))
+    expect(relationCalls.every((call) => call.params.length <= 800)).toBe(true)
+    expect(relationCalls.map((call) => call.params.length)).toEqual(
+      count === 801 ? [800, 1] : count === 0 ? [] : [count]
+    )
+  })
+
+  it("rejects a composite relation wider than the budget before driver execution", async () => {
+    const keys = Array.from({ length: 801 }, (_, index) => `key${index}`)
+    const parentColumns = Object.fromEntries(keys.map((key) => [key, pg.text(key)]))
+    const childColumns = Object.fromEntries(keys.map((key) => [key, pg.text(key)]))
+    const wideParents = pg.table("wide_parents", parentColumns as any)
+    const wideChildren = pg.table(
+      "wide_children",
+      childColumns as any,
+      {
+        foreignKeys: [
+          {
+            columns: keys,
+            references: { table: "wide_parents", columns: keys }
+          }
+        ]
+      } as any
+    )
+    const graph = defineRelations({
+      wide_parents: {
+        children: many(wideChildren, {
+          fields: keys.map((key) => wideParents[key]),
+          references: keys.map((key) => wideChildren[key])
+        } as any)
+      }
+    } as any)
+    const driver = new FakeDriver()
+
+    const error = await Effect.runPromise(
+      Effect.flip(
+        Effect.provide(
+          withRelations(graph)
+            .relation(wideParents)
+            .findMany({ with: { children: { strategy: "query" } } } as any),
+          FakeDatabaseLayer(driver)
+        )
+      )
+    )
+
+    expect(error).toMatchObject({ _tag: "GuardError", guard: "relation-parameter-budget" })
+    expect(driver.calls).toEqual([])
+  })
+
   it("batches query loading by distinct parent keys without N+1", async () => {
     const driver = new FakeDriver().enqueue(
       {

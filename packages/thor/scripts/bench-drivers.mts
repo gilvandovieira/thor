@@ -135,7 +135,7 @@ const makeCombo = async (driver: "node-postgres" | "postgres.js", prepared: bool
       await sql.unsafe("insert into bench_users (email, name, age) values ($1,$2,$3)", [`bulk${i}@bench`, "b", i])
   }
   const layer = PostgresJsLayer(
-    { unsafe: (q, p, o) => sql.unsafe(q, p as never, o as never) },
+    { unsafe: (q, p, o) => sql.unsafe(q, p as never, o as never), CLOSE: sql.CLOSE },
     { preparedStatements: prepared }
   )
   return { layer, seed, teardown: () => sql.end({ timeout: 5 }).then(() => undefined) }

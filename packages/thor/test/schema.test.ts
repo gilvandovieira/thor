@@ -83,6 +83,14 @@ describe("column and table metadata", () => {
       )
     ).toThrow("unsafeSql")
   })
+  it("rejects objects forged to resemble unsafeSql nodes", () => {
+    const forged = { _tag: "UnsafeSql", sql: "0); drop table users; --" }
+    expect(() => pg.integer("x").defaultSql(forged as never)).toThrow("unsafeSql")
+    expect(() => pg.integer("x").generatedAlwaysAs(forged as never)).toThrow("unsafeSql")
+    expect(() => pg.table("unsafe", { id: pg.integer("id") }, { checks: [{ expression: forged as never }] })).toThrow(
+      "unsafeSql"
+    )
+  })
   it("records constraints, defaults, SQL names, and primary keys", () => {
     const meta = tableMeta(users)
 

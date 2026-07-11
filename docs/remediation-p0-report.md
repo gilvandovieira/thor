@@ -77,9 +77,9 @@ full gate set (see [Validation](#validation)).
   reviewed; additive allowed; `disabled`/`validate-only` block all;
   contract-phase blocked under `expand-only`.
 - **Residual (documented):** Thor cannot infer safety from opaque SQL. An unmarked
-  manual migration is treated as author-trusted **additive** and passes
-  `safe-only`. Mark destructive migrations, or run under a reviewed policy, for
-  enforcement. See [limitations.md](./limitations.md#migrations).
+  manual migration is **unchecked** and blocked under `safe-only`/`expand-only`;
+  it requires `allow-reviewed-destructive` and a reviewed invocation. See
+  [limitations.md](./limitations.md#migrations).
 
 ### P0.5 — Optimize `.one()` / `.maybeOne()` cardinality — **CONFIRMED, fixed**
 
@@ -97,6 +97,10 @@ full gate set (see [Validation](#validation)).
 - **Tests:** `test/cardinality-probe.test.ts` — `LIMIT 2` emitted;
   `limit(0)`/`limit(1)` preserved; `limit(50)` capped; OFFSET kept;
   none/some/too-many; `.all()` uncapped.
+- **Later adversarial follow-up:** DML `RETURNING.one()`/`.maybeOne()` now passes
+  `maxRows: 2` through the driver contract; `returning-cardinality.test.ts`
+  covers insert/update/delete and direct/compiled/prepared paths. This bounds
+  returned-row consumption but does not roll back a mutation on cardinality error.
 
 ### P0.6 — Reject/normalize invalid public query shapes — **CONFIRMED, fixed**
 
