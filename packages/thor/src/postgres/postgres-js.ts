@@ -28,6 +28,8 @@ export interface PostgresJsResult extends ReadonlyArray<RawRow> {
 export interface PostgresJsPending extends PromiseLike<PostgresJsResult> {
   /** @returns The result executed through PostgreSQL's simple protocol. */
   simple: () => PromiseLike<PostgresJsResult>
+  /** @param rows - Requested batch size. @param callback - Batch consumer returning `CLOSE`. @returns Cursor completion. */
+  cursor?: (rows: number, callback: (rows: ReadonlyArray<RawRow>) => unknown) => PromiseLike<unknown>
 }
 
 /** postgres.js `unsafe` query options. */
@@ -37,6 +39,8 @@ export interface PostgresJsUnsafeOptions {
 
 /** The slice of a postgres.js `sql` instance Thor needs. */
 export interface PostgresJsClient {
+  /** postgres.js early-cursor-close token. */
+  readonly CLOSE?: unknown
   /**
    * @param query - SQL text.
    * @param params - Optional positional values.
@@ -69,6 +73,37 @@ const call = (
   params.length > 0 ? client.unsafe(sql, params, prepared ? { prepare: true } : undefined) : client.unsafe(sql).simple()
 
 /**
+ * Reads at most `maxRows` through a postgres.js cursor and closes immediately.
+ * Missing cursor support rejects instead of silently materializing an unbounded
+ * DML `RETURNING` result.
+ *
+ * @param client - Structural postgres.js client.
+ * @param sql - SQL text.
+ * @param params - Positional values.
+ * @param prepared - Whether postgres.js may prepare the query.
+ * @param maxRows - Hard row-read bound.
+ * @returns At most `maxRows` rows.
+ */
+const callBounded = async (
+  client: PostgresJsClient,
+  sql: string,
+  params: ReadonlyArray<unknown>,
+  prepared: boolean,
+  maxRows: number
+): Promise<ReadonlyArray<RawRow>> => {
+  const pending = client.unsafe(sql, params, prepared ? { prepare: true } : undefined)
+  if (!pending.cursor || client.CLOSE === undefined) {
+    throw new TypeError("postgres.js bounded row probes require the cursor API and CLOSE token")
+  }
+  const rows: RawRow[] = []
+  await pending.cursor(maxRows, (batch) => {
+    rows.push(...batch.slice(0, maxRows - rows.length))
+    return client.CLOSE
+  })
+  return rows
+}
+
+/**
  * @param client - Structural postgres.js client.
  * @returns A Thor PostgreSQL driver.
  */
@@ -78,11 +113,15 @@ export const makePostgresJsDriver = (client: PostgresJsClient): Driver => {
     runtime: PostgresJsDriverRuntime,
     preparedScope: client,
     query: (sql, params, name, maxRows) =>
-      Effect.tryPromise({ try: () => call(client, sql, params, name !== undefined), catch: mapDriverError }).pipe(
-        Effect.map((rows) => {
-          return (maxRows === undefined ? Array.from(rows) : rows.slice(0, maxRows)) as ReadonlyArray<RawRow>
-        })
-      ),
+      Effect.tryPromise({
+        try: () =>
+          maxRows === undefined
+            ? Promise.resolve(call(client, sql, params, name !== undefined)).then(
+                (rows): ReadonlyArray<RawRow> => Array.from(rows)
+              )
+            : callBounded(client, sql, params, name !== undefined, maxRows),
+        catch: mapDriverError
+      }),
     execute: (sql, params, name) =>
       Effect.tryPromise({ try: () => call(client, sql, params, name !== undefined), catch: mapDriverError }).pipe(
         Effect.map((res): CommandResult => ({ rowCount: res.count ?? res.length ?? 0 }))

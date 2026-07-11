@@ -26,6 +26,12 @@ equivalent and MySQL DDL is not transactionally rollback-safe. The matrix is the
 source of truth; documentation should not infer support from database syntax
 alone.
 
+For postgres.js, structural wrappers should expose `unsafe` and the client's
+`CLOSE` token. Thor uses `unsafe(...).cursor(2, ...)` for bounded DML
+`RETURNING.one()`/`.maybeOne()` probes; wrappers without cursor/`CLOSE` support
+fail that terminal instead of materializing rows. node-postgres uses its query
+row bound for the same contract.
+
 ## Isolation rule
 
 Shared query IR and guards contain logical operations and capability bits, not

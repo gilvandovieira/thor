@@ -23,6 +23,33 @@ describe("query dialect independence", () => {
     expect(makePostgresJsDriver(client).preparedScope).toBe(client)
   })
 
+  it("uses a postgres.js cursor for bounded row probes and rejects clients without it", async () => {
+    const close = Symbol("close")
+    let requested = 0
+    let consumed = 0
+    const result = Object.assign([], { count: 0 })
+    const pending = Object.assign(Promise.resolve(result), {
+      simple: () => Promise.resolve(result),
+      cursor: async (size: number, callback: (rows: ReadonlyArray<Record<string, unknown>>) => unknown) => {
+        requested = size
+        const rows = Array.from({ length: size }, (_, id) => ({ id }))
+        consumed += rows.length
+        expect(callback(rows)).toBe(close)
+      }
+    })
+    const bounded = makePostgresJsDriver({ unsafe: () => pending, CLOSE: close })
+    const rows = await Effect.runPromise(bounded.query("insert returning id", [], "bounded", 2))
+    expect(rows).toHaveLength(2)
+    expect({ requested, consumed }).toEqual({ requested: 2, consumed: 2 })
+
+    const unsupported = makePostgresJsDriver({
+      unsafe: () => Object.assign(Promise.resolve(result), { simple: () => Promise.resolve(result) })
+    })
+    const exit = await Effect.runPromiseExit(unsupported.query("insert returning id", [], "bounded", 2))
+    expect(Exit.isFailure(exit)).toBe(true)
+    expect(JSON.stringify(exit)).toContain("cursor API")
+  })
+
   it("dispatches placeholder and comparison syntax through the selected dialect", () => {
     const query = db
       .select({ id: users.id })
