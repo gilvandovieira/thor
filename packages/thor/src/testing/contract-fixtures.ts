@@ -22,6 +22,6 @@ export const SQLITE_FEATURE_RESET = [
   "create table posts (id text primary key default (lower(hex(randomblob(16)))), user_id text not null, title text not null)",
   "insert into posts (id, user_id, title) values ('p1', 'u1', 'Hello')",
   "drop table if exists typed",
-  "create table typed (id text primary key, active integer not null, score integer not null, ratio real not null, at text not null, \"on\" text not null, meta text not null)",
+  'create table typed (id text primary key, active integer not null, score integer not null, ratio real not null, at text not null, "on" text not null, meta text not null)',
   "insert into typed (id, active, score, ratio, at, \"on\", meta) values ('t1', 1, 42, 1.5, '2026-01-01T00:00:00.000Z', '2026-07-10', '{\"role\":\"admin\"}')"
 ] as const

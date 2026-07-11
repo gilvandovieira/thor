@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { Effect, Schema } from "effect"
-import { Database, db, eq, param, pg } from "@gilvandovieira/thor"
+import { type Database, db, eq, param, pg } from "@gilvandovieira/thor"
 import { FakeDatabaseLayer, FakeDriver } from "@gilvandovieira/thor/testing"
 
 const users = pg.table("users", {
@@ -14,7 +14,10 @@ const run = <A, E>(effect: Effect.Effect<A, E, Database>, driver: FakeDriver, pr
 describe("prepared-statement naming (spec §16)", () => {
   it("names parameterized statements with the stable compiled cacheKey", async () => {
     const driver = new FakeDriver().enqueue({ rows: [] })
-    const query = db.select({ id: users.id }).from(users).where(eq(users.email, param("email", Schema.String)))
+    const query = db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.email, param("email", Schema.String)))
 
     await run(query.all({ email: "a@example.com" }), driver)
 
@@ -31,7 +34,10 @@ describe("prepared-statement naming (spec §16)", () => {
 
   it("reuses one stable name across executions with different bound values", async () => {
     const driver = new FakeDriver().enqueue({ rows: [] }, { rows: [] })
-    const query = db.select({ id: users.id }).from(users).where(eq(users.email, param("email", Schema.String)))
+    const query = db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.email, param("email", Schema.String)))
 
     await run(query.all({ email: "a@example.com" }), driver)
     await run(query.all({ email: "b@example.com" }), driver)
@@ -43,7 +49,10 @@ describe("prepared-statement naming (spec §16)", () => {
 
   it("skips preparation entirely when preparedStatements is disabled", async () => {
     const driver = new FakeDriver().enqueue({ rows: [] })
-    const query = db.select({ id: users.id }).from(users).where(eq(users.email, param("email", Schema.String)))
+    const query = db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.email, param("email", Schema.String)))
 
     await run(query.all({ email: "a@example.com" }), driver, false)
 

@@ -24,7 +24,13 @@ const client = new DatabaseSync(":memory:")
 
 runSqlFeatureIntegration(api, {
   dialect: SQLiteDialect,
-  features: [...LEVEL_1_2_FEATURES, ...DATA_TYPE_FEATURES, ...TRANSACTION_DDL_FEATURES, ...ADVANCED_SQL_FEATURES, ...ROUTINE_SQL_FEATURES],
+  features: [
+    ...LEVEL_1_2_FEATURES,
+    ...DATA_TYPE_FEATURES,
+    ...TRANSACTION_DDL_FEATURES,
+    ...ADVANCED_SQL_FEATURES,
+    ...ROUTINE_SQL_FEATURES
+  ],
   layer: NodeSQLiteLayer(client),
   reset: SQLITE_FEATURE_RESET
 })

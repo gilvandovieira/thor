@@ -14,10 +14,12 @@ const matrices = [PostgresCapabilities, SQLiteCapabilities, MySQLCapabilities]
 const labels = { postgres: "PostgreSQL", sqlite: "SQLite", mysql: "MySQL 8" }
 const statuses = ["native", "emulated", "unsupported", "unknown"]
 const rows = matrices.map((matrix) => {
-  const counts = Object.fromEntries(statuses.map((status) => [
-    status,
-    ALL_CAPABILITIES.filter((capability) => statusOf(matrix, capability) === status).length
-  ]))
+  const counts = Object.fromEntries(
+    statuses.map((status) => [
+      status,
+      ALL_CAPABILITIES.filter((capability) => statusOf(matrix, capability) === status).length
+    ])
+  )
   return `| ${labels[matrix.dialect]} | ${counts.native} | ${counts.emulated} | ${counts.unsupported} | ${counts.unknown} |`
 })
 const generated = [
@@ -35,7 +37,8 @@ if (!pattern.test(current)) throw new Error("README is missing generated capabil
 const next = current.replace(pattern, generated)
 
 if (process.argv.includes("--check")) {
-  if (next !== current) throw new Error("README capability summary is stale; run node scripts/generate-capabilities.mjs")
+  if (next !== current)
+    throw new Error("README capability summary is stale; run node scripts/generate-capabilities.mjs")
   process.stdout.write("Generated capability summary is current.\n")
 } else {
   writeFileSync(path, next)

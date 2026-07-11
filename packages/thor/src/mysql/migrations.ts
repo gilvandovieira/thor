@@ -112,7 +112,7 @@ export const compileMySQLOperation = (operation: MigrationOperation): string => 
           column.unique ? "unique" : "",
           column.default ? `default ${mysqlDefault(column.default)}` : ""
         ]
-        return "  " + parts.filter(Boolean).join(" ")
+        return `  ${parts.filter(Boolean).join(" ")}`
       })
       if (operation.primaryKey.length > 0) {
         columns.push(`  primary key (${operation.primaryKey.map(quote).join(", ")})`)

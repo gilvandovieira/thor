@@ -92,12 +92,22 @@ for (const file of sourceFiles) {
       checkExportedDeclaration(source, statement)
       for (const declaration of statement.declarationList.declarations) {
         const name = declaration.name.getText(source)
-        if (declaration.initializer && (ts.isArrowFunction(declaration.initializer) || ts.isFunctionExpression(declaration.initializer))) {
+        if (
+          declaration.initializer &&
+          (ts.isArrowFunction(declaration.initializer) || ts.isFunctionExpression(declaration.initializer))
+        ) {
           checkCallable(source, statement, declaration.initializer, name)
         }
-        if (declaration.initializer && ts.isObjectLiteralExpression(declaration.initializer) && hasModifier(statement, ts.SyntaxKind.ExportKeyword)) {
+        if (
+          declaration.initializer &&
+          ts.isObjectLiteralExpression(declaration.initializer) &&
+          hasModifier(statement, ts.SyntaxKind.ExportKeyword)
+        ) {
           for (const property of declaration.initializer.properties) {
-            if (ts.isPropertyAssignment(property) && (ts.isArrowFunction(property.initializer) || ts.isFunctionExpression(property.initializer))) {
+            if (
+              ts.isPropertyAssignment(property) &&
+              (ts.isArrowFunction(property.initializer) || ts.isFunctionExpression(property.initializer))
+            ) {
               checkCallable(source, property, property.initializer, `${name}.${property.name.getText(source)}`)
             } else if (ts.isMethodDeclaration(property)) {
               checkCallable(source, property, property, `${name}.${property.name.getText(source)}`)
@@ -117,7 +127,9 @@ for (const file of sourceFiles) {
         } else if (ts.isGetAccessorDeclaration(member)) {
           checkCallable(source, member, member, `${className}.${callableName(source, member, "getter")}`)
         } else if (ts.isSetAccessorDeclaration(member)) {
-          checkCallable(source, member, member, `${className}.${callableName(source, member, "setter")}`, { noReturn: true })
+          checkCallable(source, member, member, `${className}.${callableName(source, member, "setter")}`, {
+            noReturn: true
+          })
         }
       }
     }

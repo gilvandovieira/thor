@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, Exit, Layer, Schema, Tracer } from "effect"
+import { Cause, type Context, Effect, Exit, Layer, Schema, Tracer } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   Database,

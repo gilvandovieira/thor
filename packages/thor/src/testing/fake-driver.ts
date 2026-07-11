@@ -70,41 +70,40 @@ export class FakeDriver {
    * @returns A `Driver` view backed by this recorder and response queue.
    */
   get driver(): Driver {
-    const self = this
     return {
       runtime: FakeDriverRuntime,
       query: (sql, params, name) =>
         Effect.suspend(() => {
-          self.calls.push({ sql, params })
-          self.preparedNames.push(name)
-          const result = self.next()
+          this.calls.push({ sql, params })
+          this.preparedNames.push(name)
+          const result = this.next()
           return result.error ? Effect.fail(result.error) : Effect.succeed(result.rows ?? [])
         }),
       execute: (sql, params, name) =>
         Effect.suspend(() => {
-          self.calls.push({ sql, params })
-          self.preparedNames.push(name)
-          const result = self.next()
+          this.calls.push({ sql, params })
+          this.preparedNames.push(name)
+          const result = this.next()
           return result.error
             ? Effect.fail(result.error)
             : Effect.succeed<CommandResult>({ rowCount: result.rowCount ?? result.rows?.length ?? 0 })
         }),
       executeScript: (sql) =>
         Effect.suspend(() => {
-          self.calls.push({ sql, params: [] })
-          self.preparedNames.push(undefined)
-          const result = self.next()
+          this.calls.push({ sql, params: [] })
+          this.preparedNames.push(undefined)
+          const result = this.next()
           return result.error
             ? Effect.fail(result.error)
             : Effect.succeed<CommandResult>({ rowCount: result.rowCount ?? result.rows?.length ?? 0 })
         }),
       releasePrepared: (name) =>
         Effect.sync(() => {
-          self.releasedPreparedNames.push(name)
+          this.releasedPreparedNames.push(name)
         }),
       clearPrepared: () =>
         Effect.sync(() => {
-          self.clearedPrepared++
+          this.clearedPrepared++
         })
     }
   }

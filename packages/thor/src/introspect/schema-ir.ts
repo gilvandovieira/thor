@@ -71,9 +71,7 @@ export interface IntrospectedSchema {
 }
 
 /** Runs an introspection query and yields raw rows. */
-export type IntrospectionQuery = (
-  sql: string
-) => Effect.Effect<ReadonlyArray<RawRow>, DriverError | ConstraintError>
+export type IntrospectionQuery = (sql: string) => Effect.Effect<ReadonlyArray<RawRow>, DriverError | ConstraintError>
 
 /**
  * Per-dialect introspection strategy (spec §16.4). Each dialect owns the SQL it
@@ -89,5 +87,7 @@ export interface DialectIntrospection {
    * @param query - Runner that executes a read-only SQL statement.
    * @returns The introspected schema.
    */
-  readonly currentSchema: (query: IntrospectionQuery) => Effect.Effect<IntrospectedSchema, DriverError | ConstraintError>
+  readonly currentSchema: (
+    query: IntrospectionQuery
+  ) => Effect.Effect<IntrospectedSchema, DriverError | ConstraintError>
 }

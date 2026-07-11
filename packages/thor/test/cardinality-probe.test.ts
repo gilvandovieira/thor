@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { Effect, Option } from "effect"
-import { Database, db, gt, pg } from "@gilvandovieira/thor"
+import { type Database, db, gt, pg } from "@gilvandovieira/thor"
 import { FakeDatabaseLayer, FakeDriver } from "@gilvandovieira/thor/testing"
 
 const users = pg.table("users", {

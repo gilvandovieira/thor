@@ -10,7 +10,7 @@
  *
  * @module sql/query-builder
  */
-import { Effect, Option, Schema } from "effect"
+import { Effect, type Option, Schema } from "effect"
 import type { Column } from "../schema/column.js"
 import { type AnyTable, TableMeta, tableMeta } from "../schema/table.js"
 import {
@@ -42,7 +42,7 @@ import { compilableEffect } from "../execution/compiled-query.js"
 import { withMode, withQueryCache } from "../execution/plan.js"
 import { withObservability } from "../observability/index.js"
 import { type Expr, type ParamsOf, SqlInputBrand, columnRef, isColumn } from "./expressions.js"
-import { type ExpressionInput } from "./advanced-expressions.js"
+import type { ExpressionInput } from "./advanced-expressions.js"
 import { internIdentifier } from "../ir/identifiers.js"
 import { transaction } from "../execution/transaction.js"
 import {

@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { describe, expect, it } from "vitest"
-import { Database, db, pg } from "@gilvandovieira/thor"
+import { type Database, db, pg } from "@gilvandovieira/thor"
 import { defineFunction, defineProcedure } from "@gilvandovieira/thor/routine"
 import { FakeDatabaseLayer, FakeDriver } from "@gilvandovieira/thor/testing"
 

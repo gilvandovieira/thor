@@ -3,7 +3,6 @@ import { Effect } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   CapabilityError,
-  Database,
   MySQLDialect,
   PostgresDialect,
   SQLiteDialect,

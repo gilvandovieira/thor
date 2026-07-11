@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { Effect } from "effect"
-import { Database, db, eq, pg } from "@gilvandovieira/thor"
+import { type Database, db, eq, pg } from "@gilvandovieira/thor"
 import { FakeDatabaseLayer, FakeDriver } from "@gilvandovieira/thor/testing"
 
 // Object-typed column values whose shape imitates Thor's internal nodes

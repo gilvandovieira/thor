@@ -4,7 +4,14 @@
  * @module introspect/postgres
  */
 import { Effect } from "effect"
-import { type RawColumn, type RawForeignKey, type RawIndex, type RawPrimaryKey, assembleSchema, normalizeAction } from "./assemble.js"
+import {
+  type RawColumn,
+  type RawForeignKey,
+  type RawIndex,
+  type RawPrimaryKey,
+  assembleSchema,
+  normalizeAction
+} from "./assemble.js"
 import type { DialectIntrospection } from "./schema-ir.js"
 
 const TABLES =
@@ -95,6 +102,12 @@ export const PostgresIntrospection: DialectIntrospection = {
         unique: row.is_unique === true || row.is_unique === "t" || row.is_unique === 1
       }))
 
-      return assembleSchema(tableRows.map((row) => String(row.table_name)), columns, primaryKeys, foreignKeys, indexes)
+      return assembleSchema(
+        tableRows.map((row) => String(row.table_name)),
+        columns,
+        primaryKeys,
+        foreignKeys,
+        indexes
+      )
     })
 }

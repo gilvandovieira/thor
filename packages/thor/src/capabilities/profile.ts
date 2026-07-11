@@ -45,8 +45,5 @@ export const capabilityProfileHash = (matrix: CapabilityMatrix): string => {
  * @param matrix - Capability support declaration.
  * @returns Eight-character versioned dialect-profile hash.
  */
-export const dialectProfileHash = (
-  dialect: DialectId,
-  version: string,
-  matrix: CapabilityMatrix
-): string => hashString(`${dialect}:${version}:${capabilityProfileHash(matrix)}`)
+export const dialectProfileHash = (dialect: DialectId, version: string, matrix: CapabilityMatrix): string =>
+  hashString(`${dialect}:${version}:${capabilityProfileHash(matrix)}`)

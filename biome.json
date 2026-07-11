@@ -11,7 +11,10 @@
       "!**/dist",
       "!**/coverage",
       "!**/.generated",
-      "!**/scripts/hotpath-baselines"
+      "!**/scripts/hotpath-baselines",
+      "!**/*.tsbuildinfo",
+      "!**/prisma",
+      "!**/test-bun"
     ]
   },
   "formatter": {
@@ -33,7 +36,16 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true
+      "recommended": true,
+      "style": {
+        "noNonNullAssertion": "off"
+      },
+      "suspicious": {
+        "noExplicitAny": "off"
+      },
+      "complexity": {
+        "noBannedTypes": "off"
+      }
     }
   }
 }

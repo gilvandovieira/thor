@@ -114,7 +114,7 @@ export default defineMigration({
  * @returns Nothing.
  */
 const log = (msg: string): void => {
-  process.stdout.write(msg + "\n")
+  process.stdout.write(`${msg}\n`)
 }
 
 // --- commands ----------------------------------------------------------------
@@ -127,7 +127,7 @@ const log = (msg: string): void => {
 export const init = (cwd: string): void => {
   const cfg = defaultConfig
   const configPath = join(cwd, CONFIG_FILE)
-  if (!existsSync(configPath)) writeFileSync(configPath, JSON.stringify(cfg, null, 2) + "\n")
+  if (!existsSync(configPath)) writeFileSync(configPath, `${JSON.stringify(cfg, null, 2)}\n`)
   mkdirSync(join(cwd, cfg.migrationsDir, "meta"), { recursive: true })
   const jPath = journalPath(cwd, cfg)
   if (!existsSync(jPath)) writeFileSync(jPath, "[]\n")
@@ -437,7 +437,7 @@ export const inspect = async (cwd: string, args: ReadonlyArray<string>): Promise
  */
 export const pull = async (cwd: string): Promise<void> => {
   const schema = await currentSchema(cwd)
-  writeFileSync(join(cwd, "thor.introspected.json"), JSON.stringify(schema, null, 2) + "\n")
+  writeFileSync(join(cwd, "thor.introspected.json"), `${JSON.stringify(schema, null, 2)}\n`)
   log(`Wrote thor.introspected.json (${schema.tables.length} table(s))`)
 }
 

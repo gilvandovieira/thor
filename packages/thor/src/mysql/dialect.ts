@@ -53,7 +53,10 @@ export const MySQLDialect: Dialect = {
     begin: (options) => {
       const statements: Array<{ readonly sql: string; readonly phase: string }> = []
       if (options.isolationLevel) {
-        statements.push({ sql: `set transaction isolation level ${isolationSql(options.isolationLevel)}`, phase: "set isolation" })
+        statements.push({
+          sql: `set transaction isolation level ${isolationSql(options.isolationLevel)}`,
+          phase: "set isolation"
+        })
       }
       const mode = options.accessMode ? ` ${options.accessMode.replace("-", " ")}` : ""
       statements.push({ sql: `start transaction${mode}`, phase: "begin" })

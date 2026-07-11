@@ -113,7 +113,10 @@ describe("Level 9 routine query integration", () => {
       effects: { mutates: [], idempotency: "unknown", requiresTransaction: false }
     })
     const effects = [
-      db.select({ value: scalar(users.score) }).from(users).all(),
+      db
+        .select({ value: scalar(users.score) })
+        .from(users)
+        .all(),
       procedure.call({}).run()
     ]
 
@@ -131,9 +134,7 @@ describe("Level 9 routine query integration", () => {
 describe("Epic R2 — declared functions as window functions (§14.2)", () => {
   it("applies a declared aggregate over a window, capability-gated", () => {
     const total = defineAggregateFunction("total_score", { args: [integerArg], returns: integerArg })
-    const query = db
-      .select({ id: users.id, running: total(users.score).over({ partitionBy: [users.id] }) })
-      .from(users)
+    const query = db.select({ id: users.id, running: total(users.score).over({ partitionBy: [users.id] }) }).from(users)
 
     expect(query.toSql(PostgresDialect).sql.toLowerCase()).toContain('over (partition by "users"."id")')
     // Windowing adds select.windowFunctions on top of the routine capability.
@@ -147,7 +148,10 @@ describe("Epic R2 — declared functions as window functions (§14.2)", () => {
     const driver = new FakeDriver().enqueue({ rows: [{ id: "u1", running: 3 }] })
     const rows = await Effect.runPromise(
       Effect.provide(
-        db.select({ id: users.id, running: total(users.score).over() }).from(users).all(),
+        db
+          .select({ id: users.id, running: total(users.score).over() })
+          .from(users)
+          .all(),
         FakeDatabaseLayer(driver, { dialect: PostgresDialect })
       )
     )

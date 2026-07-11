@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest"
-import { SKILLS, installSkillFiles, skillDocument, skillFiles, skillManifest, skillSlug } from "@gilvandovieira/thor/skills"
+import {
+  SKILLS,
+  installSkillFiles,
+  skillDocument,
+  skillFiles,
+  skillManifest,
+  skillSlug
+} from "@gilvandovieira/thor/skills"
 
 const REQUIRED = [
   "thor.schema",
@@ -100,7 +107,9 @@ describe("npx skills installable format (§20.5)", () => {
 
 describe("Epic U5 — LLM usage invariant (§21.6)", () => {
   it("encodes the capability-checking and no-raw-interpolation safety rules", () => {
-    const all = SKILLS.map((skill) => skill.content).join("\n").toLowerCase()
+    const all = SKILLS.map((skill) => skill.content)
+      .join("\n")
+      .toLowerCase()
     // Prefer declared APIs, check capabilities, never interpolate user input.
     expect(all).toContain("check dialect capability")
     expect(all).toContain("never interpolate user input into raw sql")

@@ -87,12 +87,12 @@ const normalizeSource = (source: QuerySource): QuerySource =>
     ? Object.freeze({ ...source, query: normalizeQuery(source.query) as SelectIR })
     : "_tag" in source && source._tag === "TableFunctionSource"
       ? Object.freeze({
-           ...source,
-           args: Object.freeze(source.args.map(normalizeExpression)),
-           argTypes: Object.freeze([...source.argTypes]),
-           columns: Object.freeze([...source.columns])
+          ...source,
+          args: Object.freeze(source.args.map(normalizeExpression)),
+          argTypes: Object.freeze([...source.argTypes]),
+          columns: Object.freeze([...source.columns])
         })
-    : Object.freeze({ ...source })
+      : Object.freeze({ ...source })
 
 /**
  * @param fields - Selected fields to normalize.
@@ -123,28 +123,46 @@ export const normalizeQuery = (ir: QueryIR): QueryIR => {
         ...ir,
         from: normalizeSource(ir.from),
         selection: normalizeSelection(ir.selection),
-        ...(ir.ctes ? {
-          ctes: Object.freeze(ir.ctes.map((cte) => Object.freeze({
-            ...cte,
-            query: normalizeQuery(cte.query) as SelectIR
-          })))
-        } : {}),
-        ...(ir.joins ? {
-          joins: Object.freeze(ir.joins.map((join) => Object.freeze({
-            ...join,
-            source: normalizeSource(join.source),
-            ...(join.on ? { on: normalizeExpression(join.on) } : {})
-          })))
-        } : {}),
+        ...(ir.ctes
+          ? {
+              ctes: Object.freeze(
+                ir.ctes.map((cte) =>
+                  Object.freeze({
+                    ...cte,
+                    query: normalizeQuery(cte.query) as SelectIR
+                  })
+                )
+              )
+            }
+          : {}),
+        ...(ir.joins
+          ? {
+              joins: Object.freeze(
+                ir.joins.map((join) =>
+                  Object.freeze({
+                    ...join,
+                    source: normalizeSource(join.source),
+                    ...(join.on ? { on: normalizeExpression(join.on) } : {})
+                  })
+                )
+              )
+            }
+          : {}),
         ...(ir.where ? { where: normalizeExpression(ir.where) } : {}),
         ...(ir.groupBy ? { groupBy: Object.freeze(ir.groupBy.map(normalizeExpression)) } : {}),
         ...(ir.having ? { having: normalizeExpression(ir.having) } : {}),
-        ...(ir.setOperations ? {
-          setOperations: Object.freeze(ir.setOperations.map((operation) => Object.freeze({
-            ...operation,
-            query: normalizeQuery(operation.query) as SelectIR
-          })))
-        } : {}),
+        ...(ir.setOperations
+          ? {
+              setOperations: Object.freeze(
+                ir.setOperations.map((operation) =>
+                  Object.freeze({
+                    ...operation,
+                    query: normalizeQuery(operation.query) as SelectIR
+                  })
+                )
+              )
+            }
+          : {}),
         orderBy: Object.freeze(
           ir.orderBy.map((term) => Object.freeze({ ...term, expr: normalizeExpression(term.expr) }))
         )
@@ -154,19 +172,23 @@ export const normalizeQuery = (ir: QueryIR): QueryIR => {
       normalized = Object.freeze({
         ...ir,
         columns: Object.freeze([...ir.columns]),
-        rows: Object.freeze(
-          ir.rows.map((row) => Object.freeze(row.map(normalizeExpression)))
-        ),
-        ...(ir.conflict ? {
-          conflict: Object.freeze({
-            ...ir.conflict,
-            ...(ir.conflict.kind === "onConflict" ? { target: Object.freeze([...ir.conflict.target]) } : {}),
-            set: Object.freeze(ir.conflict.set.map((assignment) => Object.freeze({
-              ...assignment,
-              value: normalizeExpression(assignment.value)
-            })))
-          })
-        } : {}),
+        rows: Object.freeze(ir.rows.map((row) => Object.freeze(row.map(normalizeExpression)))),
+        ...(ir.conflict
+          ? {
+              conflict: Object.freeze({
+                ...ir.conflict,
+                ...(ir.conflict.kind === "onConflict" ? { target: Object.freeze([...ir.conflict.target]) } : {}),
+                set: Object.freeze(
+                  ir.conflict.set.map((assignment) =>
+                    Object.freeze({
+                      ...assignment,
+                      value: normalizeExpression(assignment.value)
+                    })
+                  )
+                )
+              })
+            }
+          : {}),
         ...(ir.returning ? { returning: normalizeSelection(ir.returning) } : {})
       })
       break
@@ -174,9 +196,7 @@ export const normalizeQuery = (ir: QueryIR): QueryIR => {
       normalized = Object.freeze({
         ...ir,
         set: Object.freeze(
-          ir.set.map((assignment) =>
-            Object.freeze({ ...assignment, value: normalizeExpression(assignment.value) })
-          )
+          ir.set.map((assignment) => Object.freeze({ ...assignment, value: normalizeExpression(assignment.value) }))
         ),
         ...(ir.where ? { where: normalizeExpression(ir.where) } : {}),
         ...(ir.returning ? { returning: normalizeSelection(ir.returning) } : {})

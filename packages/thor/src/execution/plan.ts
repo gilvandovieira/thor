@@ -39,8 +39,7 @@ export type CanonicalExecutionMode = "safe" | "trusted" | "unsafe-hot"
  * @param mode - Requested execution mode.
  * @returns The canonical execution mode.
  */
-export const normalizeMode = (mode: ExecutionMode): CanonicalExecutionMode =>
-  mode === "unsafe" ? "unsafe-hot" : mode
+export const normalizeMode = (mode: ExecutionMode): CanonicalExecutionMode => (mode === "unsafe" ? "unsafe-hot" : mode)
 
 /** How strictly decoded rows are validated. */
 export type DecodeMode = "strict" | "trusted"
@@ -104,11 +103,14 @@ export const withMode = (
 ): Layer.Layer<Database> =>
   Layer.effect(
     Database,
-    Effect.map(Database, (db): DatabaseService => ({
-      ...db,
-      mode: normalizeMode(mode),
-      decodeMode: resolveDecodeMode(mode, decodeMode)
-    }))
+    Effect.map(
+      Database,
+      (db): DatabaseService => ({
+        ...db,
+        mode: normalizeMode(mode),
+        decodeMode: resolveDecodeMode(mode, decodeMode)
+      })
+    )
   ).pipe(Layer.provide(layer))
 
 /**

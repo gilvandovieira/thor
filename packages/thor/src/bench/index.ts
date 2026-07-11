@@ -25,7 +25,10 @@ const results = [
     db.select({ id: users.id, email: users.email }).from(users).where(eq(users.email, emailParam)).limit(1)
   }),
   bench("compile:select-where", () => {
-    db.select({ id: users.id, email: users.email }).from(users).where(eq(users.email, emailParam)).toSql(PostgresDialect)
+    db.select({ id: users.id, email: users.email })
+      .from(users)
+      .where(eq(users.email, emailParam))
+      .toSql(PostgresDialect)
   }),
   bench("build:insert", () => {
     db.insert(users).values({ email: "a@b.c", name: "A" }).returning({ id: users.id })
@@ -40,13 +43,17 @@ const results = [
     db.select({ lowered: lowerRoutine(users.email) }).from(users)
   }),
   bench("compile:routine", () => {
-    db.select({ lowered: lowerRoutine(users.email) }).from(users).toSql(PostgresDialect)
+    db.select({ lowered: lowerRoutine(users.email) })
+      .from(users)
+      .toSql(PostgresDialect)
   })
 ]
 
 // eslint-disable-next-line no-console
-console.log("\nThor query-building microbenchmarks (Postgres)\n" + "-".repeat(105))
-console.log("Smaller time is faster. Typical = median of 5 samples; range = fastest–slowest. 1 µs is one millionth of a second.\n")
+console.log(`\nThor query-building microbenchmarks (Postgres)\n${"-".repeat(105)}`)
+console.log(
+  "Smaller time is faster. Typical = median of 5 samples; range = fastest–slowest. 1 µs is one millionth of a second.\n"
+)
 for (const r of results) console.log(formatResult(r))
 console.log("\nThese measure in-memory query construction and SQL compilation, not database or network time.")
 console.log()

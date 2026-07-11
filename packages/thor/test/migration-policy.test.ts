@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { Effect, Exit, Layer } from "effect"
-import { Database, type Driver, DriverError, type RawRow } from "@gilvandovieira/thor"
+import { Database, type Driver, type DriverError, type RawRow } from "@gilvandovieira/thor"
 import { PostgresDialect } from "@gilvandovieira/thor/postgres"
 import {
   type AutoMigrationPolicy,

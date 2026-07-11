@@ -9,7 +9,7 @@
  */
 import { Effect } from "effect"
 import { GuardError, type QueryError } from "../errors/index.js"
-import { Database } from "../execution/database.js"
+import type { Database } from "../execution/database.js"
 import { type AnyColumn, columnParamCodec } from "../schema/column.js"
 import { alias, type AnyTable, type Select, type Table, tableMeta } from "../schema/table.js"
 import type { ExprNode } from "../ir/query-ir.js"

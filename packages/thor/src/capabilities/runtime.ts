@@ -148,10 +148,8 @@ export const detectRuntimeCapabilities = (
  * @param capability - Required capability.
  * @returns `true` when the capability is available.
  */
-export const hasRuntimeCapability = (
-  profile: RuntimeCapabilityProfile,
-  capability: RuntimeCapability
-): boolean => profile.capabilities.has(capability)
+export const hasRuntimeCapability = (profile: RuntimeCapabilityProfile, capability: RuntimeCapability): boolean =>
+  profile.capabilities.has(capability)
 
 /**
  * Finds every adapter requirement absent from a runtime profile.

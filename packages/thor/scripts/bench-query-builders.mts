@@ -22,7 +22,8 @@ import { PrismaClient } from "../.generated/prisma/client.ts"
 const samples = Number(process.env.BENCH_SAMPLES ?? 5)
 const iterations = Number(process.env.BENCH_ITERATIONS ?? 20_000)
 if (!Number.isInteger(samples) || samples < 3) throw new Error("BENCH_SAMPLES must be an integer of at least 3")
-if (!Number.isInteger(iterations) || iterations < 1_000) throw new Error("BENCH_ITERATIONS must be an integer of at least 1,000")
+if (!Number.isInteger(iterations) || iterations < 1_000)
+  throw new Error("BENCH_ITERATIONS must be an integer of at least 1,000")
 
 interface Timing {
   readonly nsPerOp: number
@@ -192,7 +193,8 @@ const workloads: ReadonlyArray<Workload> = [
     name: "insert returning",
     explanation: "two values, return generated id",
     thor: () => thorDb.insert(thorUsers).values({ email: "a@b.c", name: "Ada" }).returning({ id: thorUsers.id }),
-    drizzle: () => drizzleDb.insert(drizzleUsers).values({ email: "a@b.c", name: "Ada" }).returning({ id: drizzleUsers.id }),
+    drizzle: () =>
+      drizzleDb.insert(drizzleUsers).values({ email: "a@b.c", name: "Ada" }).returning({ id: drizzleUsers.id }),
     prisma: () =>
       prisma.benchUser.create({
         data: { email: prismaEmail, name: "Ada" },
@@ -204,7 +206,10 @@ const workloads: ReadonlyArray<Workload> = [
     explanation: "group by email and count rows",
     thor: () => thorDb.select({ email: thorUsers.email, total: thorCount() }).from(thorUsers).groupBy(thorUsers.email),
     drizzle: () =>
-      drizzleDb.select({ email: drizzleUsers.email, total: drizzleCount() }).from(drizzleUsers).groupBy(drizzleUsers.email),
+      drizzleDb
+        .select({ email: drizzleUsers.email, total: drizzleCount() })
+        .from(drizzleUsers)
+        .groupBy(drizzleUsers.email),
     prisma: () => prisma.benchUser.groupBy({ by: ["email"], _count: { _all: true } })
   },
   {
@@ -284,11 +289,17 @@ console.log(
   `\nThor versus Drizzle ORM ${drizzlePackage.version} and Prisma ORM ${prismaPackage.version} — query construction, no database\n` +
     "-".repeat(142)
 )
-console.log(`Smaller is faster. Typical = median of ${samples} samples × ${iterations.toLocaleString("en-US")} operations; range = fastest–slowest.`)
-console.log("All toolkits use their normal public API and equivalent query intent. Results measure CPU work, not database speed.\n")
+console.log(
+  `Smaller is faster. Typical = median of ${samples} samples × ${iterations.toLocaleString("en-US")} operations; range = fastest–slowest.`
+)
+console.log(
+  "All toolkits use their normal public API and equivalent query intent. Results measure CPU work, not database speed.\n"
+)
 
 console.log("Public query/request construction")
-console.log("Prisma creates a lazy request here; its query engine and SQL generation do not run until the request is awaited.\n")
+console.log(
+  "Prisma creates a lazy request here; its query engine and SQL generation do not run until the request is awaited.\n"
+)
 console.log(
   `  ${"workload".padEnd(20)} ${"Thor".padStart(10)} ${"Thor range".padStart(19)} ${"Drizzle".padStart(10)} ${"Drizzle range".padStart(19)} ${"Prisma".padStart(10)} ${"Prisma range".padStart(19)} ${"Thor/Drizzle".padStart(14)} ${"Thor/Prisma".padStart(13)}`
 )
@@ -314,17 +325,29 @@ const buildPrismaRatio = geometricMean(buildComparisons.map((result) => result.t
 const sqlRatio = geometricMean(sqlComparisons.map((result) => result.ratio))
 
 console.log("\nIn everyday terms:")
-console.log(`  • Across these common shapes, Thor takes ${(buildDrizzleRatio * 100).toFixed(0)}% of Drizzle's builder-construction time.`)
+console.log(
+  `  • Across these common shapes, Thor takes ${(buildDrizzleRatio * 100).toFixed(0)}% of Drizzle's builder-construction time.`
+)
 console.log(`  • Thor takes ${(buildPrismaRatio * 100).toFixed(0)}% of Prisma's lazy request-construction time.`)
 console.log(`  • When SQL generation is included, Thor takes ${(sqlRatio * 100).toFixed(0)}% of Drizzle's time.`)
-console.log("  • No honest Prisma SQL-generation number is available without executing its engine against a database, so none is invented here.")
-console.log("  • A difference measured in microseconds will usually be dwarfed by a real database round-trip; this benchmark targets toolkit overhead.")
+console.log(
+  "  • No honest Prisma SQL-generation number is available without executing its engine against a database, so none is invented here."
+)
+console.log(
+  "  • A difference measured in microseconds will usually be dwarfed by a real database round-trip; this benchmark targets toolkit overhead."
+)
 console.log("  • Rerun before acting on a small difference, especially when the sample ranges overlap.\n")
 
 if (process.env.BENCH_SHOW_SQL) console.log(`SQL:${JSON.stringify(sqlExamples)}`)
 console.log(
   `JSON:${JSON.stringify({
-    environment: { node: process.versions.node, drizzle: drizzlePackage.version, prisma: prismaPackage.version, samples, iterations },
+    environment: {
+      node: process.versions.node,
+      drizzle: drizzlePackage.version,
+      prisma: prismaPackage.version,
+      samples,
+      iterations
+    },
     workloads: Object.fromEntries(workloads.map((workload) => [workload.name, workload.explanation])),
     comparisons
   })}`

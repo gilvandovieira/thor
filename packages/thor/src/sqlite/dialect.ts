@@ -64,10 +64,12 @@ export const SQLiteDialect: Dialect = {
       ) {
         throw new TransactionError({ message: `SQLite does not support ${options.isolationLevel} isolation` })
       }
-      return [{
-        sql: options.beginMode ? `begin ${options.beginMode}` : (SQLiteMigrations.beginTransaction ?? "begin"),
-        phase: "begin"
-      }]
+      return [
+        {
+          sql: options.beginMode ? `begin ${options.beginMode}` : (SQLiteMigrations.beginTransaction ?? "begin"),
+          phase: "begin"
+        }
+      ]
     }
   },
   migrations: SQLiteMigrations

@@ -9,11 +9,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { DatabaseSync } from "node:sqlite"
 import { NodeSQLiteDriverRuntime, RuntimeSQLiteLayer, SQLiteDialect } from "@gilvandovieira/thor/sqlite"
-import {
-  SQLITE_CONTRACT_RESET,
-  type ContractTestApi,
-  makeDialectContractSuite
-} from "@gilvandovieira/thor/testing"
+import { SQLITE_CONTRACT_RESET, type ContractTestApi, makeDialectContractSuite } from "@gilvandovieira/thor/testing"
 
 const api: ContractTestApi = { describe, it, beforeAll, afterAll, beforeEach, expect: expect as never }
 

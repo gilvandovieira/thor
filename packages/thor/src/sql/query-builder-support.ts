@@ -9,7 +9,7 @@
  *
  * @module sql/query-builder-support
  */
-import { Effect, Option, Schema } from "effect"
+import { Effect, type Option, Schema } from "effect"
 import { type AnyColumn, type Column, columnParamCodec } from "../schema/column.js"
 import { type AnyTable, tableMeta } from "../schema/table.js"
 import {

@@ -106,6 +106,8 @@ const buildLeaf = (leaf: PredicateLeaf): ExprNode => {
           return gt(fuzzRows.score, leaf.value)
         case ">=":
           return gte(fuzzRows.score, leaf.value)
+        default:
+          throw new Error(`unhandled numeric op ${leaf.op}`)
       }
     case "text":
       switch (leaf.op) {
@@ -117,6 +119,8 @@ const buildLeaf = (leaf: PredicateLeaf): ExprNode => {
           return like(fuzzRows.email, leaf.value)
         case "ilike":
           return ilike(fuzzRows.email, leaf.value)
+        default:
+          throw new Error(`unhandled text op ${leaf.op}`)
       }
     case "named":
       return eq(fuzzRows.score, param(leaf.name, Schema.Number))
@@ -237,6 +241,8 @@ const joinIrArbitrary: fc.Arbitrary<QueryIR> = fc
         return base.rightJoin(posts, on).ir
       case "full":
         return base.fullJoin(posts, on).ir
+      default:
+        throw new Error(`unhandled join type ${type}`)
     }
   })
 

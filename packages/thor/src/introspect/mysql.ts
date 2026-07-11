@@ -7,7 +7,14 @@
  * @module introspect/mysql
  */
 import { Effect } from "effect"
-import { type RawColumn, type RawForeignKey, type RawIndex, type RawPrimaryKey, assembleSchema, normalizeAction } from "./assemble.js"
+import {
+  type RawColumn,
+  type RawForeignKey,
+  type RawIndex,
+  type RawPrimaryKey,
+  assembleSchema,
+  normalizeAction
+} from "./assemble.js"
 import type { DialectIntrospection } from "./schema-ir.js"
 
 const TABLES =
@@ -85,6 +92,12 @@ export const MySQLIntrospection: DialectIntrospection = {
         unique: Number(row.non_unique) === 0
       }))
 
-      return assembleSchema(tableRows.map((row) => String(row.table_name)), columns, primaryKeys, foreignKeys, indexes)
+      return assembleSchema(
+        tableRows.map((row) => String(row.table_name)),
+        columns,
+        primaryKeys,
+        foreignKeys,
+        indexes
+      )
     })
 }

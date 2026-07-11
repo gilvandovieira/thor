@@ -9,7 +9,7 @@
  *
  * @module sql/mutation-builder
  */
-import { Effect, Option } from "effect"
+import { Effect, type Option } from "effect"
 import { type AnyColumn, columnParamCodec } from "../schema/column.js"
 import { type AnyTable, type Insert as InsertInput, type Update as UpdateInput, tableMeta } from "../schema/table.js"
 import {
@@ -85,7 +85,7 @@ type InputParams<T> = T extends ReadonlyArray<infer R>
  * @throws {ParameterError} When the key is unknown or targets a generated column.
  */
 const resolveWritableColumn = (meta: ReturnType<typeof tableMeta>, key: string): AnyColumn => {
-  if (!Object.prototype.hasOwnProperty.call(meta.columns, key)) {
+  if (!Object.hasOwn(meta.columns, key)) {
     throw new ParameterError({
       parameter: key,
       reason: "extra",
@@ -159,7 +159,7 @@ const canonicalizeInsertRows = (
     // Project into canonical order by key; reject rows missing a canonical column.
     return keyColumns.map((column, k) => {
       const key = keys[k] as string
-      if (!Object.prototype.hasOwnProperty.call(row, key)) {
+      if (!Object.hasOwn(row, key)) {
         throw new ParameterError({
           parameter: key,
           reason: "missing",

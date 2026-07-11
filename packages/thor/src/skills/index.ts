@@ -528,26 +528,25 @@ export const skillFiles = (format: SkillExportFormat = "md"): ReadonlyArray<Skil
     return [
       {
         path: "thor/skills.json",
-        content:
-          JSON.stringify(
-            {
-              ...skillManifest(),
-              skills: SKILLS.map((skill) => ({
-                id: skill.id,
-                file: skill.file,
-                description: skill.description,
-                content: skill.content
-              }))
-            },
-            null,
-            2
-          ) + "\n"
+        content: `${JSON.stringify(
+          {
+            ...skillManifest(),
+            skills: SKILLS.map((skill) => ({
+              id: skill.id,
+              file: skill.file,
+              description: skill.description,
+              content: skill.content
+            }))
+          },
+          null,
+          2
+        )}\n`
       }
     ]
   }
   return [
     { path: "thor/README.md", content: skillsReadme() },
-    { path: "thor/manifest.json", content: JSON.stringify(skillManifest(), null, 2) + "\n" },
+    { path: "thor/manifest.json", content: `${JSON.stringify(skillManifest(), null, 2)}\n` },
     ...SKILLS.map((skill) => ({ path: `thor/${skill.file}`, content: skill.content }))
   ]
 }

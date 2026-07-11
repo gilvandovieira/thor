@@ -14,7 +14,7 @@ import { Effect, Option } from "effect"
 import type { QueryIR, SelectionField } from "../ir/query-ir.js"
 import { NotFoundError, type QueryError, TooManyRowsError } from "../errors/index.js"
 import type { CommandResult, CompiledStatement } from "./driver.js"
-import { type DatabaseService } from "./database.js"
+import type { DatabaseService } from "./database.js"
 import { DEFAULT_EXECUTION_MODE, resolveDecodeMode } from "./plan.js"
 import { observeQuery } from "../observability/index.js"
 import {

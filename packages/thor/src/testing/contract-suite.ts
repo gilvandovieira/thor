@@ -148,7 +148,11 @@ export const makeDialectContractSuite = (api: ContractTestApi, options: DialectC
     Effect.runPromise(Effect.provide(effect, options.layer))
   // Raw SQL for fixtures and transaction control, portable across drivers.
   const script = (sql: string): Promise<unknown> =>
-    run(Effect.flatMap(Database, (d) => (d.driver.executeScript ? d.driver.executeScript(sql) : d.driver.execute(sql, []))))
+    run(
+      Effect.flatMap(Database, (d) =>
+        d.driver.executeScript ? d.driver.executeScript(sql) : d.driver.execute(sql, [])
+      )
+    )
 
   describe(`driver contract: ${options.name}`, () => {
     beforeAll(async () => {
@@ -202,10 +206,13 @@ export const makeDialectContractSuite = (api: ContractTestApi, options: DialectC
     })
 
     it("rolls failed transaction-scoped work back", async () => {
-      await run(Effect.either(db.transaction(Effect.zipRight(
-        db.insert(users).values({ email: "rb@example.com" }).run(),
-        Effect.fail("rollback")
-      ))))
+      await run(
+        Effect.either(
+          db.transaction(
+            Effect.zipRight(db.insert(users).values({ email: "rb@example.com" }).run(), Effect.fail("rollback"))
+          )
+        )
+      )
       const rows = await run(db.select({ email: users.email }).from(users).all())
       expect(rows).toEqual([])
     })
@@ -234,12 +241,21 @@ export const makeDialectContractSuite = (api: ContractTestApi, options: DialectC
     it("updates and deletes rows without RETURNING", async () => {
       await run(db.insert(users).values({ email: "plain@example.com", name: "Old" }).run())
       const updated = await run(
-        db.update(users).set({ name: "New" }).where(eq(users.email, param("email", Schema.String))).run({ email: "plain@example.com" })
+        db
+          .update(users)
+          .set({ name: "New" })
+          .where(eq(users.email, param("email", Schema.String)))
+          .run({ email: "plain@example.com" })
       )
       expect(updated.rowCount).toBe(1)
       const row = await run(db.select({ name: users.name }).from(users).one())
       expect(row).toEqual({ name: "New" })
-      const removed = await run(db.delete(users).where(eq(users.email, param("deleteEmail", Schema.String))).run({ deleteEmail: "plain@example.com" }))
+      const removed = await run(
+        db
+          .delete(users)
+          .where(eq(users.email, param("deleteEmail", Schema.String)))
+          .run({ deleteEmail: "plain@example.com" })
+      )
       expect(removed.rowCount).toBe(1)
       expect(await run(db.select({ email: users.email }).from(users).all())).toEqual([])
     })
@@ -247,10 +263,13 @@ export const makeDialectContractSuite = (api: ContractTestApi, options: DialectC
     if (supports("insert.onConflict")) {
       it("executes ON CONFLICT update semantics", async () => {
         await run(db.insert(users).values({ email: "conflict@example.com", name: "Old" }).run())
-        await run(db.insert(users)
-          .values({ email: "conflict@example.com", name: "New" })
-          .onConflictDoUpdate([users.email], { name: excluded(users.name) })
-          .run())
+        await run(
+          db
+            .insert(users)
+            .values({ email: "conflict@example.com", name: "New" })
+            .onConflictDoUpdate([users.email], { name: excluded(users.name) })
+            .run()
+        )
         expect(await run(db.select({ name: users.name }).from(users).one())).toEqual({ name: "New" })
       })
     }
@@ -258,10 +277,13 @@ export const makeDialectContractSuite = (api: ContractTestApi, options: DialectC
     if (supports("insert.onDuplicateKey")) {
       it("executes ON DUPLICATE KEY update semantics", async () => {
         await run(db.insert(users).values({ email: "duplicate@example.com", name: "Old" }).run())
-        await run(db.insert(users)
-          .values({ email: "duplicate@example.com", name: "New" })
-          .onDuplicateKeyUpdate({ name: excluded(users.name) })
-          .run())
+        await run(
+          db
+            .insert(users)
+            .values({ email: "duplicate@example.com", name: "New" })
+            .onDuplicateKeyUpdate({ name: excluded(users.name) })
+            .run()
+        )
         expect(await run(db.select({ name: users.name }).from(users).one())).toEqual({ name: "New" })
       })
     }
@@ -271,7 +293,11 @@ export const makeDialectContractSuite = (api: ContractTestApi, options: DialectC
     if (supports("insert.returning")) {
       it("insert ... returning decodes the inserted row", async () => {
         const row = await run(
-          db.insert(users).values({ email: "r@example.com", name: "Rae" }).returning({ email: users.email, name: users.name }).one()
+          db
+            .insert(users)
+            .values({ email: "r@example.com", name: "Rae" })
+            .returning({ email: users.email, name: users.name })
+            .one()
         )
         expect(row).toEqual({ email: "r@example.com", name: "Rae" })
       })

@@ -94,7 +94,7 @@ const samples: Sample[] = [
 
 const by = Object.fromEntries(samples.map((s) => [s.label, s.nsPerOp]))
 
-console.log("\nThor query-cache layers — Thor's cost only, with no database or network\n" + "-".repeat(100))
+console.log(`\nThor query-cache layers — Thor's cost only, with no database or network\n${"-".repeat(100)}`)
 console.log(timingLegend(samples[0]!.sampleCount))
 console.log(
   `  ${"path".padEnd(18)} ${"what it does".padEnd(38)} ${"typical".padStart(10)} ${"range".padStart(19)} ${"equivalent".padStart(17)}  consistency`

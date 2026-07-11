@@ -90,7 +90,9 @@ const providers: ReadonlyArray<Provider> = [
       try {
         const mod = (await import("better-sqlite3")) as {
           default?: new (path: string) => Client
-        } & (new (path: string) => Client)
+        } & (new (
+          path: string
+        ) => Client)
         const Ctor = (mod.default ?? mod) as new (path: string) => Client
         return () => new Ctor(":memory:")
       } catch {
@@ -181,7 +183,10 @@ if (available.length === 0) {
 const lines: Line[] = []
 for (const { name, open } of available) lines.push(...(await benchDriver(name, open)))
 
-console.log(`\nThor over in-memory SQLite (runtime=${IS_BUN ? "bun" : "node"}) — a deliberately harsh stress test\n` + "-".repeat(116))
+console.log(
+  `\nThor over in-memory SQLite (runtime=${IS_BUN ? "bun" : "node"}) — a deliberately harsh stress test\n` +
+    "-".repeat(116)
+)
 console.log(timingLegend(lines[0]!.on.sampleCount))
 console.log("SQLite runs in this process with no network, so Thor's few microseconds are unusually visible.\n")
 console.log(
@@ -210,5 +215,9 @@ for (const l of points) {
 console.log(
   `  • Preparation uses ${formatTimeChange(points[0]!.off.nsPerOp, points[0]!.on.nsPerOp)} point-query time for ${points[0]!.driver} by avoiding repeated setup.`
 )
-console.log("  • This is close to a worst case for library overhead. A network database adds far more waiting time, shrinking Thor's percentage.")
-console.log("  • Compare the absolute time and the sample range; percentages alone can sound dramatic when the total is only a few microseconds.\n")
+console.log(
+  "  • This is close to a worst case for library overhead. A network database adds far more waiting time, shrinking Thor's percentage."
+)
+console.log(
+  "  • Compare the absolute time and the sample range; percentages alone can sound dramatic when the total is only a few microseconds.\n"
+)

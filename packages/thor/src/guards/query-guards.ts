@@ -9,7 +9,15 @@
 import type { CapabilityMatrix } from "../capabilities/matrix.js"
 import { bitsToCapabilities } from "../capabilities/capability.js"
 import { isSatisfied } from "../capabilities/matrix.js"
-import { queryCapabilityBits, type ColumnRefNode, type ExprNode, type QueryIR, type QuerySource, type SelectIR, type SelectionField } from "../ir/query-ir.js"
+import {
+  queryCapabilityBits,
+  type ColumnRefNode,
+  type ExprNode,
+  type QueryIR,
+  type QuerySource,
+  type SelectIR,
+  type SelectionField
+} from "../ir/query-ir.js"
 import { CapabilityError, GuardError } from "../errors/index.js"
 
 /** Structural or capability failure discovered before execution. */
@@ -239,7 +247,11 @@ const validateSelect = (ir: SelectIR, outerScope: ReadonlySet<string>, out: Guar
     validateSelect(ir.from.query, new Set(), out)
   }
   if ("_tag" in ir.from && ir.from._tag === "TableFunctionSource") {
-    checkScope(outerScope, ir.from.args.flatMap((arg) => columnRefsIn(arg)), out)
+    checkScope(
+      outerScope,
+      ir.from.args.flatMap((arg) => columnRefsIn(arg)),
+      out
+    )
     for (const arg of ir.from.args) visitSubqueries(arg, (query) => validateSelect(query, outerScope, out))
   }
   const localScope = new Set<string>(outerScope)
@@ -251,7 +263,11 @@ const validateSelect = (ir: SelectIR, outerScope: ReadonlySet<string>, out: Guar
     }
     if ("_tag" in join.source && join.source._tag === "TableFunctionSource") {
       const argumentScope = join.lateral ? localScope : new Set<string>()
-      checkScope(argumentScope, join.source.args.flatMap((arg) => columnRefsIn(arg)), out)
+      checkScope(
+        argumentScope,
+        join.source.args.flatMap((arg) => columnRefsIn(arg)),
+        out
+      )
       for (const arg of join.source.args) {
         visitSubqueries(arg, (query) => validateSelect(query, argumentScope, out))
       }
@@ -269,36 +285,44 @@ const validateSelect = (ir: SelectIR, outerScope: ReadonlySet<string>, out: Guar
     ...(ir.having ? [ir.having] : []),
     ...ir.orderBy.map((term) => term.expr)
   ]
-  checkScope(localScope, expressions.flatMap((expression) => columnRefsIn(expression)), out)
+  checkScope(
+    localScope,
+    expressions.flatMap((expression) => columnRefsIn(expression)),
+    out
+  )
   for (const expression of expressions) {
     visitSubqueries(expression, (query) => validateSelect(query, localScope, out))
   }
 
-  const aggregationActive = (ir.groupBy?.length ?? 0) > 0 ||
+  const aggregationActive =
+    (ir.groupBy?.length ?? 0) > 0 ||
     ir.selection.some((field) => containsAggregate(field.expr)) ||
     (ir.having ? containsAggregate(ir.having) : false)
   if (aggregationActive) {
     const grouped = new Set(
-      (ir.groupBy ?? []).flatMap((expression) => columnRefsIn(expression))
-        .map((ref) => `${ref.table}.${ref.column}`)
+      (ir.groupBy ?? []).flatMap((expression) => columnRefsIn(expression)).map((ref) => `${ref.table}.${ref.column}`)
     )
     const checked = [...ir.selection.map((field) => field.expr), ...(ir.having ? [ir.having] : [])]
     for (const ref of checked.flatMap((expression) => unaggregatedRefsIn(expression))) {
       if (!grouped.has(`${ref.table}.${ref.column}`)) {
-        out.push(new GuardError({
-          guard: "aggregation-scope",
-          message: `Column "${ref.table}"."${ref.column}" must appear in groupBy or an aggregate`
-        }))
+        out.push(
+          new GuardError({
+            guard: "aggregation-scope",
+            message: `Column "${ref.table}"."${ref.column}" must appear in groupBy or an aggregate`
+          })
+        )
       }
     }
   }
 
   for (const operation of ir.setOperations ?? []) {
     if (operation.query.selection.length !== ir.selection.length) {
-      out.push(new GuardError({
-        guard: "set-operation-shape",
-        message: `Set operation has ${operation.query.selection.length} fields; expected ${ir.selection.length}`
-      }))
+      out.push(
+        new GuardError({
+          guard: "set-operation-shape",
+          message: `Set operation has ${operation.query.selection.length} fields; expected ${ir.selection.length}`
+        })
+      )
     }
     validateSelect(operation.query, outerScope, out)
   }
@@ -333,23 +357,29 @@ export const collectStructuralViolations = (ir: QueryIR): ReadonlyArray<GuardErr
       }
       if (ir.conflict?.kind === "onConflict" && ir.conflict.action === "update") {
         if (ir.conflict.target.length === 0) {
-          out.push(new GuardError({
-            guard: "insert-conflict-shape",
-            message: "ON CONFLICT DO UPDATE requires at least one target column"
-          }))
+          out.push(
+            new GuardError({
+              guard: "insert-conflict-shape",
+              message: "ON CONFLICT DO UPDATE requires at least one target column"
+            })
+          )
         }
         if (ir.conflict.set.length === 0) {
-          out.push(new GuardError({
-            guard: "insert-conflict-shape",
-            message: "ON CONFLICT DO UPDATE requires at least one assignment"
-          }))
+          out.push(
+            new GuardError({
+              guard: "insert-conflict-shape",
+              message: "ON CONFLICT DO UPDATE requires at least one assignment"
+            })
+          )
         }
       }
       if (ir.conflict?.kind === "onDuplicateKey" && ir.conflict.set.length === 0) {
-        out.push(new GuardError({
-          guard: "insert-conflict-shape",
-          message: "ON DUPLICATE KEY UPDATE requires at least one assignment"
-        }))
+        out.push(
+          new GuardError({
+            guard: "insert-conflict-shape",
+            message: "ON DUPLICATE KEY UPDATE requires at least one assignment"
+          })
+        )
       }
       checkScope(new Set([ir.into.name]), refsInSelection(ir.returning), out)
       break
@@ -394,12 +424,12 @@ export const collectCapabilityViolations = (
   for (const capability of bitsToCapabilities(queryCapabilityBits(ir))) {
     if (!isSatisfied(matrix, capability, allowEmulation)) {
       out.push(
-      new CapabilityError({
+        new CapabilityError({
           capability,
-        dialect: matrix.dialect,
+          dialect: matrix.dialect,
           message: `Capability "${capability}" is not available on dialect "${matrix.dialect}"`
-      })
-    )
+        })
+      )
     }
   }
   return out

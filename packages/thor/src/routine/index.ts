@@ -157,12 +157,12 @@ const bindNamedArgs = (
   values: Readonly<Record<string, unknown>>
 ): ExprNode[] => {
   for (const key of Object.keys(values)) {
-    if (!Object.prototype.hasOwnProperty.call(declared, key)) {
+    if (!Object.hasOwn(declared, key)) {
       throw new RoutineError({ routine, message: `Unknown argument "${key}" for routine "${routine}"` })
     }
   }
   return Object.entries(declared).map(([key, arg]) => {
-    if (!Object.prototype.hasOwnProperty.call(values, key)) {
+    if (!Object.hasOwn(values, key)) {
       throw new RoutineError({ routine, message: `Missing argument "${key}" for routine "${routine}"` })
     }
     return toValueNodeWithCodec(values[key], arg.codec)

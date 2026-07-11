@@ -50,11 +50,13 @@ describe("relation declarations (spec §13.2)", () => {
   })
 
   it("rejects relation fields owned by a different source", () => {
-    expect(() => defineRelations({
-      users: {
-        invalid: many(posts, { fields: [posts.id], references: [posts.userId] })
-      }
-    })).toThrowError(GuardError)
+    expect(() =>
+      defineRelations({
+        users: {
+          invalid: many(posts, { fields: [posts.id], references: [posts.userId] })
+        }
+      })
+    ).toThrowError(GuardError)
   })
 
   it("requires relation declarations to match foreign-key metadata", () => {
@@ -63,31 +65,42 @@ describe("relation declarations (spec §13.2)", () => {
       userId: pg.uuid("user_id")
     })
 
-    expect(() => defineRelations({
-      comments: {
-        author: one(users, { fields: [comments.userId], references: [users.id] })
-      }
-    })).toThrowError(/must match a source foreign key/)
+    expect(() =>
+      defineRelations({
+        comments: {
+          author: one(users, { fields: [comments.userId], references: [users.id] })
+        }
+      })
+    ).toThrowError(/must match a source foreign key/)
   })
 })
 
 describe("relation planner (spec §13.3-13.4)", () => {
   it("batches query loading by distinct parent keys without N+1", async () => {
     const driver = new FakeDriver().enqueue(
-      { rows: [
-        { id: "u1", email: "one@example.com" },
-        { id: "u2", email: "two@example.com" },
-        { id: "u1", email: "duplicate@example.com" }
-      ] },
-      { rows: [
-        { id: "p1", userId: "u1", title: "First" },
-        { id: "p2", userId: "u2", title: "Second" }
-      ] }
+      {
+        rows: [
+          { id: "u1", email: "one@example.com" },
+          { id: "u2", email: "two@example.com" },
+          { id: "u1", email: "duplicate@example.com" }
+        ]
+      },
+      {
+        rows: [
+          { id: "p1", userId: "u1", title: "First" },
+          { id: "p2", userId: "u2", title: "Second" }
+        ]
+      }
     )
 
-    const rows = await run(withRelations(relations).relation(users).findMany({
-      with: { posts: { strategy: "query" } }
-    }), driver)
+    const rows = await run(
+      withRelations(relations)
+        .relation(users)
+        .findMany({
+          with: { posts: { strategy: "query" } }
+        }),
+      driver
+    )
 
     expect(rows).toEqual([
       { id: "u1", email: "one@example.com", posts: [{ id: "p1", userId: "u1", title: "First" }] },
@@ -96,63 +109,83 @@ describe("relation planner (spec §13.3-13.4)", () => {
     ])
     expect(driver.calls).toHaveLength(2)
     expect(driver.calls[1]?.params).toEqual(["u1", "u2"])
-    expectTypeOf(rows).toEqualTypeOf<ReadonlyArray<Select<typeof users> & {
-      readonly posts: ReadonlyArray<Select<typeof posts>>
-    }>>()
+    expectTypeOf(rows).toEqualTypeOf<
+      ReadonlyArray<
+        Select<typeof users> & {
+          readonly posts: ReadonlyArray<Select<typeof posts>>
+        }
+      >
+    >()
   })
 
   it("loads join relations through one ordinary IR query", async () => {
-    const driver = new FakeDriver().enqueue({ rows: [
-      {
-        root__id: "u1",
-        root__email: "one@example.com",
-        rel_0__id: "p1",
-        rel_0__userId: "u1",
-        rel_0__title: "First"
-      },
-      {
-        root__id: "u1",
-        root__email: "one@example.com",
-        rel_0__id: "p2",
-        rel_0__userId: "u1",
-        rel_0__title: "Second"
-      }
-    ] })
-
-    const rows = await run(withRelations(relations).relation(users).findMany({
-      with: { posts: { strategy: "join" } }
-    }), driver)
-
-    expect(rows).toEqual([{
-      id: "u1",
-      email: "one@example.com",
-      posts: [
-        { id: "p1", userId: "u1", title: "First" },
-        { id: "p2", userId: "u1", title: "Second" }
+    const driver = new FakeDriver().enqueue({
+      rows: [
+        {
+          root__id: "u1",
+          root__email: "one@example.com",
+          rel_0__id: "p1",
+          rel_0__userId: "u1",
+          rel_0__title: "First"
+        },
+        {
+          root__id: "u1",
+          root__email: "one@example.com",
+          rel_0__id: "p2",
+          rel_0__userId: "u1",
+          rel_0__title: "Second"
+        }
       ]
-    }])
+    })
+
+    const rows = await run(
+      withRelations(relations)
+        .relation(users)
+        .findMany({
+          with: { posts: { strategy: "join" } }
+        }),
+      driver
+    )
+
+    expect(rows).toEqual([
+      {
+        id: "u1",
+        email: "one@example.com",
+        posts: [
+          { id: "p1", userId: "u1", title: "First" },
+          { id: "p2", userId: "u1", title: "Second" }
+        ]
+      }
+    ])
     expect(driver.calls).toHaveLength(1)
     expect(driver.calls[0]?.sql).toContain("LEFT JOIN")
   })
 
   it("invokes a manual loader once with all distinct keys", async () => {
-    const driver = new FakeDriver().enqueue({ rows: [
-      { id: "u1", email: "one@example.com" },
-      { id: "u2", email: "two@example.com" }
-    ] })
+    const driver = new FakeDriver().enqueue({
+      rows: [
+        { id: "u1", email: "one@example.com" },
+        { id: "u2", email: "two@example.com" }
+      ]
+    })
     const observed: Array<ReadonlyArray<ReadonlyArray<unknown>>> = []
 
-    const rows = await run(withRelations(relations).relation(users).findMany({
-      with: {
-        posts: {
-          strategy: "manual",
-          load: ({ keys }) => {
-            observed.push(keys)
-            return Effect.succeed([{ id: "p1", userId: "u1", title: "First" }])
+    const rows = await run(
+      withRelations(relations)
+        .relation(users)
+        .findMany({
+          with: {
+            posts: {
+              strategy: "manual",
+              load: ({ keys }) => {
+                observed.push(keys)
+                return Effect.succeed([{ id: "p1", userId: "u1", title: "First" }])
+              }
+            }
           }
-        }
-      }
-    }), driver)
+        }),
+      driver
+    )
 
     expect(observed).toEqual([[["u1"], ["u2"]]])
     expect(rows[0]?.posts).toEqual([{ id: "p1", userId: "u1", title: "First" }])
@@ -161,9 +194,11 @@ describe("relation planner (spec §13.3-13.4)", () => {
   })
 
   it("rejects missing and unknown loading strategies before execution", async () => {
-    const missing = withRelations(relations).relation(users).findMany({
-      with: { posts: {} as { strategy: "query" } }
-    })
+    const missing = withRelations(relations)
+      .relation(users)
+      .findMany({
+        with: { posts: {} as { strategy: "query" } }
+      })
     const driver = new FakeDriver()
     const error = await Effect.runPromise(Effect.flip(Effect.provide(missing, FakeDatabaseLayer(driver))))
 
@@ -183,17 +218,32 @@ describe("relation planner (spec §13.3-13.4)", () => {
     })
 
     const queryDriver = new FakeDriver().enqueue(
-      { rows: [{ id: 1n, name: "Acme" }, { id: 2n, name: "Beta" }] },
+      {
+        rows: [
+          { id: 1n, name: "Acme" },
+          { id: 2n, name: "Beta" }
+        ]
+      },
       { rows: [{ id: 10n, orgId: 1n, label: "Core" }] }
     )
-    const queried = await run(withRelations(graph).relation(orgs).findMany({ with: { teams: { strategy: "query" } } }), queryDriver)
+    const queried = await run(
+      withRelations(graph)
+        .relation(orgs)
+        .findMany({ with: { teams: { strategy: "query" } } }),
+      queryDriver
+    )
     expect(queried[0]).toMatchObject({ id: 1n, teams: [{ id: 10n, orgId: 1n }] })
     expect(queried[1]).toMatchObject({ id: 2n, teams: [] })
 
-    const joinDriver = new FakeDriver().enqueue({ rows: [
-      { root__id: 1n, root__name: "Acme", rel_0__id: 10n, rel_0__orgId: 1n, rel_0__label: "Core" }
-    ] })
-    const joined = await run(withRelations(graph).relation(orgs).findMany({ with: { teams: { strategy: "join" } } }), joinDriver)
+    const joinDriver = new FakeDriver().enqueue({
+      rows: [{ root__id: 1n, root__name: "Acme", rel_0__id: 10n, rel_0__orgId: 1n, rel_0__label: "Core" }]
+    })
+    const joined = await run(
+      withRelations(graph)
+        .relation(orgs)
+        .findMany({ with: { teams: { strategy: "join" } } }),
+      joinDriver
+    )
     expect(joined[0]).toMatchObject({ id: 1n, teams: [{ id: 10n }] })
   })
 })

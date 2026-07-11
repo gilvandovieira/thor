@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { Effect, Schema } from "effect"
 import {
   CapabilityError,
-  Database,
+  type Database,
   GuardError,
   MySQLDialect,
   PostgresDialect,

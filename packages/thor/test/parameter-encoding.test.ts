@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { Effect } from "effect"
-import { Database, db, eq, param, pg } from "@gilvandovieira/thor"
+import { type Database, db, eq, param, pg } from "@gilvandovieira/thor"
 import { FakeDatabaseLayer, FakeDriver } from "@gilvandovieira/thor/testing"
 
 // `timestamp` decodes to Date and its codec validates the value is a real Date

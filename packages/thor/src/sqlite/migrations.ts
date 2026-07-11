@@ -60,10 +60,14 @@ const literal = (value: DefaultLiteral): string => {
 /** @param value - Dialect-neutral default. @returns SQLite default SQL. */
 const sqliteDefault = (value: ColumnDefault): string => {
   switch (value.kind) {
-    case "value": return literal(value.value)
-    case "sql": return value.sql
-    case "now": return "CURRENT_TIMESTAMP"
-    case "random": return UUID_DEFAULT
+    case "value":
+      return literal(value.value)
+    case "sql":
+      return value.sql
+    case "now":
+      return "CURRENT_TIMESTAMP"
+    case "random":
+      return UUID_DEFAULT
   }
 }
 
@@ -114,28 +118,35 @@ export const compileSQLiteOperation = (operation: MigrationOperation): string =>
         const parts = [
           quote(column.name),
           sqliteType(column.type),
-          column.generated ? `generated always as (${column.generated.expression}) ${column.generated.stored ? "stored" : "virtual"}` : "",
+          column.generated
+            ? `generated always as (${column.generated.expression}) ${column.generated.stored ? "stored" : "virtual"}`
+            : "",
           column.nullable ? "" : "not null",
           column.unique ? "unique" : "",
           column.default ? `default ${sqliteDefault(column.default)}` : ""
         ]
-        return "  " + parts.filter(Boolean).join(" ")
+        return `  ${parts.filter(Boolean).join(" ")}`
       })
       if (operation.primaryKey.length > 0) {
         columns.push(`  primary key (${operation.primaryKey.map(quote).join(", ")})`)
       }
       for (const constraint of operation.uniqueConstraints ?? []) {
-        columns.push(`  ${constraint.name ? `constraint ${quote(constraint.name)} ` : ""}unique (${constraint.columns.map(quote).join(", ")})`)
+        columns.push(
+          `  ${constraint.name ? `constraint ${quote(constraint.name)} ` : ""}unique (${constraint.columns.map(quote).join(", ")})`
+        )
       }
       for (const check of operation.checks ?? []) {
         columns.push(`  ${check.name ? `constraint ${quote(check.name)} ` : ""}check (${check.expression})`)
       }
       for (const foreignKey of operation.foreignKeys ?? []) {
-        columns.push(`  ${foreignKey.name ? `constraint ${quote(foreignKey.name)} ` : ""}foreign key (${foreignKey.columns.map(quote).join(", ")}) references ${quote(foreignKey.references.table)} (${foreignKey.references.columns.map(quote).join(", ")})${foreignKey.onDelete ? ` on delete ${foreignKey.onDelete}` : ""}${foreignKey.onUpdate ? ` on update ${foreignKey.onUpdate}` : ""}`)
+        columns.push(
+          `  ${foreignKey.name ? `constraint ${quote(foreignKey.name)} ` : ""}foreign key (${foreignKey.columns.map(quote).join(", ")}) references ${quote(foreignKey.references.table)} (${foreignKey.references.columns.map(quote).join(", ")})${foreignKey.onDelete ? ` on delete ${foreignKey.onDelete}` : ""}${foreignKey.onUpdate ? ` on update ${foreignKey.onUpdate}` : ""}`
+        )
       }
       const create = `create table ${quote(operation.table)} (\n${columns.join(",\n")}\n);`
-      const indexes = (operation.indexes ?? []).map((index) =>
-        `create ${index.unique ? "unique " : ""}index ${quote(index.name)} on ${quote(operation.table)} (${index.columns.map(quote).join(", ")});`
+      const indexes = (operation.indexes ?? []).map(
+        (index) =>
+          `create ${index.unique ? "unique " : ""}index ${quote(index.name)} on ${quote(operation.table)} (${index.columns.map(quote).join(", ")});`
       )
       return [create, ...indexes].join("\n")
     }
@@ -203,6 +214,5 @@ export const SQLiteMigrations: MigrationDialect = {
   beginTransaction: "begin immediate",
   commitTransaction: "commit",
   rollbackTransaction: "rollback",
-  listTables:
-    "select name as table_name from sqlite_schema where type = 'table' and name not like 'sqlite_%'"
+  listTables: "select name as table_name from sqlite_schema where type = 'table' and name not like 'sqlite_%'"
 }

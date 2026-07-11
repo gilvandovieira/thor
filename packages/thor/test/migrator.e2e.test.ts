@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { Effect, Exit, Layer } from "effect"
 import pg from "pg"
-import { Database, db, eq, param, pg as t } from "@gilvandovieira/thor"
+import { type Database, db, eq, param, pg as t } from "@gilvandovieira/thor"
 import { PostgresLayer } from "@gilvandovieira/thor/postgres"
 import {
   Migrator,

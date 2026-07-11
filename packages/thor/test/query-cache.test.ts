@@ -14,7 +14,7 @@ import {
   withMode
 } from "@gilvandovieira/thor"
 import { FakeDatabaseLayer, FakeDriver } from "@gilvandovieira/thor/testing"
-import { BoundedLruCache, QueryCaches, WeakCacheLayer, makeQueryCaches } from "../src/execution/cache.js"
+import { BoundedLruCache, type QueryCaches, WeakCacheLayer, makeQueryCaches } from "../src/execution/cache.js"
 
 const users = pg.table("users", {
   id: pg.uuid("id").primaryKey(),
@@ -48,8 +48,18 @@ describe("Epic L — cache layers (spec §9.1)", () => {
     const layer = new WeakCacheLayer<object, number>("shape")
     const a = {}
     let computed = 0
-    expect(layer.getOrCompute(a, () => (computed++, 1))).toBe(1)
-    expect(layer.getOrCompute(a, () => (computed++, 2))).toBe(1)
+    expect(
+      layer.getOrCompute(a, () => {
+        computed++
+        return 1
+      })
+    ).toBe(1)
+    expect(
+      layer.getOrCompute(a, () => {
+        computed++
+        return 2
+      })
+    ).toBe(1)
     expect(computed).toBe(1)
     const stats = layer.stats()
     expect(stats).toMatchObject({

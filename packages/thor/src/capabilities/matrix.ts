@@ -70,11 +70,7 @@ export const statusOf = (matrix: CapabilityMatrix, cap: Capability): CapabilityS
  * @param allowEmulation - Whether emulated implementations are acceptable.
  * @returns `true` when the requirement may execute.
  */
-export const isSatisfied = (
-  matrix: CapabilityMatrix,
-  cap: Capability,
-  allowEmulation = false
-): boolean => {
+export const isSatisfied = (matrix: CapabilityMatrix, cap: Capability, allowEmulation = false): boolean => {
   const status = statusOf(matrix, cap)
   return status === "native" || (status === "emulated" && allowEmulation)
 }

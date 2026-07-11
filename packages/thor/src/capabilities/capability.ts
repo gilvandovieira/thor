@@ -61,9 +61,7 @@ export type Capability = (typeof ALL_CAPABILITIES)[number]
 export type CapabilityBits = bigint
 
 /** Stable capability -> bit-index map, derived once from `ALL_CAPABILITIES`. */
-const BIT_INDEX: ReadonlyMap<Capability, number> = new Map(
-  ALL_CAPABILITIES.map((cap, i) => [cap, i] as const)
-)
+const BIT_INDEX: ReadonlyMap<Capability, number> = new Map(ALL_CAPABILITIES.map((cap, i) => [cap, i] as const))
 
 const readableCapabilitiesCache = new Map<CapabilityBits, ReadonlyArray<Capability>>()
 
@@ -113,8 +111,7 @@ export const unionBits = (a: CapabilityBits, b: CapabilityBits): CapabilityBits 
  * @param cap - Capability to look up.
  * @returns `true` when `cap` is present.
  */
-export const hasCapability = (bits: CapabilityBits, cap: Capability): boolean =>
-  (bits & capabilityBit(cap)) !== 0n
+export const hasCapability = (bits: CapabilityBits, cap: Capability): boolean => (bits & capabilityBit(cap)) !== 0n
 
 /**
  * Expands a bitset into readable capability names.

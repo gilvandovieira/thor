@@ -22,10 +22,10 @@ import {
   type QueryError
 } from "../errors/index.js"
 import type { CompiledStatement, RawRow } from "./driver.js"
-import { type DatabaseService } from "./database.js"
+import type { DatabaseService } from "./database.js"
 import { DEFAULT_EXECUTION_MODE, resolveDecodeMode } from "./plan.js"
 import { defaultQueryCaches, type QueryCaches } from "./cache.js"
-import { type QueryCacheOutcome, type QueryObservationState } from "../observability/index.js"
+import type { QueryCacheOutcome, QueryObservationState } from "../observability/index.js"
 
 /**
  * The named query cache registry backing a service's non-prepared execution
@@ -66,7 +66,7 @@ export class ParameterPlan {
   constructor(params: ReadonlyArray<ParamNode>) {
     let failure: ParameterError | undefined
     for (const node of params) {
-      if (Object.prototype.hasOwnProperty.call(node, "value")) {
+      if (Object.hasOwn(node, "value")) {
         // Inline literal: validate and encode through its codec, once.
         if (this.inline.has(node)) continue
         const result = (Schema.encodeUnknownEither(node.codec) as ParameterEncoder)(node.value)
@@ -113,7 +113,7 @@ export class ParameterPlan {
     if (this.failure) return Effect.fail(this.failure)
 
     for (const name of this.named.keys()) {
-      if (!Object.prototype.hasOwnProperty.call(args, name)) {
+      if (!Object.hasOwn(args, name)) {
         return Effect.fail(
           new ParameterError({
             parameter: name,
@@ -155,9 +155,7 @@ export class ParameterPlan {
     // have short-circuited above via `this.failure`); named nodes resolve from
     // the just-encoded execution args. Both go through their declared codec.
     return Effect.succeed(
-      paramOrder.map((node) =>
-        Object.prototype.hasOwnProperty.call(node, "value") ? this.inline.get(node) : encoded.get(node.name)
-      )
+      paramOrder.map((node) => (Object.hasOwn(node, "value") ? this.inline.get(node) : encoded.get(node.name)))
     )
   }
 }
