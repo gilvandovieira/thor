@@ -214,7 +214,11 @@ describe("published CLI surface", () => {
   })
 })
 
-describe("database-connected commands (spec §16.2, §20.2)", () => {
+// Each test here spawns several CLI subprocesses. Under `test:coverage` vitest
+// propagates NODE_V8_COVERAGE to every child, so each subprocess writes a
+// coverage profile on exit — several times slower on the older Node 22 runner.
+// A generous suite timeout keeps these integration tests reliable there.
+describe("database-connected commands (spec §16.2, §20.2)", { timeout: 60_000 }, () => {
   it("applies, reports, validates, and rolls back live migrations", async () => {
     const cwd = await migrationProject()
 
@@ -235,7 +239,7 @@ describe("database-connected commands (spec §16.2, §20.2)", () => {
     const table = database.prepare("select name from sqlite_master where type = 'table' and name = 'users'").get()
     database.close()
     expect(table).toBeUndefined()
-  }, 15_000)
+  })
 
   it("generates an irreversible create-table migration", async () => {
     const cwd = await dbProject(SCHEMA_TS(), false)
