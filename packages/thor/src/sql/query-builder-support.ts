@@ -129,18 +129,28 @@ export const starSelection = (table: AnyTable): SelectionField[] =>
 /**
  * Produces stable, serializable query metadata for diagnostics.
  *
+ * `params` lists the named parameters that must be supplied at execution
+ * (`execute()`/terminal args); `constants` lists inline-bound values captured in
+ * the query shape (e.g. `eq(users.email, "x")`), which are validated and encoded
+ * once and never enter the cache key (spec §8, P0.3). Distinguishing the two
+ * makes clear which values a compiled handle still expects per call.
+ *
  * @param ir - Query representation to inspect.
- * @returns Query kind, tables, parameters, cardinality, and capabilities.
+ * @returns Query kind, tables, named params, captured constants, cardinality, and capabilities.
  */
-export const inspectIr = (ir: QueryIR) => ({
-  kind: ir._tag,
-  tables: ir.annotations.tableNames,
-  params: collectQueryParams(ir).map((parameter) => parameter.name),
-  cardinality: ir.cardinality,
-  capabilities: bitsToCapabilities(queryCapabilityBits(ir)),
-  operationName: ir.annotations.operationName,
-  tracing: ir.annotations.tracing
-})
+export const inspectIr = (ir: QueryIR) => {
+  const all = collectQueryParams(ir)
+  return {
+    kind: ir._tag,
+    tables: ir.annotations.tableNames,
+    params: all.filter((parameter) => !("value" in parameter)).map((parameter) => parameter.name),
+    constants: all.filter((parameter) => "value" in parameter).map((parameter) => parameter.name),
+    cardinality: ir.cardinality,
+    capabilities: bitsToCapabilities(queryCapabilityBits(ir)),
+    operationName: ir.annotations.operationName,
+    tracing: ir.annotations.tracing
+  }
+}
 
 // --- PREPARED ----------------------------------------------------------------
 
