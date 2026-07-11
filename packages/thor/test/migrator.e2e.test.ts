@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { Effect, Exit, Layer } from "effect"
 import pg from "pg"
-import { type Database, db, eq, param, pg as t } from "@gilvandovieira/thor"
+import { type Database, MigrationError, db, eq, param, pg as t } from "@gilvandovieira/thor"
 import { PostgresLayer } from "@gilvandovieira/thor/postgres"
 import {
   Migrator,
@@ -163,6 +163,42 @@ describe.skipIf(!DATABASE_URL)("live migrator e2e (spec §13)", () => {
       expect(rows).toEqual([])
     }
     expect(tables.map((t2) => t2.table_name)).not.toContain("ok")
+  })
+
+  it("keeps PostgreSQL schema and journal atomic when redo reapply fails", async () => {
+    let applications = 0
+    const unstable = defineMigration({
+      id: "0001_redo_probe",
+      name: "redo_probe",
+      revision: "1",
+      safety: "additive",
+      phase: "expand",
+      downSafety: "destructive",
+      downPhase: "contract",
+      up: Effect.suspend(() => {
+        applications++
+        return applications === 1
+          ? rawSql`create table redo_probe (id integer primary key)`
+          : Effect.fail(new MigrationError({ message: "reapply failed", migrationId: "0001_redo_probe" }))
+      }),
+      down: rawSql`drop table redo_probe`
+    })
+    const redoApp = Layer.provideMerge(
+      MigratorLive({ migrations: [unstable], policy: "allow-reviewed-destructive" }),
+      PostgresLayer(client)
+    )
+    const operation = Effect.flatMap(Migrator, (migrator) => migrator.up())
+    await Effect.runPromise(Effect.provide(operation, redoApp))
+
+    const exit = await Effect.runPromiseExit(
+      Effect.provide(
+        Effect.flatMap(Migrator, (migrator) => migrator.redo({ reviewed: true })),
+        redoApp
+      )
+    )
+    expect(Exit.isFailure(exit)).toBe(true)
+    expect(await q("select to_regclass('public.redo_probe') as name")).toEqual([{ name: "redo_probe" }])
+    expect((await q("select id from _thor_migrations order by id")).map((row) => row.id)).toEqual(["0001_redo_probe"])
   })
 
   it("check() fails hard on a journal checksum mismatch (spec §13.9)", async () => {
