@@ -80,6 +80,71 @@ describe("transaction-scoped database API", () => {
     expect(error.message).toContain("commit disconnected")
   })
 
+  it("handles savepoint creation and release failures without committing the outer transaction", async () => {
+    const creation = new FakeDriver().enqueue(
+      {},
+      { error: new DriverError({ message: "savepoint create failed" }) },
+      {}
+    )
+    const creationExit = await Effect.runPromiseExit(
+      Effect.provide(db.transaction(db.transaction(Effect.void)), FakeDatabaseLayer(creation))
+    )
+    expect(Cause.pretty((creationExit as Exit.Failure<unknown>).cause)).toContain("savepoint create failed")
+    expect(creation.calls.map((call) => call.sql)).toEqual(["begin", "savepoint thor_sp_1", "rollback"])
+
+    const release = new FakeDriver().enqueue(
+      {},
+      {},
+      { error: new DriverError({ message: "savepoint release failed" }) },
+      {}
+    )
+    const releaseExit = await Effect.runPromiseExit(
+      Effect.provide(db.transaction(db.transaction(Effect.void)), FakeDatabaseLayer(release))
+    )
+    expect(Cause.pretty((releaseExit as Exit.Failure<unknown>).cause)).toContain("savepoint release failed")
+    expect(release.calls.map((call) => call.sql)).toEqual([
+      "begin",
+      "savepoint thor_sp_1",
+      "release savepoint thor_sp_1",
+      "rollback"
+    ])
+  })
+
+  it("attempts every savepoint cleanup and preserves body, rollback-to, and release failures", async () => {
+    const driver = new FakeDriver().enqueue(
+      {},
+      {},
+      { error: new DriverError({ message: "rollback-to failed" }) },
+      { error: new DriverError({ message: "release failed" }) },
+      {}
+    )
+    const exit = await Effect.runPromiseExit(
+      Effect.provide(db.transaction(db.transaction(Effect.fail("nested body failed"))), FakeDatabaseLayer(driver))
+    )
+    const rendered = Cause.pretty((exit as Exit.Failure<unknown>).cause)
+    expect(rendered).toContain("nested body failed")
+    expect(rendered).toContain("rollback-to failed")
+    expect(rendered).toContain("release failed")
+    expect(driver.calls.map((call) => call.sql)).toEqual([
+      "begin",
+      "savepoint thor_sp_1",
+      "rollback to savepoint thor_sp_1",
+      "release savepoint thor_sp_1",
+      "rollback"
+    ])
+  })
+
+  it("does not retry interruption or defects and still rolls back", async () => {
+    for (const body of [Effect.interrupt, Effect.die("defect")]) {
+      const driver = new FakeDriver()
+      const exit = await Effect.runPromiseExit(
+        Effect.provide(db.transaction(body, { retry: { times: 2, while: () => true } }), FakeDatabaseLayer(driver))
+      )
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(driver.calls.map((call) => call.sql)).toEqual(["begin", "rollback"])
+    }
+  })
+
   it("retries only at an explicit outer boundary", async () => {
     const driver = new FakeDriver()
     let attempts = 0
