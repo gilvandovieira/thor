@@ -117,7 +117,7 @@ Relations remain explicit about loading: declare `one`/`many` edges and choose
 `join`, batched `query`, or `manual` per included edge. See the
 [relations guide](docs/relations.md). Live schema inspection and structural drift
 are available through `@gilvandovieira/thor/introspect` and the `thor` CLI; see
-[introspection](docs/introspection.md). Thor also ships 11 agent guidance files —
+[introspection](docs/introspection.md). Thor also ships 10 agent guidance files —
 install them into your agent with `npx skills add gilvandovieira/thor`, or reach
 them through `/skills` and `thor skills export`; see [LLM skills](docs/skills.md).
 
@@ -368,7 +368,7 @@ pnpm db:up        # or start postgres@5433 + mysql@3307 yourself
 - [`docs/relations.md`](docs/relations.md) — explicit relation graphs, loading strategies, and no-hidden-N+1 behavior
 - [`docs/introspection.md`](docs/introspection.md) — live Schema IR, structural drift, and connected CLI workflows
 - [`docs/observability.md`](docs/observability.md) — Effect spans, metrics, structured events, and safe logging
-- [`docs/skills.md`](docs/skills.md) — the 11 LLM skills, programmatic rendering, and CLI export
+- [`docs/skills.md`](docs/skills.md) — the 10 LLM skills, programmatic rendering, and CLI export
 - [`docs/query-cache.md`](docs/query-cache.md) — named cache layers, bounded LRU caches, precompilation modes, and safety modes
 - [`docs/migrations.md`](docs/migrations.md) — reviewable planning, policies, expand/contract staging, and typed backfills
 - [`docs/routines.md`](docs/routines.md) — declared functions, table-valued sources, procedures, and capability behavior

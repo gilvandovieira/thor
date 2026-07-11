@@ -295,7 +295,6 @@ skills/
     capabilities.skill.md
     routines.skill.md
     testing.skill.md
-    benchmarks.skill.md
     dialects.skill.md
     debugging.skill.md
     safety.skill.md
@@ -1694,7 +1693,6 @@ skills/
     capabilities.skill.md
     routines.skill.md
     testing.skill.md
-    benchmarks.skill.md
     dialects.skill.md
     debugging.skill.md
     safety.skill.md
@@ -1902,27 +1900,6 @@ Hard rule:
 
 ```txt
 Every new feature needs tests at the correct layer. Do not rely only on integration tests.
-```
-
-#### `benchmarks.skill.md`
-
-Covers:
-
-```txt
-- build benchmarks
-- IR benchmarks
-- guard benchmarks
-- compile benchmarks
-- decode benchmarks
-- Effect overhead benchmarks
-- Node/Bun runtime lanes
-- hot-path targets
-```
-
-Hard rule:
-
-```txt
-Do not add abstraction to hot paths without a benchmark.
 ```
 
 #### `dialects.skill.md`

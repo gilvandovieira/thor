@@ -82,7 +82,7 @@ ${parts.verification.map((line) => `- ${line}`).join("\n")}
 ${parts.hardRule}
 `
 
-/** The 11 required skills (§21.4), authored against Thor's real API. */
+/** The 10 required skills (§21.4), authored against Thor's real API. */
 export const SKILLS: ReadonlyArray<Skill> = [
   {
     id: "thor.schema",
@@ -342,42 +342,6 @@ export const SKILLS: ReadonlyArray<Skill> = [
         "Keep SQL snapshots current across dialects."
       ],
       hardRule: "Every new feature needs tests at the correct layer. Do not rely only on integration tests."
-    })
-  },
-  {
-    id: "thor.benchmarks",
-    file: "benchmarks.skill.md",
-    title: "Benchmarks",
-    description: "Benchmark hot paths before adding abstraction.",
-    content: skillMarkdown({
-      title: "Benchmarks",
-      goal: "Teach an agent to measure build/IR/compile/decode/effect/cache overhead per runtime before adding abstraction to hot paths.",
-      useWhen: [
-        "The user changes the execution pipeline, caches, decoding, or adds a query feature."
-      ],
-      checks: [
-        "Measure cold vs warm vs prepared; the warm/prepared path is the target.",
-        "Run Node and Bun lanes (`bench:hotpath`, `bench:hotpath:bun`).",
-        "Watch the cache layers with `bench:cache` (hit/miss/eviction counters).",
-        "New query features add build/IR/compile/cap-check/exec benchmarks.",
-        "Gate with `bench:gate` against a reviewed committed baseline."
-      ],
-      safe: [
-        "`pnpm bench:hotpath` then `pnpm bench:gate` before/after a change.",
-        "Hoist a `.prepare()`/`.compile()` handle for repeated hot queries."
-      ],
-      unsafe: [
-        "Adding indirection to the hot path with no benchmark.",
-        "Self-baselining the perf gate.",
-        "Comparing across machines without a matching baseline."
-      ],
-      examples: "```sh\npnpm bench:hotpath   # cold/warm/compiled/unsafe-hot\npnpm bench:cache     # per-layer hit/miss\npnpm bench:gate:node # reviewed Node regression gate\npnpm bench:gate:bun  # reviewed Bun regression gate\n```",
-      verification: [
-        "Record a reviewed baseline per runtime/platform/arch.",
-        "Report warm-path overhead vs the 1–2 µs target.",
-        "Add a per-feature benchmark with each new feature."
-      ],
-      hardRule: "Do not add abstraction to hot paths without a benchmark."
     })
   },
   {

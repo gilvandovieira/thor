@@ -1,6 +1,6 @@
 # LLM skills
 
-Thor ships 11 human- and machine-readable skills that teach coding agents how
+Thor ships 10 human- and machine-readable skills that teach coding agents how
 to use its declared APIs safely. They are available programmatically from
 `@gilvandovieira/thor/skills` and can be listed or exported with the `thor`
 CLI.
@@ -47,7 +47,6 @@ file name, title, one-line description, and complete Markdown `content`.
 | `thor.capabilities` | `capabilities.skill.md` | Dialect and runtime capability checks and conservative failure |
 | `thor.routines` | `routines.skill.md` | Functions, aggregates, table functions, procedures, volatility, and transaction requirements |
 | `thor.testing` | `testing.skill.md` | Type, SQL snapshot, fake-driver, contract, property, and integration tests |
-| `thor.benchmarks` | `benchmarks.skill.md` | Cold, warm, prepared, cache, Node, Bun, and regression-gate measurements |
 | `thor.dialects` | `dialects.skill.md` | Keeping PostgreSQL, SQLite, and MySQL behavior in dialect adapters |
 | `thor.debugging` | `debugging.skill.md` | Debugging in IR, capability, SQL, execution, and decode order |
 | `thor.safety` | `safety.skill.md` | Explicit raw SQL, unsafe-hot execution, destructive migration, and logging boundaries |
@@ -158,7 +157,6 @@ default Markdown export is:
     capabilities.skill.md
     routines.skill.md
     testing.skill.md
-    benchmarks.skill.md
     dialects.skill.md
     debugging.skill.md
     safety.skill.md
@@ -209,7 +207,7 @@ probe, or substitute for reviewing generated migrations and SQL.
 ## Performance and stability
 
 Importing `SKILLS` loads the authored Markdown strings into memory. Manifest and
-file rendering are linear in the 11-entry catalog and perform no I/O; JSON export
+file rendering are linear in the 10-entry catalog and perform no I/O; JSON export
 also serializes all Markdown into one bundle. This work is intended for tooling
 and export paths, not request-time database hot paths. The CLI uses synchronous
 filesystem writes, which favors simple, deterministic command completion over
@@ -226,7 +224,7 @@ artifacts as generated files and regenerate rather than hand-maintain them. See
 
 `packages/thor/test/skills.test.ts` verifies:
 
-- the exact 11 skill IDs, their order, and ID-derived file names;
+- the exact 10 skill IDs, their order, and ID-derived file names;
 - every required Markdown section and hard rule;
 - manifest metadata and complete indexing;
 - the 13-file Markdown set and valid manifest JSON;

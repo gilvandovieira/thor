@@ -9,7 +9,6 @@ const REQUIRED = [
   "thor.capabilities",
   "thor.routines",
   "thor.testing",
-  "thor.benchmarks",
   "thor.dialects",
   "thor.debugging",
   "thor.safety"
@@ -26,7 +25,7 @@ const SECTIONS = [
   "## Hard Rule"
 ]
 
-describe("Epic U2 — the 11 required skills (§21.4)", () => {
+describe("Epic U2 — the 10 required skills (§21.4)", () => {
   it("authors exactly the required skill set with stable ids and file names", () => {
     expect(SKILLS.map((skill) => skill.id)).toEqual(REQUIRED)
     for (const skill of SKILLS) {
