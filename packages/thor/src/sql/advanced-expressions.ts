@@ -18,7 +18,14 @@ import type {
   WindowFrameNode
 } from "../ir/query-ir.js"
 import { isUnsafeSqlNode } from "../ir/unsafe-sql.js"
-import { type ColumnValue, type Expr, SqlInputBrand, isColumn, toExprNode } from "./expressions.js"
+import {
+  type ColumnValue,
+  type Expr,
+  SqlInputBrand,
+  authenticateSqlInput,
+  isColumn,
+  toExprNode
+} from "./expressions.js"
 
 /** Structural select shape accepted by subquery helpers. */
 export interface SelectExpressionSource {
@@ -145,22 +152,24 @@ export interface WindowableExpr<A> extends Expr<A> {
  * @param codec - Selected-value decoder.
  * @returns Typed function expression with window support.
  */
-export const windowable = <A>(node: FunctionCallNode, codec: Schema.Schema<A, any>): WindowableExpr<A> => ({
-  node,
-  codec,
-  [SqlInputBrand]: true,
-  over: (spec = {}) => ({
-    node: {
-      _tag: "WindowFunction",
-      function: node,
-      partitionBy: (spec.partitionBy ?? []).map(toExprNode),
-      orderBy: spec.orderBy ?? [],
-      ...(spec.frame !== undefined ? { frame: assertWindowFrame(spec.frame) } : {})
-    },
+export const windowable = <A>(node: FunctionCallNode, codec: Schema.Schema<A, any>): WindowableExpr<A> =>
+  authenticateSqlInput({
+    node,
     codec,
-    [SqlInputBrand]: true
+    [SqlInputBrand]: true,
+    over: (spec = {}) =>
+      authenticateSqlInput({
+        node: {
+          _tag: "WindowFunction",
+          function: node,
+          partitionBy: (spec.partitionBy ?? []).map(toExprNode),
+          orderBy: spec.orderBy ?? [],
+          ...(spec.frame !== undefined ? { frame: assertWindowFrame(spec.frame) } : {})
+        },
+        codec,
+        [SqlInputBrand]: true
+      })
   })
-})
 
 const FRAME_UNITS: ReadonlySet<string> = new Set(["rows", "range", "groups"])
 
@@ -324,10 +333,11 @@ export const denseRank = (): WindowableExpr<number> =>
  * @param query - Query expected to return one selected value.
  * @returns A scalar-subquery expression.
  */
-export const scalar = <A = unknown>(query: SelectExpressionSource): Expr<A> => ({
-  node: { _tag: "ScalarSubquery", query: query.ir },
-  [SqlInputBrand]: true
-})
+export const scalar = <A = unknown>(query: SelectExpressionSource): Expr<A> =>
+  authenticateSqlInput({
+    node: { _tag: "ScalarSubquery", query: query.ir },
+    [SqlInputBrand]: true
+  })
 
 /**
  * @param query - Query tested for at least one row.
@@ -382,7 +392,8 @@ export const notInSubquery = <T extends AnyColumn>(value: T | Expr<ColumnValue<T
  * @param column - Inserted column to reference.
  * @returns Dialect-rendered excluded/candidate-row expression.
  */
-export const excluded = <T extends AnyColumn>(column: T): Expr<ColumnValue<T>> => ({
-  node: { _tag: "ExcludedRef", column: column.def.name },
-  [SqlInputBrand]: true
-})
+export const excluded = <T extends AnyColumn>(column: T): Expr<ColumnValue<T>> =>
+  authenticateSqlInput({
+    node: { _tag: "ExcludedRef", column: column.def.name },
+    [SqlInputBrand]: true
+  })

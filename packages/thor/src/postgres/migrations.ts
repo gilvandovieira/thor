@@ -4,6 +4,7 @@
  * @module postgres/migrations
  */
 import type { MigrationDialect } from "../dialect.js"
+import { validateIdentifier } from "../ir/identifiers.js"
 import type { MigrationOperation } from "../migrate/migration-ir.js"
 import { type ColumnDefault, type DefaultLiteral, unsafeSyntax } from "../migrate/migration-ir.js"
 
@@ -11,7 +12,7 @@ import { type ColumnDefault, type DefaultLiteral, unsafeSyntax } from "../migrat
  * @param name - Identifier to escape.
  * @returns Double-quoted PostgreSQL identifier.
  */
-const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`
+const quoteIdent = (name: string): string => `"${validateIdentifier(name).replace(/"/g, '""')}"`
 
 /** @param value - Typed default literal. @returns PostgreSQL literal SQL. */
 const literal = (value: DefaultLiteral): string => {

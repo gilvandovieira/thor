@@ -8,6 +8,7 @@ import type { Dialect } from "../dialect.js"
 import { compileQuery } from "../sql/compiler.js"
 import { MySQLMigrations } from "./migrations.js"
 import { dialectProfileHash } from "../capabilities/profile.js"
+import { validateIdentifier } from "../ir/identifiers.js"
 
 const version = "3"
 /** @param level - Public isolation level. @returns MySQL SQL spelling. */
@@ -23,7 +24,7 @@ export const MySQLDialect: Dialect = {
    * @param name - Untrusted SQL identifier.
    * @returns Backtick-quoted MySQL identifier.
    */
-  quoteIdent: (name) => `\`${name.replace(/`/g, "``")}\``,
+  quoteIdent: (name) => `\`${validateIdentifier(name).replace(/`/g, "``")}\``,
   /**
    * @param _index - One-based bind position, unused by MySQL.
    * @returns The MySQL positional placeholder.

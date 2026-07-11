@@ -4,6 +4,7 @@
  * @module mysql/migrations
  */
 import type { MigrationDialect } from "../dialect.js"
+import { validateIdentifier } from "../ir/identifiers.js"
 import {
   type ColumnDefault,
   type ColumnSpec,
@@ -16,7 +17,7 @@ import {
  * @param name - Identifier to escape.
  * @returns Backtick-quoted MySQL identifier.
  */
-const quoteIdent = (name: string): string => `\`${name.replace(/`/g, "``")}\``
+const quoteIdent = (name: string): string => `\`${validateIdentifier(name).replace(/`/g, "``")}\``
 
 /**
  * @param type - Logical column type.

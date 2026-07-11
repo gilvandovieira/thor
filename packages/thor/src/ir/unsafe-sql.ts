@@ -4,8 +4,9 @@
  * @module ir/unsafe-sql
  */
 import type { UnsafeSqlNode } from "./query-ir.js"
+import { authenticitySet } from "./authenticity.js"
 
-const unsafeSqlNodes = new WeakSet<object>()
+const unsafeSqlNodes = authenticitySet("unsafe-sql")
 
 /** @param sql - Trusted SQL text. @returns A runtime-branded unsafe SQL node. */
 export const createUnsafeSqlNode = (sql: string): UnsafeSqlNode => {

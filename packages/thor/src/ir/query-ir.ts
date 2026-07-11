@@ -40,6 +40,8 @@ export interface ColumnRefNode {
   readonly table: string
   readonly column: string
   readonly dataType: SqlDataType
+  /** Opaque lexical source identity; names alone cannot distinguish shadowing. */
+  readonly sourceId: object
 }
 
 /** Named or inline-bound parameter carried through compilation. */
@@ -206,6 +208,8 @@ export type ExprNode =
 export interface TableSource {
   readonly name: string
   readonly alias?: string
+  /** Opaque lexical source identity shared with its column references. */
+  readonly sourceId: object
 }
 
 /** Derived table backed by a complete select query. */
@@ -213,6 +217,7 @@ export interface SubquerySource {
   readonly _tag: "SubquerySource"
   readonly query: SelectIR
   readonly alias: string
+  readonly sourceId: object
 }
 
 /** Reference to a named common-table expression. */
@@ -220,6 +225,7 @@ export interface CteSource {
   readonly _tag: "CteSource"
   readonly name: string
   readonly alias?: string
+  readonly sourceId: object
 }
 
 /** Declared table-valued function used as a relation source. */
@@ -233,6 +239,7 @@ export interface TableFunctionSource {
   readonly alias: string
   readonly columns: ReadonlyArray<string>
   readonly capabilities: CapabilityBits
+  readonly sourceId: object
 }
 
 /** Any relation allowed in a `FROM` or `JOIN` clause. */
@@ -364,8 +371,11 @@ export type QueryIR = SelectIR | InsertIR | UpdateIR | DeleteIR | CallIR
 
 /**
  * Snapshots ordinary mutable application data captured by an inline parameter.
- * Arrays, plain records, and dates are copied recursively; opaque instances are
- * retained because their schema may rely on prototype or identity semantics.
+ * Arrays, records, dates, binary views, maps, and sets are copied recursively.
+ * Mutable opaque class instances are rejected: retaining them would make a
+ * reusable query observe later mutation, while cloning them can violate private
+ * fields and constructor invariants. Frozen opaque values are retained as an
+ * explicit immutable domain-value boundary.
  *
  * @param value - Inline application value.
  * @returns A frozen copy when the value has well-defined copy semantics.
@@ -382,6 +392,33 @@ export const snapshotInlineValue = (value: unknown): unknown => {
       seen.set(current, copy)
       return Object.freeze(copy)
     }
+    if (current instanceof ArrayBuffer) {
+      const copy = current.slice(0)
+      seen.set(current, copy)
+      return copy
+    }
+    if (ArrayBuffer.isView(current)) {
+      const copy =
+        current instanceof DataView
+          ? new DataView(current.buffer.slice(current.byteOffset, current.byteOffset + current.byteLength))
+          : (current.constructor as unknown as { from: (value: ArrayLike<unknown>) => ArrayBufferView }).from(
+              current as unknown as ArrayLike<unknown>
+            )
+      seen.set(current, copy)
+      return copy
+    }
+    if (current instanceof Map) {
+      const copy = new Map<unknown, unknown>()
+      seen.set(current, copy)
+      for (const [key, item] of current) copy.set(visit(key), visit(item))
+      return copy
+    }
+    if (current instanceof Set) {
+      const copy = new Set<unknown>()
+      seen.set(current, copy)
+      for (const item of current) copy.add(visit(item))
+      return copy
+    }
     if (Array.isArray(current)) {
       const copy: unknown[] = []
       seen.set(current, copy)
@@ -389,17 +426,23 @@ export const snapshotInlineValue = (value: unknown): unknown => {
       return Object.freeze(copy)
     }
     const prototype = Object.getPrototypeOf(current)
-    if (prototype !== Object.prototype && prototype !== null) return current
+    if (prototype !== Object.prototype && prototype !== null) {
+      if (Object.isFrozen(current)) return current
+      throw new TypeError(
+        `Mutable inline ${current.constructor?.name ?? "object"} values are unsupported; use an immutable value or a named parameter`
+      )
+    }
     const copy = Object.create(prototype) as Record<PropertyKey, unknown>
     seen.set(current, copy)
     for (const key of Reflect.ownKeys(current)) {
       const descriptor = Object.getOwnPropertyDescriptor(current, key)
       if (!descriptor) continue
-      Object.defineProperty(
-        copy,
-        key,
-        "value" in descriptor ? { ...descriptor, value: visit(descriptor.value) } : descriptor
-      )
+      Object.defineProperty(copy, key, {
+        configurable: false,
+        enumerable: descriptor.enumerable ?? false,
+        writable: false,
+        value: visit("value" in descriptor ? descriptor.value : Reflect.get(current, key))
+      })
     }
     return Object.freeze(copy)
   }

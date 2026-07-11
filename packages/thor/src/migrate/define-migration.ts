@@ -11,6 +11,7 @@ import { MigrationError } from "../errors/index.js"
 import { Database } from "../execution/database.js"
 import type { UnsafeSqlNode } from "../ir/query-ir.js"
 import { isUnsafeSqlNode } from "../ir/unsafe-sql.js"
+import { authenticitySet } from "../ir/authenticity.js"
 
 /** A raw SQL statement (from the `sql` tagged template). */
 export interface SqlStatement {
@@ -18,7 +19,7 @@ export interface SqlStatement {
   readonly sql: string
 }
 
-const sqlStatements = new WeakSet<object>()
+const sqlStatements = authenticitySet("migration-sql-statement")
 
 /** @param text - Trusted migration SQL. @returns An immutable authenticated statement. */
 const registerSqlStatement = (text: string): SqlStatement => {

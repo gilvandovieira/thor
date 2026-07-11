@@ -22,6 +22,7 @@ import { executeCommand, type QueryArgs } from "../execution/run.js"
 import { isInTransaction } from "../execution/transaction.js"
 import { GuardError, RoutineError, type QueryError } from "../errors/index.js"
 import { internIdentifier } from "../ir/identifiers.js"
+import { sourceIdentity } from "../ir/source-identity.js"
 import { nextId, queryCapabilityBits, type CallIR, type ExprNode, type SelectionField } from "../ir/query-ir.js"
 import { PostgresDialect } from "../postgres/dialect.js"
 import type { SqlDataType } from "../schema/column.js"
@@ -385,13 +386,15 @@ export const defineTableFunction = (
   return Object.assign(descriptor, {
     call: (values: Readonly<Record<string, unknown>>, alias = name.name): QueryReference<Record<string, unknown>> => {
       const relationAlias = internIdentifier(alias)
+      const sourceId = sourceIdentity()
       const fields: SelectionField[] = Object.entries(spec.returns).map(([column, result]) => ({
         alias: internIdentifier(column),
         expr: {
           _tag: "ColumnRef",
           table: relationAlias,
           column: internIdentifier(column),
-          dataType: result.dataType
+          dataType: result.dataType,
+          sourceId
         },
         codec: result.codec
       }))
@@ -404,7 +407,8 @@ export const defineTableFunction = (
           argTypes: Object.values(spec.args).map((argument) => argument.dataType),
           alias: relationAlias,
           columns: Object.keys(spec.returns).map(internIdentifier),
-          capabilities
+          capabilities,
+          sourceId
         },
         fields
       )

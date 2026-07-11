@@ -8,6 +8,7 @@ import { PostgresCapabilities } from "../capabilities/postgres.js"
 import { compileQuery } from "../sql/compiler.js"
 import { PostgresMigrations } from "./migrations.js"
 import { dialectProfileHash } from "../capabilities/profile.js"
+import { validateIdentifier } from "../ir/identifiers.js"
 
 const version = "3"
 /** @param level - Public isolation level. @returns PostgreSQL SQL spelling. */
@@ -23,7 +24,7 @@ export const PostgresDialect: Dialect = {
    * @param name - Untrusted SQL identifier.
    * @returns Double-quoted PostgreSQL identifier.
    */
-  quoteIdent: (name) => `"${name.replace(/"/g, '""')}"`,
+  quoteIdent: (name) => `"${validateIdentifier(name).replace(/"/g, '""')}"`,
   /**
    * @param index - One-based bind position.
    * @returns PostgreSQL's numbered placeholder syntax.

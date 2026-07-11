@@ -75,18 +75,19 @@ const columnRefsIn = (node: ExprNode | undefined, out: ColumnRefNode[] = []): Co
 /**
  * Enforces the table-scope guard from spec §8.1.
  *
- * @param scope - Table names visible to the query.
+ * @param scope - Lexical source identities visible to the query.
  * @param refs - Column references to validate.
  * @param out - Mutable violation accumulator.
  * @returns Nothing; violations are appended to `out`.
  */
-const checkScope = (scope: ReadonlySet<string>, refs: ReadonlyArray<ColumnRefNode>, out: Violation[]): void => {
+const checkScope = (scope: ReadonlyMap<string, object>, refs: ReadonlyArray<ColumnRefNode>, out: Violation[]): void => {
+  const identities = new Set(scope.values())
   for (const ref of refs) {
-    if (ref.table && !scope.has(ref.table)) {
+    if (!identities.has(ref.sourceId)) {
       out.push(
         new GuardError({
           guard: "table-scope",
-          message: `Column "${ref.table}"."${ref.column}" is not in query scope {${[...scope].join(", ")}}`
+          message: `Column "${ref.table}"."${ref.column}" is not in query scope {${[...scope.keys()].join(", ")}}`
         })
       )
     }
@@ -101,6 +102,9 @@ const sourceScopeName = (source: QuerySource): string => {
   if ("_tag" in source && source._tag === "SubquerySource") return source.alias
   return source.alias ?? source.name
 }
+
+/** @param source - Relation source. @returns Its opaque lexical identity. */
+const sourceScopeId = (source: QuerySource): object => source.sourceId
 
 /**
  * Visits select queries embedded inside an expression.
@@ -241,11 +245,11 @@ const unaggregatedRefsIn = (node: ExprNode, out: ColumnRefNode[] = []): ColumnRe
  * @param out - Mutable guard-error accumulator.
  * @returns Nothing.
  */
-const validateSelect = (ir: SelectIR, outerScope: ReadonlySet<string>, out: GuardError[]): void => {
-  for (const cte of ir.ctes ?? []) validateSelect(cte.query, new Set(), out)
+const validateSelect = (ir: SelectIR, outerScope: ReadonlyMap<string, object>, out: GuardError[]): void => {
+  for (const cte of ir.ctes ?? []) validateSelect(cte.query, new Map(), out)
 
   if ("_tag" in ir.from && ir.from._tag === "SubquerySource") {
-    validateSelect(ir.from.query, new Set(), out)
+    validateSelect(ir.from.query, new Map(), out)
   }
   if ("_tag" in ir.from && ir.from._tag === "TableFunctionSource") {
     checkScope(
@@ -255,15 +259,15 @@ const validateSelect = (ir: SelectIR, outerScope: ReadonlySet<string>, out: Guar
     )
     for (const arg of ir.from.args) visitSubqueries(arg, (query) => validateSelect(query, outerScope, out))
   }
-  const localScope = new Set<string>(outerScope)
-  localScope.add(sourceScopeName(ir.from))
+  const localScope = new Map(outerScope)
+  localScope.set(sourceScopeName(ir.from), sourceScopeId(ir.from))
 
   for (const join of ir.joins ?? []) {
     if ("_tag" in join.source && join.source._tag === "SubquerySource") {
-      validateSelect(join.source.query, join.lateral ? localScope : new Set(), out)
+      validateSelect(join.source.query, join.lateral ? localScope : new Map(), out)
     }
     if ("_tag" in join.source && join.source._tag === "TableFunctionSource") {
-      const argumentScope = join.lateral ? localScope : new Set<string>()
+      const argumentScope = join.lateral ? localScope : new Map<string, object>()
       checkScope(
         argumentScope,
         join.source.args.flatMap((arg) => columnRefsIn(arg)),
@@ -273,10 +277,10 @@ const validateSelect = (ir: SelectIR, outerScope: ReadonlySet<string>, out: Guar
         visitSubqueries(arg, (query) => validateSelect(query, argumentScope, out))
       }
     }
-    const joinScope = new Set(localScope)
-    joinScope.add(sourceScopeName(join.source))
+    const joinScope = new Map(localScope)
+    joinScope.set(sourceScopeName(join.source), sourceScopeId(join.source))
     checkScope(joinScope, columnRefsIn(join.on), out)
-    localScope.add(sourceScopeName(join.source))
+    localScope.set(sourceScopeName(join.source), sourceScopeId(join.source))
   }
 
   const expressions = [
@@ -339,7 +343,7 @@ const validateSelect = (ir: SelectIR, outerScope: ReadonlySet<string>, out: Guar
  */
 const validateMutationExpressions = (
   expressions: ReadonlyArray<ExprNode>,
-  scope: ReadonlySet<string>,
+  scope: ReadonlyMap<string, object>,
   out: GuardError[]
 ): void => {
   checkScope(
@@ -362,7 +366,7 @@ export const collectStructuralViolations = (ir: QueryIR): ReadonlyArray<GuardErr
   const out: GuardError[] = []
   switch (ir._tag) {
     case "Select": {
-      validateSelect(ir, new Set(), out)
+      validateSelect(ir, new Map(), out)
       break
     }
     case "Insert": {
@@ -405,8 +409,8 @@ export const collectStructuralViolations = (ir: QueryIR): ReadonlyArray<GuardErr
           })
         )
       }
-      const targetScope = new Set([ir.into.name])
-      validateMutationExpressions(ir.rows.flat(), new Set(), out)
+      const targetScope = new Map([[ir.into.name, ir.into.sourceId]])
+      validateMutationExpressions(ir.rows.flat(), new Map(), out)
       validateMutationExpressions(ir.conflict?.set.map((assignment) => assignment.value) ?? [], targetScope, out)
       validateMutationExpressions(
         (ir.returning ?? []).map((field) => field.expr),
@@ -419,7 +423,7 @@ export const collectStructuralViolations = (ir: QueryIR): ReadonlyArray<GuardErr
       if (ir.set.length === 0) {
         out.push(new GuardError({ guard: "update-shape", message: "Update has an empty SET clause" }))
       }
-      const scope = new Set([ir.table.name])
+      const scope = new Map([[ir.table.name, ir.table.sourceId]])
       validateMutationExpressions(
         [
           ...ir.set.map((assignment) => assignment.value),
@@ -432,7 +436,7 @@ export const collectStructuralViolations = (ir: QueryIR): ReadonlyArray<GuardErr
       break
     }
     case "Delete": {
-      const scope = new Set([ir.from.name])
+      const scope = new Map([[ir.from.name, ir.from.sourceId]])
       validateMutationExpressions(
         [...(ir.where ? [ir.where] : []), ...(ir.returning ?? []).map((field) => field.expr)],
         scope,

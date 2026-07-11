@@ -391,7 +391,7 @@ export class InsertValues<T extends AnyTable, P extends NamedParams = {}> {
     return {
       _tag: "Insert",
       id: nextId("Insert"),
-      into: { name: meta.name },
+      into: { name: meta.name, sourceId: meta.sourceId },
       columns: this.columns,
       rows: this.rows,
       ...(this.conflict ? { conflict: this.conflict } : {}),
@@ -561,7 +561,7 @@ export class UpdateValues<T extends AnyTable, P extends NamedParams = {}> {
     return {
       _tag: "Update",
       id: nextId("Update"),
-      table: { name: meta.name },
+      table: { name: meta.name, sourceId: meta.sourceId },
       set: this.assignments,
       ...(this.whereNode ? { where: this.whereNode } : {}),
       ...(returning ? { returning } : {}),
@@ -655,7 +655,7 @@ export class DeleteBuilder<T extends AnyTable, P extends NamedParams = {}> {
     return {
       _tag: "Delete",
       id: nextId("Delete"),
-      from: { name: meta.name },
+      from: { name: meta.name, sourceId: meta.sourceId },
       ...(this.whereNode ? { where: this.whereNode } : {}),
       ...(returning ? { returning } : {}),
       capabilities: returning ? capabilityBit("delete.returning") : noCapabilities,

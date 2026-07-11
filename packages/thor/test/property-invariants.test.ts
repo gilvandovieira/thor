@@ -83,16 +83,29 @@ describe("remediation property invariants (P3.5)", () => {
 
   it("identifier quoting round-trips arbitrary column names without breaking the literal", () => {
     fc.assert(
-      fc.property(fc.string({ minLength: 1, maxLength: 24 }), (name) => {
-        for (const dialect of dialects) {
-          const quoted = dialect.quoteIdent(name)
-          // The quoted identifier re-embeds the raw name with the quote char doubled.
-          const quoteChar = quoted[0]!
-          const inner = quoted.slice(1, -1)
-          expect(inner.split(quoteChar + quoteChar).join(quoteChar)).toBe(name)
+      fc.property(
+        fc.string({ minLength: 1, maxLength: 24 }).filter((name) => !name.includes("\0")),
+        (name) => {
+          for (const dialect of dialects) {
+            const quoted = dialect.quoteIdent(name)
+            // The quoted identifier re-embeds the raw name with the quote char doubled.
+            const quoteChar = quoted[0]!
+            const inner = quoted.slice(1, -1)
+            expect(inner.split(quoteChar + quoteChar).join(quoteChar)).toBe(name)
+          }
         }
-      }),
+      ),
       params(4)
+    )
+  })
+
+  it("rejects every empty or NUL-bearing identifier", () => {
+    fc.assert(
+      fc.property(fc.string({ maxLength: 24 }), fc.nat({ max: 24 }), (text, index) => {
+        const invalid = text.length === 0 ? text : `${text.slice(0, index)}\0${text.slice(index)}`
+        for (const dialect of dialects) expect(() => dialect.quoteIdent(invalid)).toThrow(TypeError)
+      }),
+      params(40)
     )
   })
 
