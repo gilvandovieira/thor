@@ -14,7 +14,6 @@ Connected commands read `thor.config.json`:
   "schema": "src/schema.ts",
   "database": { "dialect": "sqlite", "url": "app.db" },
   "policy": "safe-only",
-  "reviewed": false,
   "journalTable": "_thor_migrations"
 }
 ```

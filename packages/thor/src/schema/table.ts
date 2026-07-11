@@ -11,6 +11,7 @@
 import type { AnyColumn, BoundColumn, Column } from "./column.js"
 import { internIdentifier } from "../ir/identifiers.js"
 import type { UnsafeSqlNode } from "../ir/query-ir.js"
+import { isUnsafeSqlNode } from "../ir/unsafe-sql.js"
 
 /** Non-enumerable key carrying a table's runtime metadata. */
 export const TableMeta: unique symbol = Symbol.for("thor/table-meta")
@@ -253,7 +254,7 @@ export const defineTable = <Name extends string, Cols extends Columns>(
       columns: constraint.columns.map((key) => columns[key]!.def.name)
     })),
     checks: (options.checks ?? []).map((check) => {
-      if (check.expression?._tag !== "UnsafeSql") throw new TypeError("Table check expressions require unsafeSql(...)")
+      if (!isUnsafeSqlNode(check.expression)) throw new TypeError("Table check expressions require unsafeSql(...)")
       return {
         ...(check.name ? { name: internIdentifier(check.name) } : {}),
         expression: check.expression

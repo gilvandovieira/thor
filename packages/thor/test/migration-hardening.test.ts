@@ -303,8 +303,8 @@ describe("Epic O1 — diff, plan, dryRun (spec §15.3)", () => {
   it("apply proceeds for a reviewed destructive run", async () => {
     const h = harness()
     const entry = await h.run(
-      Effect.flatMap(makeMigrator({ policy: "allow-reviewed-destructive", reviewed: true }), (m) =>
-        m.apply({ id: "9002_drop", name: "drop", operations: [dropTable] })
+      Effect.flatMap(makeMigrator({ policy: "allow-reviewed-destructive" }), (m) =>
+        m.apply({ id: "9002_drop", name: "drop", operations: [dropTable] }, { reviewed: true })
       )
     )
     expect(entry.id).toBe("9002_drop")

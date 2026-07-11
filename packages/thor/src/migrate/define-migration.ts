@@ -10,6 +10,7 @@ import { createHash } from "node:crypto"
 import { MigrationError } from "../errors/index.js"
 import { Database } from "../execution/database.js"
 import type { UnsafeSqlNode } from "../ir/query-ir.js"
+import { isUnsafeSqlNode } from "../ir/unsafe-sql.js"
 
 /** A raw SQL statement (from the `sql` tagged template). */
 export interface SqlStatement {
@@ -110,7 +111,7 @@ export const sql = (strings: TemplateStringsArray, ...values: ReadonlyArray<Unsa
     out += chunk
     if (i < values.length) {
       const value = values[i]
-      if (value?._tag !== "UnsafeSql") {
+      if (!isUnsafeSqlNode(value)) {
         throw new TypeError("Migration SQL interpolation requires unsafeSql(...)")
       }
       out += value.sql
@@ -137,7 +138,7 @@ export const rawSql = (
     text += chunk
     if (i < values.length) {
       const value = values[i]
-      if (value?._tag !== "UnsafeSql") {
+      if (!isUnsafeSqlNode(value)) {
         throw new TypeError("Migration rawSql interpolation requires unsafeSql(...)")
       }
       text += value.sql

@@ -102,11 +102,10 @@ const compilePostgresOperation = (operation: MigrationOperation): string => {
         .map((arg) => `${arg.name ? `${quote(arg.name)} ` : ""}${unsafeSyntax(arg.type, "argument type")}`)
         .join(", ")
       const header = `create ${operation.replace ? "or replace " : ""}${operation.routine} ${quote(operation.name)}(${args})`
-      const returns =
-        operation.routine === "function" && operation.returns
-          ? ` returns ${unsafeSyntax(operation.returns, "return type")}`
-          : ""
-      return `${header}${returns} language ${unsafeSyntax(operation.language, "language")} as $$${unsafeSyntax(operation.body, "body")}$$;`
+      const returns = operation.returns ? unsafeSyntax(operation.returns, "return type") : undefined
+      const language = unsafeSyntax(operation.language, "language")
+      const body = unsafeSyntax(operation.body, "body")
+      return `${header}${operation.routine === "function" && returns ? ` returns ${returns}` : ""} language ${language} as $$${body}$$;`
     }
     case "DropRoutine": {
       const args = operation.args

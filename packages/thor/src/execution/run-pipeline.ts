@@ -390,32 +390,37 @@ export const prepareForExecution = (
     if (priorSql === compiled.sql) {
       prepared.delete(requested)
       prepared.set(requested, compiled.sql)
-      if (db.recordPreparedCache !== false) caches.notePrepared("hit", prepared.size, false)
+      if (db.recordPreparedCache !== false) caches.notePrepared("hit", prepared.size, 0)
       return { name: requested, outcome: db.recordPreparedCache === false ? "not-used" : "hit" }
     }
     if (priorSql !== undefined) {
-      if (db.recordPreparedCache !== false) caches.notePrepared("miss", prepared.size, false)
+      if (db.recordPreparedCache !== false) caches.notePrepared("miss", prepared.size, 0)
       return { name: undefined, outcome: db.recordPreparedCache === false ? "not-used" : "miss" }
     }
 
-    let evicted = false
+    const evictedNames: string[] = []
     const maxSize = caches.preparedMaxSize
-    if (maxSize !== undefined && prepared.size >= maxSize) {
+    const releasePrepared = db.driver.releasePrepared
+    while (prepared.size >= maxSize) {
       const oldest = prepared.keys().next().value as string | undefined
-      if (!oldest || !db.driver.releasePrepared) {
-        if (db.recordPreparedCache !== false) caches.notePrepared("miss", prepared.size, false)
+      if (!oldest || !releasePrepared) {
+        if (db.recordPreparedCache !== false) caches.notePrepared("miss", prepared.size, 0)
         return { name: undefined, outcome: db.recordPreparedCache === false ? "not-used" : "miss" }
       }
-      // Remove the registry entry before yielding so a concurrent fiber cannot
-      // pick the same victim; a release failure is housekeeping, not a reason to
-      // fail the user's unrelated query, so it is observed and swallowed.
       prepared.delete(oldest)
-      yield* Effect.ignore(db.driver.releasePrepared(oldest))
-      evicted = true
+      evictedNames.push(oldest)
     }
 
+    // Complete registry admission synchronously before release effects can yield,
+    // so concurrent executions always observe a registry within its bound.
     prepared.set(requested, compiled.sql)
-    if (db.recordPreparedCache !== false) caches.notePrepared("miss", prepared.size, evicted)
+    if (releasePrepared) {
+      for (const name of evictedNames) {
+        // Release failure is housekeeping, not a reason to fail the unrelated query.
+        yield* Effect.ignore(releasePrepared(name))
+      }
+    }
+    if (db.recordPreparedCache !== false) caches.notePrepared("miss", prepared.size, evictedNames.length)
     return { name: requested, outcome: db.recordPreparedCache === false ? "not-used" : "miss" }
   })
 

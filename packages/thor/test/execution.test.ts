@@ -242,6 +242,20 @@ describe("fake driver execution (spec §14.9)", () => {
     })
   })
 
+  it("refines DML RETURNING cardinality after execution without a non-portable limit", async () => {
+    const none = new FakeDriver().enqueue({ rows: [] })
+    const many = new FakeDriver().enqueue({ rows: [{ id: "a" }, { id: "b" }, { id: "c" }] })
+
+    await expect(
+      runSuccess(db.update(users).set({ age: 1 }).returning({ id: users.id }).maybeOne(), none)
+    ).resolves.toStrictEqual(Option.none())
+    const error = await runFailure(db.delete(users).returning({ id: users.id }).one(), many)
+
+    expect(error).toMatchObject({ _tag: "TooManyRowsError", count: 3 })
+    expect(none.calls[0]?.sql).not.toMatch(/LIMIT/)
+    expect(many.calls[0]?.sql).not.toMatch(/LIMIT/)
+  })
+
   it("returns the command row count", async () => {
     const driver = new FakeDriver().enqueue({ rowCount: 3 })
 

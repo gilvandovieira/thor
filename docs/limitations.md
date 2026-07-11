@@ -75,7 +75,7 @@ A feature is not marked stable (`St`) unless its API surface is in
   opaque `sql`/`rawSql` text. `up()` is guarded by `safety`/`phase` and `down()`
   independently by `downSafety`/`downPhase`. A migration with **no declared
   `safety`** is treated as *unchecked* and **blocked** under `safe-only`/
-  `expand-only` unless the run is reviewed — opaque SQL is never silently treated
+  `expand-only`; it requires `allow-reviewed-destructive` plus an explicitly reviewed run — opaque SQL is never silently treated
   as safe. Declare `safety: "additive"` on additive migrations (the CLI templates
   do this for you). The whole pending set is preflighted before the first step
   runs.
@@ -107,6 +107,11 @@ A feature is not marked stable (`St`) unless its API surface is in
   `query.streaming` capability is `unsupported` on every dialect, and no scoped
   cursor driver contract exists. Use `.all()` with explicit pagination until a
   cursor-backed, interruptible streaming API ships.
+- `SELECT.one()` and `SELECT.maybeOne()` probe at most two rows. DML
+  `RETURNING.one()` and `RETURNING.maybeOne()` cannot be capped portably: the
+  mutation executes and all returned rows are decoded before cardinality is
+  checked. Use `.all()` for multi-row writes, and use a transaction when a
+  cardinality failure must roll the mutation back.
 
 ## Prepared statements & pooling
 
@@ -116,8 +121,9 @@ A feature is not marked stable (`St`) unless its API surface is in
   pooling. Use separate layer instances for concurrent physical connections.
 - `preparedStatements: false` disables prepared execution: mysql2 uses
   `query(sql, values)` instead of `execute(sql, values)`. Bounded query caches
-  also bound actual per-connection prepared admission; SQLite/mysql2 evictions
-  release client resources where their runtimes expose that operation.
+  use an independently configured `preparedMaxSize` (100 by default) to bound
+  actual per-connection prepared admission; SQLite/mysql2 evictions release
+  client resources where their runtimes expose that operation.
 
 ## Raw SQL trust boundary
 

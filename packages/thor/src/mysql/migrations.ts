@@ -160,14 +160,16 @@ export const compileMySQLOperation = (operation: MigrationOperation): string => 
       const args = operation.args
         .map((arg) => `${arg.name ? `${quote(arg.name)} ` : ""}${unsafeSyntax(arg.type, "argument type")}`)
         .join(", ")
-      const returns =
-        operation.routine === "function" && operation.returns
-          ? ` returns ${unsafeSyntax(operation.returns, "return type")}`
-          : ""
-      return `create ${operation.routine} ${quote(operation.name)}(${args})${returns} ${unsafeSyntax(operation.body, "body")}`
+      const returns = operation.returns ? unsafeSyntax(operation.returns, "return type") : undefined
+      unsafeSyntax(operation.language, "language")
+      const body = unsafeSyntax(operation.body, "body")
+      return `create ${operation.routine} ${quote(operation.name)}(${args})${operation.routine === "function" && returns ? ` returns ${returns}` : ""} ${body}`
     }
     case "DropRoutine":
       // MySQL DROP FUNCTION/PROCEDURE takes no argument list.
+      operation.args?.forEach((arg) => {
+        unsafeSyntax(arg.type, "argument type")
+      })
       return `drop ${operation.routine} ${operation.ifExists ? "if exists " : ""}${quote(operation.name)};`
     case "RawSql":
       return operation.sql.trim().endsWith(";") ? operation.sql : `${operation.sql};`

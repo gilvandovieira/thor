@@ -119,7 +119,7 @@ export const guardOperations = (
  * Thor, using only the author-declared `safety`/`phase`. This closes the gap
  * where `Migrator.up()`/`down()` executed manual steps without any policy check.
  *
- * @param safety - Author-declared risk class (undefined ⇒ author-trusted additive).
+ * @param safety - Author-declared risk class; undefined is unchecked and requires review.
  * @param phase - Author-declared expand/contract phase.
  * @param policy - Active migration policy.
  * @param options - Policy refinements (e.g. explicit review).

@@ -545,6 +545,7 @@ where users.email = 'lucas@example.com'
 ```ts
 db.withQueryCache({
   maxSize: 10_000,
+  preparedMaxSize: 100,
   strategy: "lru"
 })
 
@@ -570,8 +571,9 @@ compileUnsafeHot()
 ### 9.5 Prepared-resource lifecycle
 
 Prepared resources are scoped to a physical connection, not merely a query
-shape. A bounded query cache must also bound actual prepared admission on each
-connection. Eviction releases the client statement where the adapter exposes a
+shape. `preparedMaxSize` independently bounds actual prepared admission on each
+connection and defaults to 100; `maxSize` retains its shape-cache-only semantics.
+Eviction releases the client statement where the adapter exposes a
 safe release operation; otherwise the adapter executes non-admitted shapes
 unprepared rather than growing an unrelated resource cache. Scoped connection
 disposal clears retained resources. Compile-cache entries, observation counters,

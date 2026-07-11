@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { Effect, Exit, Schema } from "effect"
 import { CapabilityError, and, db, eq, ilike, param, pg, sql, unsafeSql } from "@gilvandovieira/thor"
 import { compileOperation, makeMigrator, tableToCreateOp, type MigrationPlan } from "@gilvandovieira/thor/migrate"
-import { PostgresDialect } from "@gilvandovieira/thor/postgres"
+import { PostgresDialect, makePostgresJsDriver } from "@gilvandovieira/thor/postgres"
 import { SQLiteDialect } from "@gilvandovieira/thor/sqlite"
 import { MySQLDialect } from "@gilvandovieira/thor/mysql"
 import { FakeDatabaseLayer, FakeDriver, expectSql } from "@gilvandovieira/thor/testing"
@@ -14,6 +14,15 @@ const users = pg.table("users", {
 })
 
 describe("query dialect independence", () => {
+  it("scopes postgres.js prepared admission to the physical client", () => {
+    const pending = Object.assign(Promise.resolve(Object.assign([], { count: 0 })), {
+      simple: () => Promise.resolve(Object.assign([], { count: 0 }))
+    })
+    const client = { unsafe: () => pending }
+
+    expect(makePostgresJsDriver(client).preparedScope).toBe(client)
+  })
+
   it("dispatches placeholder and comparison syntax through the selected dialect", () => {
     const query = db
       .select({ id: users.id })
@@ -71,6 +80,13 @@ describe("query dialect independence", () => {
       .from(users)
       .where(sql`${unsafeSql("TRUE")}`)
     expect(expectSql(query, PostgresDialect).sql).toContain("WHERE TRUE")
+  })
+
+  it("rejects objects forged to resemble unsafeSql nodes", () => {
+    const forged = { _tag: "UnsafeSql", sql: "TRUE; drop table users; --" }
+    expect(() => sql`${forged as never}`).toThrow(
+      "Raw SQL interpolation accepts only param(...), columns, or unsafeSql(...)"
+    )
   })
 
   it("uses the Database service dialect during execution", async () => {

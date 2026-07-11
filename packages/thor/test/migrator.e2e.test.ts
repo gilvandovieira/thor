@@ -76,8 +76,7 @@ describe.skipIf(!DATABASE_URL)("live migrator e2e (spec §13)", () => {
   const config = {
     migrations: [m1, m2, m3],
     schema: [users, posts],
-    policy: "allow-reviewed-destructive" as const,
-    reviewed: true
+    policy: "allow-reviewed-destructive" as const
   }
 
   const mig = <A, E>(f: (m: MigratorService) => Effect.Effect<A, E>) => Effect.flatMap(Migrator, f)
@@ -128,8 +127,8 @@ describe.skipIf(!DATABASE_URL)("live migrator e2e (spec §13)", () => {
 
   it("down() rolls back the last migration and un-journals it", async () => {
     await run(mig((m) => m.up()))
-    await run(mig((m) => m.down())) // rolls back m3 (no-op)
-    await run(mig((m) => m.down())) // rolls back m2 (drop created_at)
+    await run(mig((m) => m.down({ reviewed: true }))) // rolls back m3 (no-op)
+    await run(mig((m) => m.down({ reviewed: true }))) // rolls back m2 (drop created_at)
 
     const cols = await q("select column_name from information_schema.columns where table_name = 'users'")
     expect(cols.map((c) => c.column_name)).not.toContain("created_at")
@@ -142,6 +141,7 @@ describe.skipIf(!DATABASE_URL)("live migrator e2e (spec §13)", () => {
     const bad = defineMigration({
       id: "0001_bad",
       name: "bad",
+      safety: "additive",
       up: sql`create table ok (id int); create table ok (id int);` // duplicate -> fails
     })
     const badApp = Layer.provideMerge(MigratorLive({ migrations: [bad] }), PostgresLayer(client))

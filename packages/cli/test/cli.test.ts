@@ -77,8 +77,7 @@ const migrationProject = async (): Promise<string> => {
       migrationsDir: "migrations",
       schema: "schema.ts",
       database: { dialect: "sqlite", url: "app.db" },
-      policy: "allow-reviewed-destructive",
-      reviewed: true
+      policy: "allow-reviewed-destructive"
     })
   )
   mkdirSync(join(cwd, "migrations"), { recursive: true })
@@ -96,7 +95,7 @@ describe("published CLI surface", () => {
     const help = execFileSync(process.execPath, [cli, "--help"], { cwd, encoding: "utf8" })
     expect(help).toContain("init")
     expect(help).toContain("create <name>")
-    expect(help).toContain("up                Apply pending migrations")
+    expect(help).toContain("up [--reviewed]   Apply pending migrations")
     expect(help).toContain("capabilities <dialect|runtime>")
 
     execFileSync(process.execPath, [cli, "init"], { cwd })
@@ -104,6 +103,13 @@ describe("published CLI surface", () => {
     const migration = readdirSync(join(cwd, "migrations")).find((file) => file.endsWith("_add_users.ts"))
     expect(migration).toBeDefined()
     expect(readFileSync(join(cwd, "migrations", migration!), "utf8")).toContain('name: "add_users"')
+  })
+
+  it("rejects unknown migration-run flags", async () => {
+    const cwd = await migrationProject()
+    const result = spawnSync(process.execPath, [cli, "up", "--force"], { cwd, encoding: "utf8" })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain("Usage: thor up [--reviewed]")
   })
 
   it("prints every capability from the authoritative matrix", () => {
@@ -232,13 +238,45 @@ describe("database-connected commands (spec §16.2, §20.2)", { timeout: 60_000 
     expect(execFileSync(process.execPath, [cli, "doctor"], { cwd, encoding: "utf8" })).toContain(
       "pending: 0 migration(s)"
     )
-    expect(execFileSync(process.execPath, [cli, "down"], { cwd, encoding: "utf8" })).toContain("Rolled back")
+    expect(execFileSync(process.execPath, [cli, "redo", "--reviewed"], { cwd, encoding: "utf8" })).toContain(
+      "Reapplied"
+    )
+    expect(execFileSync(process.execPath, [cli, "down", "--reviewed"], { cwd, encoding: "utf8" })).toContain(
+      "Rolled back"
+    )
 
     const { DatabaseSync } = await import("node:sqlite")
     const database = new DatabaseSync(join(cwd, "app.db"))
     const table = database.prepare("select name from sqlite_master where type = 'table' and name = 'users'").get()
     database.close()
     expect(table).toBeUndefined()
+  })
+
+  it("requires a fresh reviewed acknowledgement for every destructive invocation", async () => {
+    const cwd = await migrationProject()
+    writeFileSync(
+      join(cwd, "thor.config.json"),
+      JSON.stringify({
+        migrationsDir: "migrations",
+        schema: "schema.ts",
+        database: { dialect: "sqlite", url: "app.db" },
+        policy: "allow-reviewed-destructive",
+        reviewed: true
+      })
+    )
+
+    execFileSync(process.execPath, [cli, "up"], { cwd })
+    const blockedDown = spawnSync(process.execPath, [cli, "down"], { cwd, encoding: "utf8" })
+    expect(blockedDown.status).toBe(1)
+    expect(blockedDown.stderr).toContain("reviewed")
+
+    execFileSync(process.execPath, [cli, "down", "--reviewed"], { cwd })
+    execFileSync(process.execPath, [cli, "up"], { cwd })
+
+    const blockedAgain = spawnSync(process.execPath, [cli, "redo"], { cwd, encoding: "utf8" })
+    expect(blockedAgain.status).toBe(1)
+    expect(blockedAgain.stderr).toContain("reviewed")
+    expect(execFileSync(process.execPath, [cli, "status"], { cwd, encoding: "utf8" })).toContain("Applied: 1")
   })
 
   it("generates an irreversible create-table migration", async () => {

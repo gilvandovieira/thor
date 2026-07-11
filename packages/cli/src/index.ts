@@ -19,9 +19,9 @@ Commands:
   generate <name>   Generate a create-table-only migration from schema drift
   check             Validate migration definitions and journal checksums
   status            Print applied and pending migrations
-  up                Apply pending migrations
-  down              Roll back the latest migration
-  redo              Roll back and reapply the latest migration
+  up [--reviewed]   Apply pending migrations
+  down [--reviewed] Roll back the latest migration
+  redo [--reviewed] Roll back and reapply the latest migration
   capabilities <dialect|runtime>
                     Print postgres/sqlite/mysql or runtime capability statuses
   skills <list|export>
@@ -59,11 +59,11 @@ const main = async (): Promise<void> => {
     case "status":
       return commands.status(cwd)
     case "up":
-      return commands.up(cwd)
+      return commands.up(cwd, rest)
     case "down":
-      return commands.down(cwd)
+      return commands.down(cwd, rest)
     case "redo":
-      return commands.redo(cwd)
+      return commands.redo(cwd, rest)
     case "capabilities":
       return commands.capabilities(rest)
     case "skills":

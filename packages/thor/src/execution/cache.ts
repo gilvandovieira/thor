@@ -16,8 +16,9 @@
  * Every layer is a {@link CacheLayer}. The default backing is a
  * {@link WeakCacheLayer} — unbounded and GC-friendly, matching the v0 behavior
  * exactly (no retention, no eviction). Opting into {@link makeQueryCaches} with a
- * `maxSize` swaps in a {@link BoundedLruCache} that retains at most `maxSize`
- * shapes and evicts least-recently-used entries. Both flavors record hit/miss (and
+ * `maxSize` swaps shape caches to a {@link BoundedLruCache} that retains at most
+ * `maxSize` shapes and evicts least-recently-used entries. Prepared resources have
+ * an independent, finite per-connection bound. Both flavors record hit/miss (and
  * eviction) counters so cache effectiveness is observable (spec §9, §19; feeds S).
  *
  * The cache is a pure optimization: keys are query shapes (object identities and
@@ -43,9 +44,17 @@ export interface QueryCacheOptions {
    * GC-friendly (the default, matching v0).
    */
   readonly maxSize?: number
+  /**
+   * Maximum prepared shapes admitted per physical connection. Defaults to `100`,
+   * independently of `maxSize`, so server/client prepared registries stay bounded.
+   */
+  readonly preparedMaxSize?: number
   /** Eviction strategy for bounded layers. Defaults to `"lru"`. */
   readonly strategy?: CacheStrategy
 }
+
+/** Conservative default bound for prepared resources on each physical connection. */
+const DEFAULT_PREPARED_MAX_SIZE = 100
 
 /** Point-in-time counters for a single cache layer. */
 export interface CacheLayerStats {
@@ -318,9 +327,8 @@ export class QueryCaches {
   readonly capability: CacheLayer<object, GuardByMatrix>
   /**
    * Prepared layer: value-independent compiled-shape keys already registered for
-   * server-side prepared-statement reuse. Insertion-ordered so it can honor the
-   * same LRU bound as the object-keyed layers (the statement itself lives in the
-   * driver/connection; this only observes reuse).
+   * server-side prepared-statement reuse. The statement itself lives in the
+   * driver/connection; this layer observes reuse.
    */
   private preparedHits = 0
   private preparedMisses = 0
@@ -328,17 +336,21 @@ export class QueryCaches {
   private preparedSize = 0
 
   /** Configured bound for each physical connection's prepared registry. */
-  readonly preparedMaxSize: number | undefined
+  readonly preparedMaxSize: number
 
   /**
-   * @param options - Cache options; omit `maxSize` for unbounded (default) layers.
+   * @param options - Independent shape-cache and prepared-resource options.
    */
-  constructor(private readonly options: QueryCacheOptions = {}) {
+  constructor(options: QueryCacheOptions = {}) {
     this.shape = makeLayer("shape", options)
     this.compile = makeLayer("compile", options)
     this.decoder = makeLayer("decoder", options)
     this.capability = makeLayer("capability", options)
-    this.preparedMaxSize = options.maxSize
+    const preparedMaxSize = options.preparedMaxSize ?? DEFAULT_PREPARED_MAX_SIZE
+    if (!Number.isInteger(preparedMaxSize) || preparedMaxSize <= 0) {
+      throw new RangeError(`Query cache preparedMaxSize must be a positive integer, received ${preparedMaxSize}`)
+    }
+    this.preparedMaxSize = preparedMaxSize
   }
 
   /**
@@ -346,13 +358,13 @@ export class QueryCaches {
    *
    * @param outcome - Whether the physical connection registry hit or missed.
    * @param size - Current physical connection registry size.
-   * @param evicted - Whether an actual prepared resource was evicted.
+   * @param evictions - Number of actual prepared resources evicted.
    * @returns Nothing.
    */
-  notePrepared(outcome: "hit" | "miss", size: number, evicted: boolean): void {
+  notePrepared(outcome: "hit" | "miss", size: number, evictions: number): void {
     if (outcome === "hit") this.preparedHits++
     else this.preparedMisses++
-    if (evicted) this.preparedEvictions++
+    this.preparedEvictions += evictions
     this.preparedSize = size
   }
 
@@ -367,7 +379,7 @@ export class QueryCaches {
         misses: this.preparedMisses,
         evictions: this.preparedEvictions,
         size: this.preparedSize,
-        maxSize: this.options.maxSize
+        maxSize: this.preparedMaxSize
       },
       this.decoder.stats(),
       this.capability.stats()
@@ -393,8 +405,9 @@ export class QueryCaches {
 
 /**
  * Build a {@link QueryCaches} registry from cache options (spec §9.3). Omitting
- * `maxSize` yields unbounded, GC-friendly layers identical to v0; supplying it
- * yields bounded LRU layers.
+ * `maxSize` yields unbounded, GC-friendly shape layers identical to v0; supplying
+ * it yields bounded LRU shape layers. Prepared resources always use the separate
+ * finite `preparedMaxSize` bound.
  *
  * @param options - Cache options.
  * @returns A configured cache registry.
@@ -403,7 +416,7 @@ export const makeQueryCaches = (options: QueryCacheOptions = {}): QueryCaches =>
 
 /**
  * Process-wide default cache registry used when a `Database` layer does not
- * install its own via `withQueryCache`. Unbounded and GC-friendly, so default
- * execution keeps v0 memory/perf behavior.
+ * install its own via `withQueryCache`. Shape layers are unbounded and
+ * GC-friendly; prepared resources retain at most 100 shapes per connection.
  */
 export const defaultQueryCaches: QueryCaches = new QueryCaches()

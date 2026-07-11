@@ -6,6 +6,7 @@
  */
 import type { SqlDataType } from "../schema/column.js"
 import type { UnsafeSqlNode } from "../ir/query-ir.js"
+import { isUnsafeSqlNode } from "../ir/unsafe-sql.js"
 
 /** Typed literal accepted as a generated DDL default. */
 export type DefaultLiteral = string | number | bigint | boolean | null | Date
@@ -250,12 +251,7 @@ export const isExpandOperation = (op: MigrationOperation): boolean => migrationP
  * @throws {TypeError} When the node is not a genuine `unsafeSql(...)` value.
  */
 export const unsafeSyntax = (node: UnsafeSqlNode, field: string): string => {
-  if (
-    typeof node !== "object" ||
-    node === null ||
-    (node as { _tag?: string })._tag !== "UnsafeSql" ||
-    typeof (node as { sql?: unknown }).sql !== "string"
-  ) {
+  if (!isUnsafeSqlNode(node)) {
     throw new TypeError(`Routine DDL ${field} must be explicit unsafeSql(...) syntax`)
   }
   return node.sql

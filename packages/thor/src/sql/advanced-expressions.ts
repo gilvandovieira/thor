@@ -17,6 +17,7 @@ import type {
   WindowFrameBoundaryNode,
   WindowFrameNode
 } from "../ir/query-ir.js"
+import { isUnsafeSqlNode } from "../ir/unsafe-sql.js"
 import { type ColumnValue, type Expr, SqlInputBrand, isColumn, toExprNode } from "./expressions.js"
 
 /** Structural select shape accepted by subquery helpers. */
@@ -95,6 +96,9 @@ const frameBetween = (
   start: WindowFrameBoundaryNode,
   end: WindowFrameBoundaryNode
 ): WindowFrameNode => {
+  if (!isValidBoundary(start) || !isValidBoundary(end)) {
+    throw new TypeError("Window frame boundaries must be valid structured boundary values")
+  }
   if (boundaryRank(start) > boundaryRank(end)) throw new RangeError("Window frame end cannot precede its start")
   return { _tag: "WindowFrame", unit, start, end }
 }
@@ -174,7 +178,7 @@ const isValidBoundary = (boundary: WindowFrameBoundaryNode): boolean => {
  * @throws {TypeError} When the frame is not a valid structured or unsafe node.
  */
 const assertWindowFrame = (frame: WindowFrameNode | UnsafeSqlNode): WindowFrameNode | UnsafeSqlNode => {
-  if (frame && frame._tag === "UnsafeSql" && typeof frame.sql === "string") return frame
+  if (isUnsafeSqlNode(frame)) return frame
   if (
     frame &&
     frame._tag === "WindowFrame" &&
@@ -182,6 +186,9 @@ const assertWindowFrame = (frame: WindowFrameNode | UnsafeSqlNode): WindowFrameN
     isValidBoundary(frame.start) &&
     isValidBoundary(frame.end)
   ) {
+    if (boundaryRank(frame.start) > boundaryRank(frame.end)) {
+      throw new RangeError("Window frame end cannot precede its start")
+    }
     return frame
   }
   throw new TypeError("Window frame must come from rowsBetween/rangeBetween/groupsBetween or be explicit unsafeSql")

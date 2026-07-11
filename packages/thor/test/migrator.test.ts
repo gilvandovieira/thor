@@ -227,4 +227,36 @@ describe("migration concurrency and failure invariants", () => {
     expect(test.calls).toContain("rollback")
     expect(test.calls).toContain("unlock")
   })
+
+  it("redo rolls back and reapplies under one lock and one transaction", async () => {
+    const reversible = defineMigration({
+      id: "0001_reversible",
+      name: "reversible",
+      safety: "additive",
+      downSafety: "additive",
+      up: sql`apply`,
+      down: sql`revert`
+    })
+    const entry: JournalEntry = {
+      id: reversible.id,
+      name: reversible.name,
+      checksum: legacyChecksum(reversible),
+      appliedAt: new Date(0),
+      executionTimeMs: 0
+    }
+    const test = harness({ journal: [entry] })
+    const service = await test.service([reversible])
+
+    const reapplied = await Effect.runPromise(service.redo())
+
+    expect(reapplied?.id).toBe(reversible.id)
+    expect(test.calls.filter((call) => call === "lock")).toHaveLength(1)
+    expect(test.calls.filter((call) => call === "unlock")).toHaveLength(1)
+    expect(test.calls.filter((call) => call === "begin")).toHaveLength(1)
+    expect(test.calls.filter((call) => call === "commit")).toHaveLength(1)
+    expect(test.calls.indexOf("script:revert")).toBeLessThan(test.calls.indexOf("delete"))
+    expect(test.calls.indexOf("delete")).toBeLessThan(test.calls.indexOf("script:apply"))
+    expect(test.calls.indexOf("script:apply")).toBeLessThan(test.calls.indexOf("insert"))
+    expect(test.journal.map((item) => item.id)).toEqual([reversible.id])
+  })
 })

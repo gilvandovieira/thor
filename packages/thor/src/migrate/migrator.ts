@@ -42,13 +42,14 @@ export interface MigratorConfig {
   readonly schema?: ReadonlyArray<AnyTable>
   /** Policy gating destructive generated operations (default `"safe-only"`). */
   readonly policy?: AutoMigrationPolicy
-  /**
-   * Whether this run is explicitly reviewed (spec §15.4). Required for
-   * destructive operations under the `allow-reviewed-destructive` policy.
-   */
-  readonly reviewed?: boolean
   /** Journal table name (default `_thor_migrations`). */
   readonly journalTable?: string
+}
+
+/** @stable Approval supplied to one migration operation rather than retained in configuration. */
+export interface MigrationRunOptions {
+  /** Explicitly approve destructive or unchecked work for this invocation. */
+  readonly reviewed?: boolean
 }
 
 /** One pending migration previewed by {@link MigratorService.dryRun}. */
@@ -84,13 +85,25 @@ export interface MigratorService {
    */
   readonly check: () => Effect.Effect<void, MigrationError>
   /**
+   * @param options - Invocation-scoped destructive-operation approval.
    * @returns An Effect applying pending migrations and yielding new journal entries.
    */
-  readonly up: () => Effect.Effect<ReadonlyArray<JournalEntry>, MigrationError>
+  readonly up: (options?: MigrationRunOptions) => Effect.Effect<ReadonlyArray<JournalEntry>, MigrationError>
   /**
+   * @param options - Invocation-scoped destructive-operation approval.
    * @returns An Effect rolling back the latest migration when reversible.
    */
-  readonly down: () => Effect.Effect<void, MigrationError | IrreversibleMigrationError>
+  readonly down: (options?: MigrationRunOptions) => Effect.Effect<void, MigrationError | IrreversibleMigrationError>
+  /**
+   * Rolls back and reapplies the latest migration while holding one migration
+   * lock, and one transaction when the dialect supports transactional DDL.
+   *
+   * @param options - Invocation-scoped destructive-operation approval.
+   * @returns The reapplied journal entry, or undefined when no migration is applied.
+   */
+  readonly redo: (
+    options?: MigrationRunOptions
+  ) => Effect.Effect<JournalEntry | undefined, MigrationError | IrreversibleMigrationError>
   /**
    * @param previousTables - Table names in the prior schema snapshot.
    * @returns The raw, ungated operations reconciling the schema with the snapshot.
@@ -101,17 +114,24 @@ export interface MigratorService {
   /**
    * @param name - Human-readable plan name.
    * @param previousTables - Table names in the prior schema snapshot.
+   * @param options - Invocation-scoped destructive-operation approval.
    * @returns An Effect yielding a policy-guarded migration plan (alias `generate`).
    */
-  readonly plan: (name: string, previousTables?: ReadonlyArray<string>) => Effect.Effect<MigrationPlan, MigrationError>
+  readonly plan: (
+    name: string,
+    previousTables?: ReadonlyArray<string>,
+    options?: MigrationRunOptions
+  ) => Effect.Effect<MigrationPlan, MigrationError>
   /**
    * @param name - Human-readable plan name.
    * @param previousTables - Table names in the prior schema snapshot.
+   * @param options - Invocation-scoped destructive-operation approval.
    * @returns An Effect yielding a guarded create-only migration plan.
    */
   readonly generate: (
     name: string,
-    previousTables?: ReadonlyArray<string>
+    previousTables?: ReadonlyArray<string>,
+    options?: MigrationRunOptions
   ) => Effect.Effect<MigrationPlan, MigrationError>
   /**
    * Preview the migrations `up()` would apply, without applying them (spec §15.3).
@@ -121,9 +141,10 @@ export interface MigratorService {
   readonly dryRun: () => Effect.Effect<DryRunReport, MigrationError>
   /**
    * @param plan - Compiled migration plan to apply.
+   * @param options - Invocation-scoped destructive-operation approval.
    * @returns Its persisted journal entry.
    */
-  readonly apply: (plan: MigrationPlan) => Effect.Effect<JournalEntry, MigrationError>
+  readonly apply: (plan: MigrationPlan, options?: MigrationRunOptions) => Effect.Effect<JournalEntry, MigrationError>
   /**
    * Legacy create-missing-table discovery: returns `CreateTable` operations for
    * configured tables absent from the live database. It does **not** compare
@@ -342,23 +363,28 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
       })
 
     const policy = config.policy ?? "safe-only"
-    const guardOptions = { reviewed: config.reviewed ?? false }
+    const guardOptions = (options?: MigrationRunOptions) => ({ reviewed: options?.reviewed === true })
 
     /**
      * Fail before a manual migration step's SQL reaches the driver when the
      * configured policy forbids its declared risk class (spec §15.4, P0.4).
      */
-    const manualViolation = (migration: MigrationDefinition, direction: "up" | "down") => {
+    const manualViolation = (
+      migration: MigrationDefinition,
+      direction: "up" | "down",
+      options?: MigrationRunOptions
+    ) => {
       const safety = direction === "up" ? migration.safety : migration.downSafety
       const phase = direction === "up" ? migration.phase : migration.downPhase
-      return guardManualMigration(safety, phase, policy, guardOptions)[0]
+      return guardManualMigration(safety, phase, policy, guardOptions(options))[0]
     }
 
     const guardManualStep = (
       migration: MigrationDefinition,
-      direction: "up" | "down"
+      direction: "up" | "down",
+      options?: MigrationRunOptions
     ): Effect.Effect<void, MigrationError> => {
-      const violation = manualViolation(migration, direction)
+      const violation = manualViolation(migration, direction, options)
       return violation
         ? Effect.fail(new MigrationError({ message: violation.message, migrationId: migration.id }))
         : Effect.void
@@ -369,9 +395,12 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
      * step, so an earlier allowed migration is never committed only for a later
      * one to be rejected (Finding 12).
      */
-    const preflightPending = (pending: ReadonlyArray<MigrationDefinition>): Effect.Effect<void, MigrationError> => {
+    const preflightPending = (
+      pending: ReadonlyArray<MigrationDefinition>,
+      options?: MigrationRunOptions
+    ): Effect.Effect<void, MigrationError> => {
       for (const migration of pending) {
-        const violation = manualViolation(migration, "up")
+        const violation = manualViolation(migration, "up", options)
         if (violation) return Effect.fail(new MigrationError({ message: violation.message, migrationId: migration.id }))
       }
       return Effect.void
@@ -391,26 +420,54 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
       )
     }
 
-    const up: MigratorService["up"] = () => {
+    const applyOne = (
+      migration: MigrationDefinition,
+      database: DatabaseService,
+      options?: MigrationRunOptions,
+      observed = true
+    ): Effect.Effect<JournalEntry, MigrationError> => {
+      const effect = Effect.gen(function* () {
+        const start = Date.now()
+        yield* guardManualStep(migration, "up", options)
+        yield* runStep(migration.up, migration.id, database)
+        const entry: JournalEntry = {
+          id: migration.id,
+          name: migration.name,
+          checksum: checksum(migration),
+          appliedAt: new Date(),
+          executionTimeMs: Math.max(0, Math.round(Date.now() - start))
+        }
+        yield* insertJournal(entry)
+        return entry
+      })
+      return observed ? observeMigration("apply", migration.id, effect) : effect
+    }
+
+    const rollbackOne = (
+      migration: MigrationDefinition,
+      database: DatabaseService,
+      options?: MigrationRunOptions,
+      observed = true
+    ): Effect.Effect<void, MigrationError | IrreversibleMigrationError> => {
+      if (migration.irreversible || !migration.down) {
+        return Effect.fail(
+          new IrreversibleMigrationError({
+            message: `migration "${migration.id}" is irreversible`,
+            migrationId: migration.id
+          })
+        )
+      }
+      const downStep = migration.down
+      const effect = Effect.gen(function* () {
+        yield* guardManualStep(migration, "down", options)
+        yield* runStep(downStep, migration.id, database)
+        yield* deleteJournal(migration.id)
+      })
+      return observed ? observeMigration("rollback", migration.id, effect) : effect
+    }
+
+    const up: MigratorService["up"] = (options) => {
       const defs = migrations()
-      const applyOne = (
-        migration: MigrationDefinition,
-        database: DatabaseService
-      ): Effect.Effect<JournalEntry, MigrationError> =>
-        Effect.gen(function* () {
-          const start = Date.now()
-          yield* guardManualStep(migration, "up")
-          yield* runStep(migration.up, migration.id, database)
-          const entry: JournalEntry = {
-            id: migration.id,
-            name: migration.name,
-            checksum: checksum(migration),
-            appliedAt: new Date(),
-            executionTimeMs: Math.max(0, Math.round(Date.now() - start))
-          }
-          yield* insertJournal(entry)
-          return entry
-        }).pipe((effect) => observeMigration("apply", migration.id, effect))
 
       if (hasAdvisoryLock) {
         return withLock(
@@ -421,17 +478,17 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
             yield* validateApplied(defs, appliedEntries)
             const applied = new Set(appliedEntries.map((entry) => entry.id))
             const pending = defs.filter((migration) => !applied.has(migration.id))
-            yield* preflightPending(pending)
+            yield* preflightPending(pending, options)
             const entries: JournalEntry[] = []
             for (const migration of pending) {
               const scoped = migrationDatabase(migration.id)
               entries.push(
                 yield* dialect.transactionalDdl
                   ? withTx(
-                      Effect.flatMap(Database, (active) => applyOne(migration, active)),
+                      Effect.flatMap(Database, (active) => applyOne(migration, active, options)),
                       scoped
                     )
-                  : applyOne(migration, scoped)
+                  : applyOne(migration, scoped, options)
               )
             }
             return entries
@@ -455,7 +512,10 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
             yield* ensureJournal
             const appliedEntries = yield* readApplied
             const applied = new Set(appliedEntries.map((item) => item.id))
-            yield* preflightPending(defs.filter((migration) => !applied.has(migration.id)))
+            yield* preflightPending(
+              defs.filter((migration) => !applied.has(migration.id)),
+              options
+            )
           })
         )
         const entries: JournalEntry[] = []
@@ -468,7 +528,7 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
               yield* validateApplied(defs, appliedEntries)
               const applied = new Set(appliedEntries.map((item) => item.id))
               const next = defs.find((migration) => !applied.has(migration.id))
-              return next ? yield* applyOne(next, active) : null
+              return next ? yield* applyOne(next, active, options) : null
             })
           )
           if (!entry) break
@@ -478,7 +538,7 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
       })
     }
 
-    const down: MigratorService["down"] = () => {
+    const down: MigratorService["down"] = (options) => {
       const downBody = (transactionalStep: boolean) =>
         Effect.gen(function* () {
           const active = yield* Database
@@ -498,25 +558,12 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
               })
             )
           }
-          if (def.irreversible || !def.down) {
-            return yield* Effect.fail(
-              new IrreversibleMigrationError({ message: `migration "${def.id}" is irreversible`, migrationId: def.id })
-            )
-          }
-          const downStep = def.down
-          const rollbackOne = (database: DatabaseService) =>
-            observeMigration(
-              "rollback",
-              def.id,
-              Effect.gen(function* () {
-                yield* guardManualStep(def, "down")
-                yield* runStep(downStep, def.id, database)
-                yield* deleteJournal(def.id)
-              })
-            )
           yield* transactionalStep
-            ? withTx(Effect.flatMap(Database, rollbackOne), migrationDatabase(def.id, active))
-            : rollbackOne(active)
+            ? withTx(
+                Effect.flatMap(Database, (database) => rollbackOne(def, database, options)),
+                migrationDatabase(def.id, active)
+              )
+            : rollbackOne(def, active, options)
         })
       const effect = hasAdvisoryLock
         ? withLock(Effect.provideService(downBody(dialect.transactionalDdl), Database, db))
@@ -524,6 +571,43 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
           ? withTx(downBody(false))
           : Effect.provideService(downBody(false), Database, db)
       return effect
+    }
+
+    const redo: MigratorService["redo"] = (options) => {
+      const defs = migrations()
+      const body = Effect.gen(function* () {
+        const active = yield* Database
+        yield* ensureJournal
+        yield* validateDefinitions(defs)
+        const applied = yield* readApplied
+        yield* validateApplied(defs, applied)
+        const last = applied[applied.length - 1]
+        if (!last) return undefined
+        const migration = defs.find((definition) => definition.id === last.id)
+        if (!migration) {
+          return yield* Effect.fail(
+            new MigrationError({
+              message: `no migration definition for applied id "${last.id}"`,
+              migrationId: last.id
+            })
+          )
+        }
+        // Both directions are authorized before rollback reaches the driver.
+        yield* guardManualStep(migration, "down", options)
+        yield* guardManualStep(migration, "up", options)
+        return yield* observeMigration(
+          "redo",
+          migration.id,
+          Effect.gen(function* () {
+            yield* rollbackOne(migration, active, options, false)
+            return yield* applyOne(migration, active, options, false)
+          })
+        )
+      })
+      const operation = dialect.transactionalDdl
+        ? withTx(body, migrationDatabase("redo"))
+        : Effect.provideService(body, Database, db)
+      return hasAdvisoryLock ? withLock(operation) : operation
     }
 
     const diffOps = (previousTables?: ReadonlyArray<string>) =>
@@ -535,10 +619,10 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
 
     const diff: MigratorService["diff"] = (previousTables) => diffOps(previousTables)
 
-    const plan: MigratorService["plan"] = (name, previousTables) =>
+    const plan: MigratorService["plan"] = (name, previousTables, options) =>
       Effect.gen(function* () {
         const operations = yield* diffOps(previousTables)
-        const violations = guardOperations(operations, policy, guardOptions)
+        const violations = guardOperations(operations, policy, guardOptions(options))
         if (violations.length > 0) {
           return yield* Effect.fail(new MigrationError({ message: violations[0]!.message }))
         }
@@ -565,8 +649,8 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
         return { pending } satisfies DryRunReport
       })
 
-    const apply: MigratorService["apply"] = (plan) => {
-      const violations = guardOperations(plan.operations, policy, guardOptions)
+    const apply: MigratorService["apply"] = (plan, options) => {
+      const violations = guardOperations(plan.operations, policy, guardOptions(options))
       if (violations.length > 0) {
         return Effect.fail(new MigrationError({ message: violations[0]!.message, migrationId: plan.id }))
       }
@@ -634,7 +718,7 @@ export const makeMigrator = (config: MigratorConfig = {}): Effect.Effect<Migrato
         })
       )
 
-    return { status, check, up, down, diff, plan, generate, dryRun, apply, drift }
+    return { status, check, up, down, redo, diff, plan, generate, dryRun, apply, drift }
   })
 
 /**

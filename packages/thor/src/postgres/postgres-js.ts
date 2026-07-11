@@ -76,6 +76,7 @@ export const makePostgresJsDriver = (client: PostgresJsClient): Driver => {
   assertRuntimeCapabilities(PostgresJsDriverRuntime)
   return {
     runtime: PostgresJsDriverRuntime,
+    preparedScope: client,
     query: (sql, params, name) =>
       Effect.tryPromise({ try: () => call(client, sql, params, name !== undefined), catch: mapDriverError }).pipe(
         Effect.map((rows) => Array.from(rows) as ReadonlyArray<RawRow>)

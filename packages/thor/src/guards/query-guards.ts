@@ -62,6 +62,11 @@ const columnRefsIn = (node: ExprNode | undefined, out: ColumnRefNode[] = []): Co
       for (const partition of node.partitionBy) columnRefsIn(partition, out)
       for (const term of node.orderBy) columnRefsIn(term.expr, out)
       break
+    case "RawExpr":
+      for (const value of node.values) {
+        if (value._tag === "ColumnRef") out.push(value)
+      }
+      break
     default:
       break
   }
@@ -221,9 +226,13 @@ const unaggregatedRefsIn = (node: ExprNode, out: ColumnRefNode[] = []): ColumnRe
     case "FunctionCall":
       for (const arg of node.args) unaggregatedRefsIn(arg, out)
       break
+    case "RawExpr":
+      for (const value of node.values) {
+        if (value._tag === "ColumnRef") out.push(value)
+      }
+      break
     case "Param":
     case "Literal":
-    case "RawExpr":
     case "ScalarSubquery":
     case "Exists":
     case "ExcludedRef":
