@@ -10,6 +10,8 @@
   },
   "scripts": {
     "build": "pnpm -r run build",
+    "prepare": "git config core.hooksPath .githooks",
+    "precommit": "lint-staged",
     "docs:check": "node scripts/check-docs.mjs && node scripts/check-api-stability.mjs && node scripts/check-readme-examples.mjs && node scripts/generate-capabilities.mjs --check && node scripts/generate-skills.mjs --check",
     "docs:examples": "node scripts/check-readme-examples.mjs",
     "quality:check": "biome ci packages/thor/src/execution/transaction.ts packages/thor/src/ir/query-analysis.ts packages/thor/src/sql/raw.ts packages/thor/test/transaction.test.ts packages/thor/test/scoped-layers.test.ts scripts/test-packages.mjs && knip",
@@ -65,7 +67,11 @@
     "effect": "^3.21.0",
     "fast-check": "4.8.0",
     "knip": "^5.62.0",
+    "lint-staged": "16.2.7",
     "typescript": "6.0.3",
     "vitest": "^4.1.9"
+  },
+  "lint-staged": {
+    "*.{js,mjs,cjs,ts,mts,cts,json,jsonc}": "biome format --write"
   }
 }
