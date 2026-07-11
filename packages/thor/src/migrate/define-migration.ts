@@ -6,6 +6,7 @@
  * @module migrate/define-migration
  */
 import { Effect } from "effect"
+import { createHash } from "node:crypto"
 import { MigrationError } from "../errors/index.js"
 import { Database } from "../execution/database.js"
 import type { UnsafeSqlNode } from "../ir/query-ir.js"
@@ -180,12 +181,34 @@ export const hashText = (material: string): string => {
   return (h >>> 0).toString(16).padStart(8, "0")
 }
 
-/**
- * @param definition - Migration definition to fingerprint.
- * @returns Stable checksum of both directions.
+/** Current migration checksum prefix and canonical-material version. */
+const CHECKSUM_PREFIX = "sha256:v1:"
 
+/** Result of comparing a journal checksum with the current migration definition. */
+export type MigrationChecksumStatus = "current" | "legacy" | "mismatch" | "unknown-algorithm"
+
+/**
+ * @param fields - Ordered semantic fields to serialize without delimiter ambiguity.
+ * @returns Canonical JSON material for the v1 checksum algorithm.
  */
-export const checksum = (definition: MigrationDefinition): string =>
+const canonicalMaterial = (fields: ReadonlyArray<readonly [string, string | boolean | null]>): string =>
+  JSON.stringify(["thor-migration-checksum", 1, fields])
+
+/**
+ * @param material - Canonical checksum material.
+ * @returns A versioned SHA-256 digest.
+ */
+export const checksumText = (material: string): string =>
+  `${CHECKSUM_PREFIX}${createHash("sha256").update(material, "utf8").digest("hex")}`
+
+/**
+ * Computes the historical eight-character FNV-1a migration checksum. This is
+ * retained only to verify existing journal rows; new rows always use SHA-256.
+ *
+ * @param definition - Migration definition to fingerprint using the legacy algorithm.
+ * @returns The legacy unversioned checksum.
+ */
+export const legacyChecksum = (definition: MigrationDefinition): string =>
   hashText(
     (isSqlStatement(definition.up) ? definition.up.sql : `effect:${definition.revision}:up`) +
       "|" +
@@ -196,3 +219,39 @@ export const checksum = (definition: MigrationDefinition): string =>
           : "none") +
       `|revision:${definition.revision ?? "sql"}`
   )
+
+/**
+ * @param definition - Migration definition to fingerprint.
+ * @returns Versioned SHA-256 checksum of every execution-relevant field.
+ */
+export const checksum = (definition: MigrationDefinition): string =>
+  checksumText(
+    canonicalMaterial([
+      ["id", definition.id],
+      ["name", definition.name],
+      ["up.kind", isSqlStatement(definition.up) ? "sql" : "effect"],
+      ["up.value", isSqlStatement(definition.up) ? definition.up.sql : definition.revision],
+      ["down.kind", definition.down ? (isSqlStatement(definition.down) ? "sql" : "effect") : "none"],
+      [
+        "down.value",
+        definition.down ? (isSqlStatement(definition.down) ? definition.down.sql : definition.revision) : null
+      ],
+      ["revision", definition.revision ?? null],
+      ["irreversible", definition.irreversible ?? false],
+      ["safety", definition.safety ?? null],
+      ["phase", definition.phase ?? null]
+    ])
+  )
+
+/**
+ * Compares a stored journal checksum without mutating journal history.
+ *
+ * @param definition - Current migration definition.
+ * @param stored - Checksum read from the journal.
+ * @returns Whether the checksum is current, legacy-compatible, mismatched, or uses an unknown algorithm.
+ */
+export const migrationChecksumStatus = (definition: MigrationDefinition, stored: string): MigrationChecksumStatus => {
+  if (stored.startsWith(CHECKSUM_PREFIX)) return stored === checksum(definition) ? "current" : "mismatch"
+  if (stored.includes(":")) return "unknown-algorithm"
+  return stored === legacyChecksum(definition) ? "legacy" : "mismatch"
+}

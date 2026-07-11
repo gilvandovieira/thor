@@ -10,6 +10,8 @@ import {
   defineMigration,
   diffSchema,
   guardOperations,
+  legacyChecksum,
+  migrationChecksumStatus,
   rawSql,
   sql,
   unsafeSql,
@@ -30,22 +32,28 @@ const posts = pg.table("posts", {
   title: pg.text("title").notNull()
 })
 
-const metrics = pg.table("metrics", {
-  id: pg.integer("id").primaryKey(),
-  source: pg.text("source").notNull(),
-  value: pg.integer("value").notNull(),
-  doubled: pg.integer("doubled").generatedAlwaysAs("value * 2")
-}, {
-  indexes: [{ name: "metrics_source_idx", columns: ["source"] }],
-  uniqueConstraints: [{ name: "metrics_source_value_key", columns: ["source", "value"] }],
-  checks: [{ name: "metrics_value_positive", expression: "value >= 0" }],
-  foreignKeys: [{
-    name: "metrics_source_fk",
-    columns: ["source"],
-    references: { table: "sources", columns: ["id"] },
-    onDelete: "cascade"
-  }]
-})
+const metrics = pg.table(
+  "metrics",
+  {
+    id: pg.integer("id").primaryKey(),
+    source: pg.text("source").notNull(),
+    value: pg.integer("value").notNull(),
+    doubled: pg.integer("doubled").generatedAlwaysAs("value * 2")
+  },
+  {
+    indexes: [{ name: "metrics_source_idx", columns: ["source"] }],
+    uniqueConstraints: [{ name: "metrics_source_value_key", columns: ["source", "value"] }],
+    checks: [{ name: "metrics_value_positive", expression: "value >= 0" }],
+    foreignKeys: [
+      {
+        name: "metrics_source_fk",
+        columns: ["source"],
+        references: { table: "sources", columns: ["id"] },
+        onDelete: "cascade"
+      }
+    ]
+  }
+)
 
 const safeOperation = {
   destructive: false,
@@ -111,30 +119,63 @@ describe("migration DDL (spec §13)", () => {
     sqlite.close()
   })
 
-  it.each(
+  it.each([
     [
-      ["DropTable", { _tag: "DropTable", table: "old_users", destructive: true, reversible: false, capabilities: [] }, 'drop table "old_users";'],
-      ["RenameTable", { _tag: "RenameTable", from: "users", to: "accounts", ...safeOperation }, 'alter table "users" rename to "accounts";'],
-      [
-        "AddColumn",
-        {
-          _tag: "AddColumn",
-          table: "users",
-          column: { name: "active", type: "boolean", nullable: false, default: { kind: "value", value: true } },
-          ...safeOperation
-        },
-        'alter table "users" add column "active" boolean not null default true;'
-      ],
-      ["DropColumn", { _tag: "DropColumn", table: "users", column: "legacy", destructive: true, reversible: false, capabilities: [] }, 'alter table "users" drop column "legacy";'],
-      ["RenameColumn", { _tag: "RenameColumn", table: "users", from: "name", to: "display_name", ...safeOperation }, 'alter table "users" rename column "name" to "display_name";'],
-      ["AlterColumnType", { _tag: "AlterColumnType", table: "users", column: "age", to: "bigint", ...safeOperation }, 'alter table "users" alter column "age" type bigint;'],
-      ["SetNotNull", { _tag: "SetNotNull", table: "users", column: "email", ...safeOperation }, 'alter table "users" alter column "email" set not null;'],
-      ["DropNotNull", { _tag: "DropNotNull", table: "users", column: "nickname", ...safeOperation }, 'alter table "users" alter column "nickname" drop not null;'],
-      ["RawSql", { _tag: "RawSql", sql: "create extension pgcrypto", unchecked: true, ...safeOperation }, "create extension pgcrypto;"]
-    ] satisfies ReadonlyArray<readonly [string, MigrationOperation, string]>
-  )("compiles the %s operation", (_name, operation, expected) => {
-    expect(compileOperation(operation)).toBe(expected)
-  })
+      "DropTable",
+      { _tag: "DropTable", table: "old_users", destructive: true, reversible: false, capabilities: [] },
+      'drop table "old_users";'
+    ],
+    [
+      "RenameTable",
+      { _tag: "RenameTable", from: "users", to: "accounts", ...safeOperation },
+      'alter table "users" rename to "accounts";'
+    ],
+    [
+      "AddColumn",
+      {
+        _tag: "AddColumn",
+        table: "users",
+        column: { name: "active", type: "boolean", nullable: false, default: { kind: "value", value: true } },
+        ...safeOperation
+      },
+      'alter table "users" add column "active" boolean not null default true;'
+    ],
+    [
+      "DropColumn",
+      { _tag: "DropColumn", table: "users", column: "legacy", destructive: true, reversible: false, capabilities: [] },
+      'alter table "users" drop column "legacy";'
+    ],
+    [
+      "RenameColumn",
+      { _tag: "RenameColumn", table: "users", from: "name", to: "display_name", ...safeOperation },
+      'alter table "users" rename column "name" to "display_name";'
+    ],
+    [
+      "AlterColumnType",
+      { _tag: "AlterColumnType", table: "users", column: "age", to: "bigint", ...safeOperation },
+      'alter table "users" alter column "age" type bigint;'
+    ],
+    [
+      "SetNotNull",
+      { _tag: "SetNotNull", table: "users", column: "email", ...safeOperation },
+      'alter table "users" alter column "email" set not null;'
+    ],
+    [
+      "DropNotNull",
+      { _tag: "DropNotNull", table: "users", column: "nickname", ...safeOperation },
+      'alter table "users" alter column "nickname" drop not null;'
+    ],
+    [
+      "RawSql",
+      { _tag: "RawSql", sql: "create extension pgcrypto", unchecked: true, ...safeOperation },
+      "create extension pgcrypto;"
+    ]
+  ] satisfies ReadonlyArray<readonly [string, MigrationOperation, string]>)(
+    "compiles the %s operation",
+    (_name, operation, expected) => {
+      expect(compileOperation(operation)).toBe(expected)
+    }
+  )
 
   it("joins a migration plan in operation order", () => {
     const operations: ReadonlyArray<MigrationOperation> = [
@@ -178,7 +219,15 @@ describe("migration planning and guards", () => {
     "blocks even additive operations under %s",
     (policy) => {
       const operations: ReadonlyArray<MigrationOperation> = [
-        { _tag: "CreateTable", table: "t", columns: [], primaryKey: [], destructive: false, reversible: true, capabilities: [] }
+        {
+          _tag: "CreateTable",
+          table: "t",
+          columns: [],
+          primaryKey: [],
+          destructive: false,
+          reversible: true,
+          capabilities: []
+        }
       ]
       const guard = policy === "disabled" ? "migrations-disabled" : "validate-only"
       expect(guardOperations(operations, policy)).toEqual([expect.objectContaining({ _tag: "GuardError", guard })])
@@ -203,8 +252,8 @@ describe("manual migration checksums", () => {
     down: sql`drop table users;`
   })
 
-  it("is deterministic and formatted as an eight-character hex hash", () => {
-    expect(checksum(migration)).toMatch(/^[0-9a-f]{8}$/)
+  it("is deterministic and formatted as a versioned SHA-256 digest", () => {
+    expect(checksum(migration)).toMatch(/^sha256:v1:[0-9a-f]{64}$/)
     expect(checksum({ ...migration })).toBe(checksum(migration))
   })
 
@@ -224,6 +273,34 @@ describe("manual migration checksums", () => {
       up: rawSql`update users set display_name = email`
     })
     expect(checksum({ ...effectMigration, revision: "backfill-v2" })).not.toBe(checksum(effectMigration))
+  })
+
+  it("fingerprints identity and execution-safety metadata", () => {
+    expect(checksum({ ...migration, id: "202607091431_add_users" })).not.toBe(checksum(migration))
+    expect(checksum({ ...migration, name: "add users table" })).not.toBe(checksum(migration))
+    expect(checksum({ ...migration, irreversible: true })).not.toBe(checksum(migration))
+    expect(checksum({ ...migration, safety: "destructive" })).not.toBe(checksum(migration))
+    expect(checksum({ ...migration, phase: "contract" })).not.toBe(checksum(migration))
+  })
+
+  it("hashes long and Unicode migration content deterministically", () => {
+    const unicode = defineMigration({
+      id: "202607091432_unicode",
+      name: "cria usuários 🛡️",
+      up: sql`create table usuários (descrição text default '${unsafeSql("x".repeat(4096))}');`
+    })
+
+    expect(checksum(unicode)).toBe(checksum({ ...unicode }))
+    expect(checksum(unicode)).toMatch(/^sha256:v1:[0-9a-f]{64}$/)
+  })
+
+  it("recognizes legacy journal hashes without rewriting them", () => {
+    const legacy = legacyChecksum(migration)
+    expect(legacy).toMatch(/^[0-9a-f]{8}$/)
+    expect(migrationChecksumStatus(migration, legacy)).toBe("legacy")
+    expect(migrationChecksumStatus(migration, checksum(migration))).toBe("current")
+    expect(migrationChecksumStatus(migration, "sha512:v1:deadbeef")).toBe("unknown-algorithm")
+    expect(migrationChecksumStatus(migration, "deadbeef")).toBe("mismatch")
   })
 
   it("requires an explicit unsafe boundary for dynamic migration SQL", () => {

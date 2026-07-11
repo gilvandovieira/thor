@@ -281,6 +281,9 @@ class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = Select
    * @param ir - Immutable select representation.
    * @param fields - Runtime fields used to decode result rows.
    */
+  /** Memoized cardinality-probe IR for `.one()`/`.maybeOne()` (see below). */
+  private probeIrCache?: SelectIR
+
   constructor(
     readonly ir: SelectIR,
     private readonly fields: SelectionField[]
@@ -305,8 +308,13 @@ class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = Select
    * @returns This query's IR, capped to at most two rows.
    */
   private cardinalityProbeIr(): SelectIR {
+    if (this.probeIrCache) return this.probeIrCache
     const probe = Math.min(this.ir.limit ?? 2, 2)
-    return this.ir.limit === probe ? this.ir : { ...this.ir, limit: probe }
+    // Memoize a single capped IR object so repeated `.one()`/`.maybeOne()` calls
+    // on the same query reuse one identity — otherwise the shape, compile, guard,
+    // and parameter-plan caches (all keyed by IR identity) miss every call.
+    this.probeIrCache = this.ir.limit === probe ? this.ir : { ...this.ir, limit: probe }
+    return this.probeIrCache
   }
 
   /**
