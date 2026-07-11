@@ -91,6 +91,46 @@ try {
   )
 
   run("node", ["import-check.mjs"], consumer)
+
+  // Compile a small TypeScript consumer so packed .d.ts declarations are proven
+  // to resolve for downstream typed projects (not just runtime imports).
+  writeFileSync(
+    join(consumer, "tsconfig.json"),
+    JSON.stringify(
+      {
+        compilerOptions: {
+          module: "nodenext",
+          moduleResolution: "nodenext",
+          target: "es2022",
+          strict: true,
+          noEmit: true,
+          skipLibCheck: true,
+          types: []
+        },
+        files: ["consumer.ts"]
+      },
+      null,
+      2
+    )
+  )
+  writeFileSync(
+    join(consumer, "consumer.ts"),
+    [
+      'import { db, pg } from "@gilvandovieira/thor"',
+      'import { defineMigration } from "@gilvandovieira/thor/migrate"',
+      'import { FakeDriver } from "@gilvandovieira/thor/testing"',
+      'import { ALL_CAPABILITIES } from "@gilvandovieira/thor/capabilities"',
+      'const users = pg.table("users", { id: pg.uuid("id").primaryKey(), email: pg.text("email").notNull() })',
+      "const query = db.select({ id: users.id }).from(users)",
+      "const _sql: string = query.toSql().sql",
+      "const _caps: number = ALL_CAPABILITIES.length",
+      "const _driver = new FakeDriver()",
+      'const _migration = defineMigration({ id: "1", name: "n", safety: "additive", phase: "expand", up: { _tag: "SqlStatement", sql: "select 1" } })',
+      "void _sql; void _caps; void _driver; void _migration; void query"
+    ].join("\n")
+  )
+  run("node", [resolve(root, "node_modules/typescript/bin/tsc"), "-p", "tsconfig.json"], consumer)
+
   const help = run("node", ["node_modules/@gilvandovieira/cli/dist/index.js", "--help"], consumer)
   if (!help.includes("create <name>")) throw new Error("Packed CLI help is incomplete")
   const capabilities = run(
