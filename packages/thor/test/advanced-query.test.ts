@@ -21,9 +21,13 @@ import {
   notInSubquery,
   pg,
   rowNumber,
+  rowsBetween,
+  preceding,
+  currentRow,
   scalar,
   sum,
-  asc
+  asc,
+  unsafeSql
 } from "@gilvandovieira/thor"
 import { FakeDatabaseLayer, FakeDriver } from "@gilvandovieira/thor/testing"
 
@@ -55,9 +59,7 @@ describe("Epic J advanced query features", () => {
 
   it("rejects columns and join predicates outside visible scope", async () => {
     const query = db.select({ title: posts.title }).from(users)
-    const error = await Effect.runPromise(
-      Effect.flip(Effect.provide(query.all(), FakeDatabaseLayer(new FakeDriver())))
-    )
+    const error = await Effect.runPromise(Effect.flip(Effect.provide(query.all(), FakeDatabaseLayer(new FakeDriver()))))
     expect(error).toBeInstanceOf(GuardError)
     expect((error as GuardError).guard).toBe("table-scope")
   })
@@ -77,15 +79,24 @@ describe("Epic J advanced query features", () => {
       '"users"."id" IN (SELECT'
     )
     expect(db.select({ id: users.id }).from(users).where(notExists(matching)).toSql().sql).toContain("WHERE NOT EXISTS")
-    expect(db.select({ id: users.id }).from(users).where(notInSubquery(users.id, matching)).toSql().sql).toContain("NOT IN")
-    expect(db.select({ id: users.id }).from(users).where(eq(users.id, scalar(matching))).toSql().sql).toContain(
-      '"users"."id" = (SELECT'
+    expect(db.select({ id: users.id }).from(users).where(notInSubquery(users.id, matching)).toSql().sql).toContain(
+      "NOT IN"
     )
+    expect(
+      db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.id, scalar(matching)))
+        .toSql().sql
+    ).toContain('"users"."id" = (SELECT')
   })
 
   it("allows correlation only for expression and lateral subqueries", async () => {
     const correlated = db.select({ id: posts.id }).from(posts).where(eq(posts.userId, users.id)).as("p")
-    const invalid = db.select({ id: users.id }).from(users).join(correlated, eq(users.id, correlated.field("id")))
+    const invalid = db
+      .select({ id: users.id })
+      .from(users)
+      .join(correlated, eq(users.id, correlated.field("id")))
     const error = await Effect.runPromise(
       Effect.flip(Effect.provide(invalid.all(), FakeDatabaseLayer(new FakeDriver())))
     )
@@ -96,7 +107,8 @@ describe("Epic J advanced query features", () => {
   })
 
   it("compiles aggregate, grouping, having, distinct, and windows", () => {
-    const grouped = db.select({ email: users.email, total: count() })
+    const grouped = db
+      .select({ email: users.email, total: count() })
       .from(users)
       .distinct()
       .groupBy(users.email)
@@ -105,21 +117,23 @@ describe("Epic J advanced query features", () => {
       'SELECT DISTINCT "users"."email" AS "email", COUNT(*) AS "total" FROM "users" GROUP BY "users"."email" HAVING COUNT(*) > $1'
     )
 
-    const windowed = db.select({
-      id: users.id,
-      row: rowNumber().over({ partitionBy: [users.email], orderBy: [asc(users.id)] })
-    }).from(users)
+    const windowed = db
+      .select({
+        id: users.id,
+        row: rowNumber().over({ partitionBy: [users.email], orderBy: [asc(users.id)] })
+      })
+      .from(users)
     expect(windowed.requiredCapabilities()).toContain("select.windowFunctions")
-    expect(windowed.toSql().sql).toContain(
-      'ROW_NUMBER() OVER (PARTITION BY "users"."email" ORDER BY "users"."id" ASC)'
-    )
+    expect(windowed.toSql().sql).toContain('ROW_NUMBER() OVER (PARTITION BY "users"."email" ORDER BY "users"."id" ASC)')
 
-    const aggregates = db.select({
-      sum: sum(users.age),
-      avg: avg(users.age),
-      min: min(users.age),
-      max: max(users.age)
-    }).from(users)
+    const aggregates = db
+      .select({
+        sum: sum(users.age),
+        avg: avg(users.age),
+        min: min(users.age),
+        max: max(users.age)
+      })
+      .from(users)
     expect(aggregates.toSql().sql).toContain(
       'SUM("users"."age") AS "sum", AVG("users"."age") AS "avg", MIN("users"."age") AS "min", MAX("users"."age") AS "max"'
     )
@@ -134,10 +148,47 @@ describe("Epic J advanced query features", () => {
     expect((error as GuardError).guard).toBe("aggregation-scope")
   })
 
+  it("compiles structured window frames and requires an unsafe boundary for custom syntax", () => {
+    const structured = db
+      .select({
+        row: rowNumber().over({ frame: rowsBetween(preceding(5), currentRow) })
+      })
+      .from(users)
+    for (const dialect of [PostgresDialect, SQLiteDialect, MySQLDialect]) {
+      expect(structured.toSql(dialect).sql).toContain("ROWS BETWEEN 5 PRECEDING AND CURRENT ROW")
+    }
+
+    const custom = db.select({ row: rowNumber().over({ frame: unsafeSql("ROWS CURRENT ROW") }) }).from(users)
+    expect(custom.toSql(PostgresDialect).sql).toContain("ROWS CURRENT ROW")
+    expect(() => preceding(-1)).toThrow(RangeError)
+    expect(() => preceding(Number.POSITIVE_INFINITY)).toThrow(RangeError)
+    expect(() => rowsBetween(currentRow, preceding(1))).toThrow(RangeError)
+  })
+
+  it("rejects forged window frames that bypass TypeScript at over() (P1.5)", () => {
+    // A cast object imitating a frame node must not interpolate arbitrary text.
+    const forgedUnit = { _tag: "WindowFrame", unit: "ROWS) OR (1=1", start: currentRow, end: currentRow }
+    expect(() => rowNumber().over({ frame: forgedUnit as never })).toThrow(TypeError)
+    const forgedBoundary = {
+      _tag: "WindowFrame",
+      unit: "rows",
+      start: { _tag: "Preceding", offset: "1)" },
+      end: currentRow
+    }
+    expect(() => rowNumber().over({ frame: forgedBoundary as never })).toThrow(TypeError)
+    const plainString = "ROWS CURRENT ROW"
+    expect(() => rowNumber().over({ frame: plainString as never })).toThrow(TypeError)
+  })
+
   it("compiles CTEs, recursive CTEs, and set operations", () => {
     const body = db.select({ id: users.id }).from(users)
     const cte = db.cte("selected_users", body)
-    expect(db.select({ id: cte.field("id") }).from(cte).toSql().sql).toBe(
+    expect(
+      db
+        .select({ id: cte.field("id") })
+        .from(cte)
+        .toSql().sql
+    ).toBe(
       'WITH "selected_users" AS (SELECT "users"."id" AS "id" FROM "users") SELECT "selected_users"."id" AS "id" FROM "selected_users"'
     )
 
@@ -153,7 +204,8 @@ describe("Epic J advanced query features", () => {
   })
 
   it("renders PostgreSQL/SQLite conflict and MySQL duplicate-key syntax", () => {
-    const conflict = db.insert(users)
+    const conflict = db
+      .insert(users)
       .values({ email: "a@b.c" })
       .onConflictDoUpdate([users.email], { email: excluded(users.email) })
     expect(conflict.toSql(PostgresDialect).sql).toContain(
@@ -163,12 +215,11 @@ describe("Epic J advanced query features", () => {
       'ON CONFLICT ("email") DO UPDATE SET "email" = EXCLUDED."email"'
     )
 
-    const duplicate = db.insert(users)
+    const duplicate = db
+      .insert(users)
       .values({ email: "a@b.c" })
       .onDuplicateKeyUpdate({ email: excluded(users.email) })
-    expect(duplicate.toSql(MySQLDialect).sql).toContain(
-      "ON DUPLICATE KEY UPDATE `email` = VALUES(`email`)"
-    )
+    expect(duplicate.toSql(MySQLDialect).sql).toContain("ON DUPLICATE KEY UPDATE `email` = VALUES(`email`)")
   })
 
   it("rejects unsupported advanced capabilities before reaching drivers", async () => {
@@ -178,7 +229,9 @@ describe("Epic J advanced query features", () => {
         dialect: MySQLDialect
       },
       {
-        query: db.select({ id: users.id }).from(users)
+        query: db
+          .select({ id: users.id })
+          .from(users)
           .lateralJoin(db.select({ id: posts.id }).from(posts).as("p"))
           .all(),
         dialect: SQLiteDialect

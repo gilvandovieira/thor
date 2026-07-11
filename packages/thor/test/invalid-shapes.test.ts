@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { and, db, eq, inArray, notInArray, or, pg } from "@gilvandovieira/thor"
+import { and, asc, db, eq, inArray, notInArray, or, pg } from "@gilvandovieira/thor"
 import { expectSql } from "@gilvandovieira/thor/testing"
 
 const users = pg.table("users", {
@@ -66,5 +66,46 @@ describe("pagination validation (P0.6)", () => {
   it("accepts valid pagination", () => {
     expect(expectSql(q.limit(10).offset(20)).sql).toMatch(/LIMIT 10 OFFSET 20$/)
     expect(expectSql(q.limit(0)).sql).toMatch(/LIMIT 0$/)
+  })
+})
+
+describe("toSql() never emits malformed SQL from empty states (Finding 9)", () => {
+  const compileError = expect.objectContaining({ _tag: "CompileError" })
+
+  it("rejects an empty selection at compile", () => {
+    const query = db.select({} as never).from(users)
+    expect(() => query.toSql()).toThrow(compileError)
+  })
+
+  it("rejects an empty update SET at compile", () => {
+    const query = db
+      .update(users)
+      .set({} as never)
+      .returning({ id: users.id })
+    expect(() => query.toSql()).toThrow(compileError)
+  })
+
+  it("rejects an empty conflict update SET at compile", () => {
+    const query = db
+      .insert(users)
+      .values({ email: "a@x.com" })
+      .onConflictDoUpdate([users.email], {} as never)
+    expect(() => query.toSql()).toThrow(compileError)
+  })
+
+  it("rejects a set-operation operand that carries ORDER BY, LIMIT, or OFFSET", () => {
+    const base = db.select({ id: users.id }).from(users)
+    const guardError = expect.objectContaining({ _tag: "GuardError", guard: "set-operation" })
+    expect(() => base.union(db.select({ id: users.id }).from(users).limit(5))).toThrow(guardError)
+    expect(() => base.union(db.select({ id: users.id }).from(users).offset(2))).toThrow(guardError)
+    expect(() => base.intersect(db.select({ id: users.id }).from(users).orderBy(asc(users.id)))).toThrow(guardError)
+  })
+
+  it("allows a plain set-operation operand and caps a one() probe at LIMIT 2", () => {
+    const query = db
+      .select({ id: users.id })
+      .from(users)
+      .union(db.select({ id: users.id }).from(users))
+    expect(query.toSql().sql).not.toContain("LIMIT")
   })
 })

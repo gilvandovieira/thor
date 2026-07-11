@@ -44,17 +44,25 @@ describe("query guards (spec §8.1)", () => {
     ])
   })
 
-  it("rejects an insert with no columns", () => {
-    const query = db
-      .insert(users)
-      .values({} as { id: string; email: string })
-      .returning({ id: users.id })
-
-    expect(expectGuardViolations(query.ir, PostgresCapabilities)).toContainEqual(
+  it("rejects an insert with no columns at construction", () => {
+    expect(() =>
+      db
+        .insert(users)
+        .values({} as { id: string; email: string })
+        .returning({ id: users.id })
+    ).toThrow(
       expect.objectContaining({
-        _tag: "GuardError",
-        guard: "insert-shape",
-        message: "Insert has no columns"
+        _tag: "ParameterError",
+        parameter: "values"
+      })
+    )
+  })
+
+  it("rejects an insert with no rows at construction", () => {
+    expect(() => db.insert(users).values([] as Array<{ id: string; email: string }>)).toThrow(
+      expect.objectContaining({
+        _tag: "ParameterError",
+        parameter: "values"
       })
     )
   })

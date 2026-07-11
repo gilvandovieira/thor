@@ -29,12 +29,19 @@ import type { Dialect } from "../dialect.js"
 import { PostgresDialect } from "../postgres/dialect.js"
 import { GuardError, type QueryError, type NotFoundError, type TooManyRowsError } from "../errors/index.js"
 import { Database } from "../execution/database.js"
-import { atMostOne, exactlyOne, executeCompiledRows, executeRows } from "../execution/run.js"
+import {
+  executeCompiledMaybeOne,
+  executeCompiledOne,
+  executeCompiledRows,
+  executeMaybeOne,
+  executeOne,
+  executeRows
+} from "../execution/run.js"
 import type { CompiledStatement } from "../execution/driver.js"
 import { compilableEffect } from "../execution/compiled-query.js"
 import { withMode, withQueryCache } from "../execution/plan.js"
 import { withObservability } from "../observability/index.js"
-import { type Expr, type ParamsOf, columnRef, isColumn } from "./expressions.js"
+import { type Expr, type ParamsOf, SqlInputBrand, columnRef, isColumn } from "./expressions.js"
 import { type ExpressionInput } from "./advanced-expressions.js"
 import { internIdentifier } from "../ir/identifiers.js"
 import { transaction } from "../execution/transaction.js"
@@ -211,6 +218,7 @@ export class QueryReference<A> {
     const dataType = field?.expr._tag === "ColumnRef" ? field.expr.dataType : "text"
     return {
       node: { _tag: "ColumnRef", table, column: name, dataType },
+      [SqlInputBrand]: true,
       ...(field ? { codec: field.codec as Schema.Schema<A[K], any> } : {})
     }
   }
@@ -277,13 +285,13 @@ const mergeCtes = (
  * @stable
  */
 class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = SelectFields> {
+  /** Memoized cardinality-probe IR for `.one()`/`.maybeOne()` (see below). */
+  private probeIrCache?: SelectIR
+
   /**
    * @param ir - Immutable select representation.
    * @param fields - Runtime fields used to decode result rows.
    */
-  /** Memoized cardinality-probe IR for `.one()`/`.maybeOne()` (see below). */
-  private probeIrCache?: SelectIR
-
   constructor(
     readonly ir: SelectIR,
     private readonly fields: SelectionField[]
@@ -525,6 +533,22 @@ class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = Select
     query: SelectQuery<A, P, F>,
     all: boolean
   ): SelectQuery<A, P, F> {
+    // A set-operation operand rendered inline cannot legally carry its own
+    // ORDER BY/LIMIT/OFFSET (`… UNION SELECT … LIMIT 5 LIMIT 2` is invalid, and
+    // SQLite forbids parenthesized compound operands). Fail at construction
+    // instead of emitting malformed SQL; wrap the operand in a subquery source
+    // to keep an inner limit.
+    if (
+      query.ir.orderBy.length > 0 ||
+      query.ir.limit !== undefined ||
+      query.ir.offset !== undefined ||
+      (query.ir.ctes?.length ?? 0) > 0
+    ) {
+      throw new GuardError({
+        guard: "set-operation",
+        message: `A ${type} operand cannot carry ORDER BY, LIMIT, OFFSET, or a WITH (CTE) clause; select from it as a subquery instead`
+      })
+    }
     return this.clone({
       setOperations: [...(this.ir.setOperations ?? []), { type, query: query.ir, all }],
       capabilities: this.ir.capabilities | capabilityBit("select.setOperations"),
@@ -626,12 +650,9 @@ class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = Select
     ...args: Args & ExactTerminalArguments<P, Args>
   ): TerminalCallResult<P, A, QueryError | NotFoundError | TooManyRowsError, "one", Args> {
     const ir = this.cardinalityProbeIr()
-    const effect = Effect.flatMap(
-      Effect.flatMap(Database, (db) => executeRows<A>(ir, this.fields, db, argsFrom(args))),
-      (rows) => exactlyOne(rows, "select.one")
-    )
+    const effect = Effect.flatMap(Database, (db) => executeOne<A>(ir, this.fields, db, argsFrom(args), "select.one"))
     return compilableEffect(effect, ir, this.fields, "one", (plan, statement, service, values) =>
-      Effect.flatMap(executeCompiledRows<A>(plan, statement, service, values), (rows) => exactlyOne(rows, "select.one"))
+      executeCompiledOne<A>(plan, statement, service, values, "select.one")
     ) as TerminalCallResult<P, A, QueryError | NotFoundError | TooManyRowsError, "one", Args>
   }
 
@@ -648,14 +669,11 @@ class SelectQuery<A, P extends NamedParams = {}, F extends SelectFields = Select
     ...args: Args & ExactTerminalArguments<P, Args>
   ): TerminalCallResult<P, Option.Option<A>, QueryError | TooManyRowsError, "maybeOne", Args> {
     const ir = this.cardinalityProbeIr()
-    const effect = Effect.flatMap(
-      Effect.flatMap(Database, (db) => executeRows<A>(ir, this.fields, db, argsFrom(args))),
-      (rows) => atMostOne(rows, "select.maybeOne")
+    const effect = Effect.flatMap(Database, (db) =>
+      executeMaybeOne<A>(ir, this.fields, db, argsFrom(args), "select.maybeOne")
     )
     return compilableEffect(effect, ir, this.fields, "maybeOne", (plan, statement, service, values) =>
-      Effect.flatMap(executeCompiledRows<A>(plan, statement, service, values), (rows) =>
-        atMostOne(rows, "select.maybeOne")
-      )
+      executeCompiledMaybeOne<A>(plan, statement, service, values, "select.maybeOne")
     ) as TerminalCallResult<P, Option.Option<A>, QueryError | TooManyRowsError, "maybeOne", Args>
   }
 

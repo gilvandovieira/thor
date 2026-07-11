@@ -4,10 +4,22 @@
  * @module sql/expressions
  */
 import { Schema } from "effect"
-import { type AnyColumn, type Column, columnParamCodec } from "../schema/column.js"
+import { type AnyColumn, Column, columnParamCodec } from "../schema/column.js"
 import type { ColumnRefNode, ExprNode, LiteralNode, OrderByTerm, ParamNode } from "../ir/query-ir.js"
 
 declare const ParamType: unique symbol
+
+/**
+ * Brand carried by every Thor-constructed expression wrapper and parameter
+ * node. Value positions only treat an object as SQL-bearing when this symbol
+ * is present, so plain application data — including hostile JSON that
+ * structurally imitates a node (`{ node: … }`, `{ _tag: "Param" }`) — is always
+ * bound as an encoded parameter instead of becoming SQL syntax. `Symbol.for`
+ * keeps the brand stable when two copies of the package coexist.
+ *
+ * @internal
+ */
+export const SqlInputBrand: unique symbol = Symbol.for("@gilvandovieira/thor/sql-input")
 
 /** A bound query parameter carrying its literal name and phantom runtime type. */
 export type Param<Name extends string, A> = ParamNode & {
@@ -40,6 +52,8 @@ export interface Expr<A> {
   /** Optional decoder used when the expression is selected. */
   readonly codec?: Schema.Schema<A, any>
   readonly _A?: A
+  /** Runtime brand distinguishing constructed wrappers from look-alike data. */
+  readonly [SqlInputBrand]?: true
 }
 
 /** The runtime value type a column reference/comparison expects. */
@@ -66,8 +80,9 @@ export const param = <const Name extends string, S extends Schema.Schema.AnyNoCo
   ({
     _tag: "Param",
     name,
-    codec: schema as Schema.Schema<any, any>
-  }) as Param<Name, Schema.Schema.Type<S>>
+    codec: schema as Schema.Schema<any, any>,
+    [SqlInputBrand]: true
+  }) as unknown as Param<Name, Schema.Schema.Type<S>>
 
 let anonCounter = 0
 
@@ -84,24 +99,29 @@ export const columnRef = (column: AnyColumn): ColumnRefNode => ({
 
 /**
  * @param value - Unknown runtime value.
- * @returns Whether `value` is a Thor column.
+ * @returns Whether `value` is a Thor column (a class instance, never a structural look-alike).
  */
-export const isColumn = (value: unknown): value is AnyColumn =>
-  typeof value === "object" && value !== null && "def" in value && "notNull" in value
+export const isColumn = (value: unknown): value is AnyColumn => value instanceof Column
 
 /**
  * @param value - Unknown runtime value.
- * @returns Whether `value` is a parameter node.
+ * @returns Whether `value` is a parameter node produced by `param(...)` (brand required).
  */
-const isParamNode = (value: unknown): value is ParamNode =>
-  typeof value === "object" && value !== null && (value as { _tag?: string })._tag === "Param"
+export const isParamNode = (value: unknown): value is ParamNode =>
+  typeof value === "object" && value !== null && (value as { _tag?: string })._tag === "Param" && SqlInputBrand in value
 
 /**
  * @param value - Unknown runtime value.
- * @returns Whether `value` is an expression wrapper.
+ * @returns Whether `value` is an expression wrapper produced by a Thor constructor (brand required).
  */
-const isExpr = (value: unknown): value is Expr<unknown> =>
-  typeof value === "object" && value !== null && "node" in value
+export const isExpr = (value: unknown): value is Expr<unknown> =>
+  typeof value === "object" && value !== null && "node" in value && SqlInputBrand in value
+
+/**
+ * @param value - Unknown runtime value.
+ * @returns Whether `value` may carry SQL semantics in a value position (column, param, or expression).
+ */
+export const isSqlInput = (value: unknown): boolean => isColumn(value) || isParamNode(value) || isExpr(value)
 
 /**
  * @param value - Unknown runtime value.
@@ -153,5 +173,22 @@ export const toValueNode = (value: unknown, leftColumn?: AnyColumn): ExprNode =>
   if (isParamNode(value)) return value
   if (isExpr(value)) return value.node
   const codec = leftColumn ? columnParamCodec(leftColumn) : Schema.Unknown
+  return { _tag: "Param", name: `p${++anonCounter}`, codec, value } satisfies ParamNode
+}
+
+/**
+ * Like {@link toValueNode} but binds a raw value through an explicitly supplied
+ * codec (e.g. a declared routine argument's codec) so it is validated and
+ * encoded like any other parameter (Finding 6). Columns, parameters, and
+ * expressions pass through unchanged.
+ *
+ * @param value - Argument value, column, parameter, or expression.
+ * @param codec - Codec applied to raw inline values.
+ * @returns Normalized expression node.
+ */
+export const toValueNodeWithCodec = (value: unknown, codec: Schema.Schema<any, any>): ExprNode => {
+  if (isColumn(value)) return columnRef(value)
+  if (isParamNode(value)) return value
+  if (isExpr(value)) return value.node
   return { _tag: "Param", name: `p${++anonCounter}`, codec, value } satisfies ParamNode
 }

@@ -20,6 +20,11 @@ const users = pg.table("users", {
   name: pg.text("name").nullable()
 })
 
+const posts = pg.table("posts", {
+  id: pg.uuid("id").primaryKey(),
+  userId: pg.uuid("user_id").notNull()
+})
+
 const run = <A, E>(effect: Effect.Effect<A, E, Database>, driver: FakeDriver) =>
   Effect.runPromise(Effect.provide(effect, FakeDatabaseLayer(driver)))
 
@@ -92,13 +97,22 @@ describe("prepared query handles (spec §15.15)", () => {
       { rows: [{ id: "u1", name: "Ada" }] }
     )
 
+    // `.all()` stays on the base plan; `.one()`/`.maybeOne()` compile a separate
+    // two-row cardinality-probe plan (P0.5/Finding 5), so keep this memoization
+    // check on one shape.
     FindUserByEmail.toSql(countingDialect)
     FindUserByEmail.toSql(countingDialect)
     await Effect.runPromise(
-      Effect.provide(FindUserByEmail.one({ email: "a@example.com" }), FakeDatabaseLayer(driver, { dialect: countingDialect }))
+      Effect.provide(
+        FindUserByEmail.all({ email: "a@example.com" }),
+        FakeDatabaseLayer(driver, { dialect: countingDialect })
+      )
     )
     await Effect.runPromise(
-      Effect.provide(FindUserByEmail.one({ email: "b@example.com" }), FakeDatabaseLayer(driver, { dialect: countingDialect }))
+      Effect.provide(
+        FindUserByEmail.all({ email: "b@example.com" }),
+        FakeDatabaseLayer(driver, { dialect: countingDialect })
+      )
     )
 
     expect(compileCount).toBe(1)
@@ -117,10 +131,7 @@ describe("prepared query handles (spec §15.15)", () => {
 
     const error = await Effect.runPromise(
       Effect.flip(
-        Effect.provide(
-          CreateUser.one({ email: "x@example.com" }),
-          FakeDatabaseLayer(driver, { dialect: MySQLDialect })
-        )
+        Effect.provide(CreateUser.one({ email: "x@example.com" }), FakeDatabaseLayer(driver, { dialect: MySQLDialect }))
       )
     )
     expect(error).toBeInstanceOf(CapabilityError)
@@ -131,16 +142,19 @@ describe("prepared query handles (spec §15.15)", () => {
   })
 
   it("precomputes structural guard failures without touching a driver", async () => {
+    // A `returning` column from another table is a structural (table-scope)
+    // guard failure that still constructs — empty inserts are now rejected at
+    // construction (P0.6), so they cannot reach the prepared handle.
     const InvalidInsert = db
       .insert(users)
-      .values({} as { email: string })
-      .returning({ id: users.id })
+      .values({ email: param("email", Schema.String) })
+      .returning({ id: posts.id })
       .prepare("InvalidInsert")
     const driver = new FakeDriver()
 
     expect(InvalidInsert.inspect().prepared.structuralGuard).toBe("failed")
     const error = await Effect.runPromise(
-      Effect.flip(Effect.provide(InvalidInsert.one(), FakeDatabaseLayer(driver)))
+      Effect.flip(Effect.provide(InvalidInsert.one({ email: "a@example.com" }), FakeDatabaseLayer(driver)))
     )
     expect(error).toBeInstanceOf(GuardError)
     expect(driver.calls).toEqual([])
@@ -148,11 +162,7 @@ describe("prepared query handles (spec §15.15)", () => {
 
   it("refuses to capture inline values in a static handle", () => {
     expect(() =>
-      db
-        .select({ id: users.id })
-        .from(users)
-        .where(eq(users.email, "captured@example.com"))
-        .prepare("CapturedValue")
+      db.select({ id: users.id }).from(users).where(eq(users.email, "captured@example.com")).prepare("CapturedValue")
     ).toThrow(GuardError)
   })
 })
