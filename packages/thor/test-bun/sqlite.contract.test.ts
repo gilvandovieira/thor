@@ -7,7 +7,14 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test"
 import { Database } from "bun:sqlite"
-import { BunSQLiteDriverRuntime, BunSQLiteLayer, RuntimeSQLiteLayer, SQLiteDialect } from "@gilvandovieira/thor/sqlite"
+import { Effect } from "effect"
+import {
+  BunSQLiteDriverRuntime,
+  BunSQLiteLayer,
+  RuntimeSQLiteLayer,
+  SQLiteDialect,
+  makeBunSQLiteDriver
+} from "@gilvandovieira/thor/sqlite"
 import {
   ADVANCED_SQL_FEATURES,
   DATA_TYPE_FEATURES,
@@ -53,6 +60,48 @@ runSqlFeatureIntegration(api, {
   layer: BunSQLiteLayer(client, { allowEmulation: true }),
   reset: SQLITE_FEATURE_RESET,
   allowEmulation: true
+})
+
+describe("bun:sqlite statement ownership", () => {
+  it("finalizes transient, collision, and cached statements exactly once", async () => {
+    const native = new Database(":memory:")
+    let prepared = 0
+    let finalized = 0
+    let active = 0
+    const wrapper = {
+      prepare: (sql: string) => {
+        const statement = native.prepare(sql)
+        prepared++
+        active++
+        let released = false
+        return {
+          all: (...params: any[]) => statement.all(...params),
+          run: (...params: any[]) => statement.run(...params),
+          finalize: () => {
+            if (released) throw new Error("double finalize")
+            released = true
+            statement.finalize()
+            finalized++
+            active--
+          }
+        }
+      },
+      exec: (sql: string) => native.exec(sql)
+    }
+    const driver = makeBunSQLiteDriver(wrapper)
+
+    try {
+      await Effect.runPromise(driver.query("select 1 as value", []))
+      await Effect.runPromise(driver.execute("create table items (id integer)", []))
+      await Effect.runPromise(driver.query("select 2 as value", [], "same"))
+      await Effect.runPromise(driver.query("select 3 as value", [], "same"))
+      expect({ prepared, finalized, active }).toEqual({ prepared: 4, finalized: 3, active: 1 })
+      await Effect.runPromise(driver.clearPrepared!())
+      expect({ prepared, finalized, active }).toEqual({ prepared: 4, finalized: 4, active: 0 })
+    } finally {
+      native.close()
+    }
+  })
 })
 
 afterAll(() => client.close())

@@ -32,6 +32,12 @@ For postgres.js, structural wrappers should expose `unsafe` and the client's
 fail that terminal instead of materializing rows. node-postgres uses its query
 row bound for the same contract.
 
+Bun 1.3 `bun:sqlite` exposes explicit statement finalization and an iterable row
+path in the tested runtime. Thor stops bounded probes after two rows and
+finalizes transient/collision statements deterministically. Structural SQLite
+clients without an iterator reject bounded DML probes rather than pretending an
+`.all().slice(2)` path is bounded.
+
 ## Isolation rule
 
 Shared query IR and guards contain logical operations and capability bits, not

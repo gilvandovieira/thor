@@ -178,7 +178,11 @@ const makeDriver = (client: SQLiteClient, runtime: RuntimeRequirements, profile:
           withStatement(sql, name, (statement) => {
             const encoded = params.map(encodeValue)
             if (maxRows === undefined) return statement.all(...encoded)
-            if (!statement.iterate) return statement.all(...encoded).slice(0, maxRows)
+            if (!statement.iterate) {
+              throw new TypeError(
+                "Bounded SQLite row probes require a statement iterate() API; use returning(...).all() on this runtime"
+              )
+            }
             const rows: RawRow[] = []
             for (const row of statement.iterate(...encoded)) {
               rows.push(row)
