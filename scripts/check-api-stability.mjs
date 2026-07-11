@@ -75,9 +75,11 @@ const declarationName = (node) => {
   return undefined
 }
 
-const stabilityTags = (node) => ts.getJSDocTags(node)
-  .map((tag) => tag.tagName.text)
-  .filter((name) => name === Stable || name === Experimental || name === Internal)
+const stabilityTags = (node) =>
+  ts
+    .getJSDocTags(node)
+    .map((tag) => tag.tagName.text)
+    .filter((name) => name === Stable || name === Experimental || name === Internal)
 
 const findDeclaration = (source, name) => source.statements.find((statement) => declarationName(statement) === name)
 
@@ -90,7 +92,9 @@ for (const [file, name, expected] of anchors) {
   }
   const tags = stabilityTags(declaration)
   if (tags.length !== 1 || tags[0] !== expected) {
-    errors.push(`${file}: ${name} must have exactly @${expected}; found ${tags.map((tag) => `@${tag}`).join(", ") || "none"}`)
+    errors.push(
+      `${file}: ${name} must have exactly @${expected}; found ${tags.map((tag) => `@${tag}`).join(", ") || "none"}`
+    )
   }
 }
 
@@ -110,8 +114,8 @@ for (const file of builderFiles) {
       const expected = ["all", "one", "maybeOne", "run"].includes(name)
         ? Stable
         : name === "inspect" || name === "prepare"
-        ? Experimental
-        : undefined
+          ? Experimental
+          : undefined
       if (!expected) continue
       const tags = stabilityTags(member)
       if (tags.length !== 1 || tags[0] !== expected) {
@@ -125,15 +129,24 @@ const compiledQuery = sourceFor("packages/thor/src/execution/compiled-query.ts")
 for (const statement of compiledQuery.statements) {
   if (!ts.isClassDeclaration(statement) && !ts.isInterfaceDeclaration(statement)) continue
   for (const member of statement.members) {
-    if ((!ts.isMethodDeclaration(member) && !ts.isMethodSignature(member)) || !member.name || !ts.isIdentifier(member.name)) continue
+    if (
+      (!ts.isMethodDeclaration(member) && !ts.isMethodSignature(member)) ||
+      !member.name ||
+      !ts.isIdentifier(member.name)
+    )
+      continue
     const name = member.name.text
     const expected = ["execute", "compile", "compilePrepared"].includes(name)
       ? Stable
-      : name === "compileUnsafeHot" ? Experimental : undefined
+      : name === "compileUnsafeHot"
+        ? Experimental
+        : undefined
     if (!expected) continue
     const tags = stabilityTags(member)
     if (tags.length !== 1 || tags[0] !== expected) {
-      errors.push(`packages/thor/src/execution/compiled-query.ts: ${statement.name?.text ?? "anonymous"}.${name} must have exactly @${expected}`)
+      errors.push(
+        `packages/thor/src/execution/compiled-query.ts: ${statement.name?.text ?? "anonymous"}.${name} must have exactly @${expected}`
+      )
     }
   }
 }
@@ -146,6 +159,31 @@ for (const statement of errorSource.statements) {
   if (tags.length !== 1 || tags[0] !== Stable) {
     errors.push(`packages/thor/src/errors/index.ts: ${statement.name.text} must have exactly @stable`)
   }
+}
+
+const rootSource = fs.readFileSync("packages/thor/src/index.ts", "utf8")
+for (const name of [
+  "QueryCaches",
+  "WeakCacheLayer",
+  "BoundedLruCache",
+  "makeQueryCaches",
+  "defaultQueryCaches",
+  "normalizeQuery",
+  "queryStructuralHash",
+  "collectQueryParams",
+  "queryCapabilityBits",
+  "QueryIR"
+]) {
+  if (new RegExp(`\\b${name}\\b`).test(rootSource)) {
+    errors.push(`packages/thor/src/index.ts: internal symbol ${name} must not be re-exported from the root`)
+  }
+}
+
+const v1Spec = fs.readFileSync("docs/thor-project-v1-spec.md", "utf8")
+if (v1Spec.includes("execution methods: all, one, maybeOne, run, stream")) {
+  errors.push(
+    "docs/thor-project-v1-spec.md: stream must not be listed as a stable terminal while no scoped cursor API exists"
+  )
 }
 
 if (errors.length > 0) {

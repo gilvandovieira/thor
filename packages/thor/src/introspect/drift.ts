@@ -4,7 +4,8 @@
  *
  * Drift is scoped to **structural** differences that compare reliably across the
  * two representations: table presence, column presence, column nullability,
- * primary keys, and foreign keys. Column *type* diffing is deferred — SQLite's
+ * primary keys, foreign keys, and explicit secondary indexes. Column *type*
+ * diffing is deferred — SQLite's
  * type affinity collapses distinct logical types (uuid/text/timestamp all become
  * `TEXT`), so a cross-representation type comparison would produce false drift.
  *
@@ -34,8 +35,18 @@ export type DriftChange =
       readonly actual: ReadonlyArray<string>
       readonly message: string
     }
-  | { readonly _tag: "MissingForeignKey"; readonly table: string; readonly columns: ReadonlyArray<string>; readonly message: string }
-  | { readonly _tag: "ExtraForeignKey"; readonly table: string; readonly columns: ReadonlyArray<string>; readonly message: string }
+  | {
+      readonly _tag: "MissingForeignKey"
+      readonly table: string
+      readonly columns: ReadonlyArray<string>
+      readonly message: string
+    }
+  | {
+      readonly _tag: "ExtraForeignKey"
+      readonly table: string
+      readonly columns: ReadonlyArray<string>
+      readonly message: string
+    }
   | { readonly _tag: "MissingIndex"; readonly table: string; readonly index: string; readonly message: string }
   | { readonly _tag: "ExtraIndex"; readonly table: string; readonly index: string; readonly message: string }
   | { readonly _tag: "IndexChanged"; readonly table: string; readonly index: string; readonly message: string }
@@ -68,10 +79,21 @@ const arraysEqual = (a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolea
  * @param columns - Local key columns.
  * @param table - Referenced table.
  * @param refColumns - Referenced columns.
+ * @param onDelete - Referential delete action.
+ * @param onUpdate - Referential update action.
  * @returns A comparable identity string.
  */
-const foreignKeyKey = (columns: ReadonlyArray<string>, table: string, refColumns: ReadonlyArray<string>): string =>
-  `${[...columns].sort().join(",")}=>${table}(${[...refColumns].sort().join(",")})`
+const foreignKeyKey = (
+  columns: ReadonlyArray<string>,
+  table: string,
+  refColumns: ReadonlyArray<string>,
+  onDelete?: string,
+  onUpdate?: string
+): string => {
+  const pairs = columns.map((column, index) => `${column}=>${refColumns[index] ?? ""}`).sort()
+  const normalizeAction = (action?: string) => (action ?? "no action").trim().toLowerCase()
+  return `${table}(${pairs.join(",")})|delete:${normalizeAction(onDelete)}|update:${normalizeAction(onUpdate)}`
+}
 
 /**
  * Diff one table's columns, primary key, and foreign keys.
@@ -92,7 +114,12 @@ const diffTable = (name: string, expected: AnyTable, live: IntrospectedTable, ch
   for (const [column, spec] of expectedColumns) {
     const liveColumn = liveColumns.get(column)
     if (!liveColumn) {
-      changes.push({ _tag: "MissingColumn", table: name, column, message: `column "${name}"."${column}" is missing from the database` })
+      changes.push({
+        _tag: "MissingColumn",
+        table: name,
+        column,
+        message: `column "${name}"."${column}" is missing from the database`
+      })
       continue
     }
     if (spec.nullable !== liveColumn.nullable) {
@@ -108,7 +135,12 @@ const diffTable = (name: string, expected: AnyTable, live: IntrospectedTable, ch
   }
   for (const column of liveColumns.keys()) {
     if (!expectedColumns.has(column)) {
-      changes.push({ _tag: "ExtraColumn", table: name, column, message: `column "${name}"."${column}" exists in the database but not in the schema` })
+      changes.push({
+        _tag: "ExtraColumn",
+        table: name,
+        column,
+        message: `column "${name}"."${column}" exists in the database but not in the schema`
+      })
     }
   }
 
@@ -123,19 +155,35 @@ const diffTable = (name: string, expected: AnyTable, live: IntrospectedTable, ch
   }
 
   const expectedForeignKeys = new Map(
-    meta.foreignKeys.map((fk) => [foreignKeyKey(fk.columns, fk.references.table, fk.references.columns), fk])
+    meta.foreignKeys.map((fk) => [
+      foreignKeyKey(fk.columns, fk.references.table, fk.references.columns, fk.onDelete, fk.onUpdate),
+      fk
+    ])
   )
   const liveForeignKeys = new Map(
-    live.foreignKeys.map((fk) => [foreignKeyKey(fk.columns, fk.references.table, fk.references.columns), fk])
+    live.foreignKeys.map((fk) => [
+      foreignKeyKey(fk.columns, fk.references.table, fk.references.columns, fk.onDelete, fk.onUpdate),
+      fk
+    ])
   )
   for (const [key, fk] of expectedForeignKeys) {
     if (!liveForeignKeys.has(key)) {
-      changes.push({ _tag: "MissingForeignKey", table: name, columns: fk.columns, message: `foreign key on "${name}" (${fk.columns.join(", ")}) is missing from the database` })
+      changes.push({
+        _tag: "MissingForeignKey",
+        table: name,
+        columns: fk.columns,
+        message: `foreign key on "${name}" (${fk.columns.join(", ")}) is missing from the database`
+      })
     }
   }
   for (const [key, fk] of liveForeignKeys) {
     if (!expectedForeignKeys.has(key)) {
-      changes.push({ _tag: "ExtraForeignKey", table: name, columns: fk.columns, message: `foreign key on "${name}" (${fk.columns.join(", ")}) exists in the database but not in the schema` })
+      changes.push({
+        _tag: "ExtraForeignKey",
+        table: name,
+        columns: fk.columns,
+        message: `foreign key on "${name}" (${fk.columns.join(", ")}) exists in the database but not in the schema`
+      })
     }
   }
 
@@ -144,16 +192,31 @@ const diffTable = (name: string, expected: AnyTable, live: IntrospectedTable, ch
   for (const [index, spec] of expectedIndexes) {
     const liveIndex = liveIndexes.get(index)
     if (!liveIndex) {
-      changes.push({ _tag: "MissingIndex", table: name, index, message: `index "${index}" on "${name}" is missing from the database` })
+      changes.push({
+        _tag: "MissingIndex",
+        table: name,
+        index,
+        message: `index "${index}" on "${name}" is missing from the database`
+      })
       continue
     }
     if (!arraysEqual(spec.columns, liveIndex.columns) || spec.unique !== liveIndex.unique) {
-      changes.push({ _tag: "IndexChanged", table: name, index, message: `index "${index}" on "${name}" differs between the database and the schema` })
+      changes.push({
+        _tag: "IndexChanged",
+        table: name,
+        index,
+        message: `index "${index}" on "${name}" differs between the database and the schema`
+      })
     }
   }
   for (const index of liveIndexes.keys()) {
     if (!expectedIndexes.has(index)) {
-      changes.push({ _tag: "ExtraIndex", table: name, index, message: `index "${index}" on "${name}" exists in the database but not in the schema` })
+      changes.push({
+        _tag: "ExtraIndex",
+        table: name,
+        index,
+        message: `index "${index}" on "${name}" exists in the database but not in the schema`
+      })
     }
   }
 }
@@ -188,7 +251,11 @@ export const detectDrift = (
   for (const liveTable of live.tables) {
     if (ignore.has(liveTable.name)) continue
     if (!expectedByName.has(liveTable.name)) {
-      changes.push({ _tag: "ExtraTable", table: liveTable.name, message: `table "${liveTable.name}" exists in the database but not in the schema` })
+      changes.push({
+        _tag: "ExtraTable",
+        table: liveTable.name,
+        message: `table "${liveTable.name}" exists in the database but not in the schema`
+      })
     }
   }
 

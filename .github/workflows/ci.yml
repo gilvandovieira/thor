@@ -115,6 +115,15 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # Fail loudly if the DB URLs are unset: the e2e suites are `describe.skipIf(!URL)`,
+      # so a misconfigured env would silently skip every integration test and still pass green.
+      - name: Assert integration env is configured (no silent skip)
+        run: |
+          test -n "$DATABASE_URL" || { echo "DATABASE_URL is empty; e2e tests would silently skip"; exit 1; }
+          test -n "$MYSQL_URL" || { echo "MYSQL_URL is empty; e2e tests would silently skip"; exit 1; }
+        env:
+          DATABASE_URL: postgres://thor:thor@localhost:5433/thor
+          MYSQL_URL: mysql://thor:thor@localhost:3307/thor
       - run: pnpm exec vitest run --no-file-parallelism e2e
         env:
           DATABASE_URL: postgres://thor:thor@localhost:5433/thor

@@ -32,6 +32,10 @@ const initialPlan = {
 const initialMigration = defineMigration({
   id: MIGRATION_ID,
   name: initialPlan.name,
+  safety: "additive",
+  phase: "expand",
+  downSafety: "destructive",
+  downPhase: "contract",
   up: { _tag: "SqlStatement", sql: compilePlan(initialPlan, SQLiteDialect) },
   down: {
     _tag: "SqlStatement",

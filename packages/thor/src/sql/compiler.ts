@@ -18,11 +18,30 @@ import type {
   QueryIR,
   SelectionField,
   SelectIR,
-  UpdateIR
+  UpdateIR,
+  WindowFrameBoundaryNode,
+  WindowFrameNode
 } from "../ir/query-ir.js"
 import type { Dialect } from "../dialect.js"
 import { queryStructuralHash } from "../ir/structural-hash.js"
 import { normalizeQuery } from "../ir/normalize.js"
+import { CompileError } from "../errors/index.js"
+
+/**
+ * Guards against IR shapes that would render syntactically invalid SQL (an empty
+ * selection, column list, or `SET`/conflict-`SET` clause). Execution already
+ * blocks these via structural guards, but `toSql()` compiles directly — this
+ * ensures the compiler itself never emits malformed SQL from a public-builder
+ * state (spec §8, Finding 9).
+ *
+ * @param ok - Whether the clause is non-empty.
+ * @param clause - Human-readable clause name for the error.
+ * @returns Nothing; throws when the clause is empty.
+ * @throws {CompileError} When `ok` is false.
+ */
+const requireNonEmpty = (ok: boolean, clause: string): void => {
+  if (!ok) throw new CompileError({ message: `Cannot compile a query with an empty ${clause}` })
+}
 
 interface CompileContext {
   readonly dialect: Dialect
@@ -46,12 +65,13 @@ const compileSource = (context: CompileContext, source: QuerySource): string => 
     const name = source.schema
       ? `${context.dialect.quoteIdent(source.schema)}.${context.dialect.quoteIdent(source.name)}`
       : context.dialect.quoteIdent(source.name)
-    const args = source.args.map((arg, index) =>
-      context.dialect.routineArgument(compileExpr(context, arg), source.argTypes[index]!)
-    ).join(", ")
-    const columns = source.columns.length > 0
-      ? `(${source.columns.map((column) => context.dialect.quoteIdent(column)).join(", ")})`
-      : ""
+    const args = source.args
+      .map((arg, index) => context.dialect.routineArgument(compileExpr(context, arg), source.argTypes[index]!))
+      .join(", ")
+    const columns =
+      source.columns.length > 0
+        ? `(${source.columns.map((column) => context.dialect.quoteIdent(column)).join(", ")})`
+        : ""
     return `${name}(${args}) ${context.dialect.quoteIdent(source.alias)}${columns}`
   }
   const name = context.dialect.quoteIdent(source.name)
@@ -89,6 +109,26 @@ const compileRaw = (context: CompileContext, node: Extract<ExprNode, { readonly 
   return sql
 }
 
+/** @param boundary - Structured window-frame boundary. @returns SQL boundary syntax. */
+const compileFrameBoundary = (boundary: WindowFrameBoundaryNode): string => {
+  switch (boundary._tag) {
+    case "UnboundedPreceding":
+      return "UNBOUNDED PRECEDING"
+    case "Preceding":
+      return `${boundary.offset} PRECEDING`
+    case "CurrentRow":
+      return "CURRENT ROW"
+    case "Following":
+      return `${boundary.offset} FOLLOWING`
+    case "UnboundedFollowing":
+      return "UNBOUNDED FOLLOWING"
+  }
+}
+
+/** @param frame - Validated structured window frame. @returns SQL frame syntax. */
+const compileWindowFrame = (frame: WindowFrameNode): string =>
+  `${frame.unit.toUpperCase()} BETWEEN ${compileFrameBoundary(frame.start)} AND ${compileFrameBoundary(frame.end)}`
+
 /**
  * Recursively compiles one expression and records encountered parameters.
  *
@@ -113,14 +153,14 @@ const compileExpr = (context: CompileContext, node: ExprNode): string => {
       return `'${value.replace(/'/g, "''")}'`
     }
     case "Comparison":
-      return context.dialect.comparison(
-        compileExpr(context, node.left),
-        node.op,
-        compileExpr(context, node.right)
-      )
+      return context.dialect.comparison(compileExpr(context, node.left), node.op, compileExpr(context, node.right))
     case "InList": {
+      // Compile in textual SQL order (expr before the list): `context.params` is
+      // positional, so for `?`-placeholder dialects (SQLite/MySQL) the push order
+      // MUST match the emitted order or values bind to the wrong placeholders.
+      const expr = compileExpr(context, node.expr)
       const values = node.values.map((value) => compileExpr(context, value)).join(", ")
-      return `${compileExpr(context, node.expr)} ${node.negated ? "NOT IN" : "IN"} (${values})`
+      return `${expr} ${node.negated ? "NOT IN" : "IN"} (${values})`
     }
     case "Logical": {
       const separator = node.op === "and" ? " AND " : " OR "
@@ -150,13 +190,18 @@ const compileExpr = (context: CompileContext, node: ExprNode): string => {
       return `${name}(${args})`
     }
     case "WindowFunction": {
+      // Compile the function (and its args) before the OVER clauses to keep the
+      // positional param push order aligned with the emitted `fn(...) OVER (...)`
+      // text — otherwise partition/order params bind to the function's `?`s on
+      // SQLite/MySQL.
+      const fn = compileExpr(context, node.function)
       const clauses: string[] = []
       if (node.partitionBy.length > 0) {
         clauses.push(`PARTITION BY ${node.partitionBy.map((item) => compileExpr(context, item)).join(", ")}`)
       }
       if (node.orderBy.length > 0) clauses.push(`ORDER BY ${compileOrderBy(context, node.orderBy)}`)
-      if (node.frame) clauses.push(node.frame)
-      return `${compileExpr(context, node.function)} OVER (${clauses.join(" ")})`
+      if (node.frame) clauses.push(node.frame._tag === "UnsafeSql" ? node.frame.sql : compileWindowFrame(node.frame))
+      return `${fn} OVER (${clauses.join(" ")})`
     }
     case "ExcludedRef":
       return context.dialect.excluded(node.column)
@@ -169,9 +214,7 @@ const compileExpr = (context: CompileContext, node: ExprNode): string => {
  * @returns Comma-separated, aliased selection SQL.
  */
 const compileSelection = (context: CompileContext, fields: ReadonlyArray<SelectionField>): string =>
-  fields
-    .map((field) => `${compileExpr(context, field.expr)} AS ${context.dialect.quoteIdent(field.alias)}`)
-    .join(", ")
+  fields.map((field) => `${compileExpr(context, field.expr)} AS ${context.dialect.quoteIdent(field.alias)}`).join(", ")
 
 /**
  * @param context - Active compiler state.
@@ -198,23 +241,25 @@ const compileSelect = (context: CompileContext, ir: SelectIR): string => {
   let prefix = ""
   if ((ir.ctes?.length ?? 0) > 0) {
     const recursive = ir.ctes!.some((cte) => cte.recursive) ? " RECURSIVE" : ""
-    const definitions = ir.ctes!
-      .map((cte) => `${context.dialect.quoteIdent(cte.name)} AS (${compileSelect(context, cte.query)})`)
+    const definitions = ir
+      .ctes!.map((cte) => `${context.dialect.quoteIdent(cte.name)} AS (${compileSelect(context, cte.query)})`)
       .join(", ")
     prefix = `WITH${recursive} ${definitions} `
   }
 
+  requireNonEmpty(ir.selection.length > 0, "selection")
   let sql = `SELECT${ir.distinct ? " DISTINCT" : ""} ${compileSelection(context, ir.selection)} FROM ${compileSource(context, ir.from)}`
   for (const join of ir.joins ?? []) {
-    const keyword = join.type === "inner"
-      ? "INNER JOIN"
-      : join.type === "left"
-        ? "LEFT JOIN"
-        : join.type === "right"
-          ? "RIGHT JOIN"
-          : join.type === "full"
-            ? "FULL JOIN"
-            : "CROSS JOIN"
+    const keyword =
+      join.type === "inner"
+        ? "INNER JOIN"
+        : join.type === "left"
+          ? "LEFT JOIN"
+          : join.type === "right"
+            ? "RIGHT JOIN"
+            : join.type === "full"
+              ? "FULL JOIN"
+              : "CROSS JOIN"
     sql += ` ${keyword}${join.lateral ? " LATERAL" : ""} ${compileSource(context, join.source)}`
     if (join.on) sql += ` ON ${compileExpr(context, join.on)}`
   }
@@ -227,9 +272,29 @@ const compileSelect = (context: CompileContext, ir: SelectIR): string => {
     sql += ` ${operation.type.toUpperCase()}${operation.all ? " ALL" : ""} ${compileSelect(context, operation.query)}`
   }
   if (ir.orderBy.length > 0) sql += ` ORDER BY ${compileOrderBy(context, ir.orderBy)}`
-  if (ir.limit !== undefined) sql += ` LIMIT ${ir.limit}`
-  if (ir.offset !== undefined) sql += ` OFFSET ${ir.offset}`
+  sql += paginationClause(context.dialect.id, ir.limit, ir.offset)
   return prefix + sql
+}
+
+/**
+ * Renders the trailing `LIMIT`/`OFFSET` clause. SQLite and MySQL reject a bare
+ * `OFFSET n` with no `LIMIT`, so when only an offset is present they emit an
+ * explicit unbounded limit (`LIMIT -1` / the 64-bit max); PostgreSQL allows a
+ * standalone `OFFSET` (Finding 13).
+ *
+ * @param dialectId - Active dialect id.
+ * @param limit - Row limit, if any.
+ * @param offset - Row offset, if any.
+ * @returns A leading-space pagination clause, or an empty string.
+ */
+const paginationClause = (dialectId: string, limit: number | undefined, offset: number | undefined): string => {
+  if (limit !== undefined) {
+    return offset !== undefined ? ` LIMIT ${limit} OFFSET ${offset}` : ` LIMIT ${limit}`
+  }
+  if (offset === undefined) return ""
+  if (dialectId === "sqlite") return ` LIMIT -1 OFFSET ${offset}`
+  if (dialectId === "mysql") return ` LIMIT 18446744073709551615 OFFSET ${offset}`
+  return ` OFFSET ${offset}`
 }
 
 /**
@@ -238,24 +303,37 @@ const compileSelect = (context: CompileContext, ir: SelectIR): string => {
  * @returns Complete insert SQL.
  */
 const compileInsert = (context: CompileContext, ir: InsertIR): string => {
+  requireNonEmpty(ir.columns.length > 0, "insert column list")
+  requireNonEmpty(ir.rows.length > 0, "insert row list")
+  const rendersConflictSet =
+    (ir.conflict?.kind === "onConflict" && ir.conflict.action === "update") || ir.conflict?.kind === "onDuplicateKey"
+  if (rendersConflictSet) {
+    requireNonEmpty(ir.conflict.set.length > 0, "conflict update assignment list")
+  }
   const columns = ir.columns.map((column) => context.dialect.quoteIdent(column)).join(", ")
-  const rows = ir.rows
-    .map((row) => `(${row.map((value) => compileExpr(context, value)).join(", ")})`)
-    .join(", ")
+  const rows = ir.rows.map((row) => `(${row.map((value) => compileExpr(context, value)).join(", ")})`).join(", ")
   let sql = `INSERT INTO ${compileSource(context, ir.into)} (${columns}) VALUES ${rows}`
   if (ir.conflict?.kind === "onConflict") {
-    const target = ir.conflict.target.length > 0
-      ? ` (${ir.conflict.target.map((column) => context.dialect.quoteIdent(column)).join(", ")})`
-      : ""
-    sql += ` ON CONFLICT${target} DO ${ir.conflict.action === "nothing"
-      ? "NOTHING"
-      : `UPDATE SET ${ir.conflict.set.map((assignment) =>
-          `${context.dialect.quoteIdent(assignment.column)} = ${compileExpr(context, assignment.value)}`
-        ).join(", ")}`}`
+    const target =
+      ir.conflict.target.length > 0
+        ? ` (${ir.conflict.target.map((column) => context.dialect.quoteIdent(column)).join(", ")})`
+        : ""
+    sql += ` ON CONFLICT${target} DO ${
+      ir.conflict.action === "nothing"
+        ? "NOTHING"
+        : `UPDATE SET ${ir.conflict.set
+            .map(
+              (assignment) =>
+                `${context.dialect.quoteIdent(assignment.column)} = ${compileExpr(context, assignment.value)}`
+            )
+            .join(", ")}`
+    }`
   } else if (ir.conflict?.kind === "onDuplicateKey") {
-    sql += ` ON DUPLICATE KEY UPDATE ${ir.conflict.set.map((assignment) =>
-      `${context.dialect.quoteIdent(assignment.column)} = ${compileExpr(context, assignment.value)}`
-    ).join(", ")}`
+    sql += ` ON DUPLICATE KEY UPDATE ${ir.conflict.set
+      .map(
+        (assignment) => `${context.dialect.quoteIdent(assignment.column)} = ${compileExpr(context, assignment.value)}`
+      )
+      .join(", ")}`
   }
   return sql + returningClause(context, ir.returning)
 }
@@ -266,10 +344,9 @@ const compileInsert = (context: CompileContext, ir: InsertIR): string => {
  * @returns Complete update SQL.
  */
 const compileUpdate = (context: CompileContext, ir: UpdateIR): string => {
+  requireNonEmpty(ir.set.length > 0, "update SET clause")
   const assignments = ir.set
-    .map((assignment) =>
-      `${context.dialect.quoteIdent(assignment.column)} = ${compileExpr(context, assignment.value)}`
-    )
+    .map((assignment) => `${context.dialect.quoteIdent(assignment.column)} = ${compileExpr(context, assignment.value)}`)
     .join(", ")
   let sql = `UPDATE ${compileSource(context, ir.table)} SET ${assignments}`
   if (ir.where) sql += ` WHERE ${compileExpr(context, ir.where)}`

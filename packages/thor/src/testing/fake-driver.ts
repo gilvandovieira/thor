@@ -33,6 +33,10 @@ export class FakeDriver {
   readonly calls: DriverCall[] = []
   /** The prepared-statement name passed with each call (`undefined` if unprepared), aligned to `calls`. */
   readonly preparedNames: (string | undefined)[] = []
+  /** Prepared identities released by bounded-cache eviction. */
+  readonly releasedPreparedNames: string[] = []
+  /** Number of whole-registry cleanup calls. */
+  clearedPrepared = 0
   private readonly queue: FakeResult[] = []
 
   /**
@@ -50,6 +54,8 @@ export class FakeDriver {
   reset(): void {
     this.calls.length = 0
     this.preparedNames.length = 0
+    this.releasedPreparedNames.length = 0
+    this.clearedPrepared = 0
     this.queue.length = 0
   }
 
@@ -91,6 +97,14 @@ export class FakeDriver {
           return result.error
             ? Effect.fail(result.error)
             : Effect.succeed<CommandResult>({ rowCount: result.rowCount ?? result.rows?.length ?? 0 })
+        }),
+      releasePrepared: (name) =>
+        Effect.sync(() => {
+          self.releasedPreparedNames.push(name)
+        }),
+      clearPrepared: () =>
+        Effect.sync(() => {
+          self.clearedPrepared++
         })
     }
   }

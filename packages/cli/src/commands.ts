@@ -22,12 +22,7 @@ import {
 } from "@gilvandovieira/thor/capabilities"
 import { SKILLS, skillFiles, type SkillExportFormat } from "@gilvandovieira/thor/skills"
 import { detectDrift, makeIntrospector } from "@gilvandovieira/thor/introspect"
-import {
-  compilePlan,
-  makeMigrator,
-  type AutoMigrationPolicy,
-  type MigratorConfig
-} from "@gilvandovieira/thor/migrate"
+import { compilePlan, makeMigrator, type AutoMigrationPolicy, type MigratorConfig } from "@gilvandovieira/thor/migrate"
 import { Effect } from "effect"
 import { Database } from "@gilvandovieira/thor"
 import { type DatabaseConfig, loadMigrations, loadSchemaTables, runWithDatabase } from "./database.js"
@@ -52,7 +47,9 @@ const defaultConfig: ThorConfig = { migrationsDir: "migrations", schema: "src/sc
  */
 const requireDatabase = (cfg: ThorConfig): DatabaseConfig => {
   if (!cfg.database) {
-    throw new Error(`No database configured. Add a "database" block to ${CONFIG_FILE}: { "dialect": "sqlite", "url": "app.db" }`)
+    throw new Error(
+      `No database configured. Add a "database" block to ${CONFIG_FILE}: { "dialect": "sqlite", "url": "app.db" }`
+    )
   }
   return cfg.database
 }
@@ -94,6 +91,13 @@ const migrationTemplate = (id: string, name: string): string =>
 export default defineMigration({
   id: "${id}",
   name: "${name}",
+  // Thor cannot infer safety from raw SQL: declare it so migration policies
+  // (safe-only / expand-only) can be enforced. Use "destructive" for drops,
+  // renames, type changes, or requiring a column.
+  safety: "additive",
+  phase: "expand",
+  downSafety: "destructive",
+  downPhase: "contract",
 
   up: sql\`
     -- write your forward migration here
@@ -140,7 +144,9 @@ export const init = (cwd: string): void => {
 export const create = (cwd: string, name: string): void => {
   if (!name) throw new Error("Usage: thor create <name>")
   if (!/^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)*$/.test(name)) {
-    throw new Error("Migration name must start with a lowercase letter and contain only lowercase letters, numbers, '_' or '-'")
+    throw new Error(
+      "Migration name must start with a lowercase letter and contain only lowercase letters, numbers, '_' or '-'"
+    )
   }
   const cfg = loadConfig(cwd)
   const id = `${timestamp()}_${name}`
@@ -247,7 +253,10 @@ export const skills = (cwd: string, args: ReadonlyArray<string>): void => {
  * @returns The live database's introspected Schema IR.
  */
 const currentSchema = (cwd: string) =>
-  runWithDatabase(requireDatabase(loadConfig(cwd)), Effect.flatMap(makeIntrospector(), (introspector) => introspector.currentSchema()))
+  runWithDatabase(
+    requireDatabase(loadConfig(cwd)),
+    Effect.flatMap(makeIntrospector(), (introspector) => introspector.currentSchema())
+  )
 
 /** @param cwd - Project root. @param cfg - CLI config. @returns Migrator configuration. */
 const loadMigratorConfig = async (cwd: string, cfg: ThorConfig): Promise<MigratorConfig> => ({
@@ -266,6 +275,8 @@ export default defineMigration({
   id: ${JSON.stringify(plan.id)},
   name: ${JSON.stringify(plan.name)},
   irreversible: true,
+  safety: "additive",
+  phase: "expand",
   up: { _tag: "SqlStatement", sql: ${JSON.stringify(sql)} }
 })
 `
@@ -275,42 +286,58 @@ export const up = async (cwd: string): Promise<void> => {
   const cfg = loadConfig(cwd)
   const database = requireDatabase(cfg)
   const migratorConfig = await loadMigratorConfig(cwd, cfg)
-  await runWithDatabase(database, Effect.gen(function* () {
-    const migrator = yield* makeMigrator(migratorConfig)
-    yield* migrator.check()
-    const pending = yield* migrator.dryRun()
-    const introspector = yield* makeIntrospector()
-    const report = yield* introspector.drift(migratorConfig.schema ?? [], { ignoreTables: [migratorConfig.journalTable ?? "_thor_migrations"] })
-    if (!report.inSync && pending.pending.length === 0) {
-      return yield* Effect.fail(new Error(`Schema drift detected (${report.changes.length} change(s)); run \`thor drift\` before migrating`))
-    }
-    if (!report.inSync) log(`Warning: pre-migration drift has ${report.changes.length} change(s) alongside ${pending.pending.length} pending migration(s).`)
-    const applied = yield* migrator.up()
-    if (applied.length === 0) log("Database is up to date.")
-    else for (const entry of applied) log(`Applied ${entry.id} ${entry.name}`)
-  }))
+  await runWithDatabase(
+    database,
+    Effect.gen(function* () {
+      const migrator = yield* makeMigrator(migratorConfig)
+      yield* migrator.check()
+      const pending = yield* migrator.dryRun()
+      const introspector = yield* makeIntrospector()
+      const report = yield* introspector.drift(migratorConfig.schema ?? [], {
+        ignoreTables: [migratorConfig.journalTable ?? "_thor_migrations"]
+      })
+      if (!report.inSync && pending.pending.length === 0) {
+        return yield* Effect.fail(
+          new Error(`Schema drift detected (${report.changes.length} change(s)); run \`thor drift\` before migrating`)
+        )
+      }
+      if (!report.inSync)
+        log(
+          `Warning: pre-migration drift has ${report.changes.length} change(s) alongside ${pending.pending.length} pending migration(s).`
+        )
+      const applied = yield* migrator.up()
+      if (applied.length === 0) log("Database is up to date.")
+      else for (const entry of applied) log(`Applied ${entry.id} ${entry.name}`)
+    })
+  )
 }
 
 /** Roll back the latest applied migration. @stable @param cwd - Project root. @returns Nothing. */
 export const down = async (cwd: string): Promise<void> => {
   const cfg = loadConfig(cwd)
   const migratorConfig = await loadMigratorConfig(cwd, cfg)
-  await runWithDatabase(requireDatabase(cfg), Effect.gen(function* () {
-    const migrator = yield* makeMigrator(migratorConfig)
-    yield* migrator.check()
-    const applied = yield* migrator.status()
-    const latest = applied[applied.length - 1]
-    if (!latest) return log("No applied migrations to roll back.")
-    yield* migrator.down()
-    log(`Rolled back ${latest.id} ${latest.name}`)
-  }))
+  await runWithDatabase(
+    requireDatabase(cfg),
+    Effect.gen(function* () {
+      const migrator = yield* makeMigrator(migratorConfig)
+      yield* migrator.check()
+      const applied = yield* migrator.status()
+      const latest = applied[applied.length - 1]
+      if (!latest) return log("No applied migrations to roll back.")
+      yield* migrator.down()
+      log(`Rolled back ${latest.id} ${latest.name}`)
+    })
+  )
 }
 
 /** Validate migration definitions and journal checksums. @stable @param cwd - Project root. @returns Nothing. */
 export const check = async (cwd: string): Promise<void> => {
   const cfg = loadConfig(cwd)
   const migratorConfig = await loadMigratorConfig(cwd, cfg)
-  await runWithDatabase(requireDatabase(cfg), Effect.flatMap(makeMigrator(migratorConfig), (migrator) => migrator.check()))
+  await runWithDatabase(
+    requireDatabase(cfg),
+    Effect.flatMap(makeMigrator(migratorConfig), (migrator) => migrator.check())
+  )
   log("Migration journal is valid.")
 }
 
@@ -318,10 +345,13 @@ export const check = async (cwd: string): Promise<void> => {
 export const status = async (cwd: string): Promise<void> => {
   const cfg = loadConfig(cwd)
   const migratorConfig = await loadMigratorConfig(cwd, cfg)
-  const result = await runWithDatabase(requireDatabase(cfg), Effect.gen(function* () {
-    const migrator = yield* makeMigrator(migratorConfig)
-    return { applied: yield* migrator.status(), pending: (yield* migrator.dryRun()).pending }
-  }))
+  const result = await runWithDatabase(
+    requireDatabase(cfg),
+    Effect.gen(function* () {
+      const migrator = yield* makeMigrator(migratorConfig)
+      return { applied: yield* migrator.status(), pending: (yield* migrator.dryRun()).pending }
+    })
+  )
   log(`Applied: ${result.applied.length}`)
   for (const migration of result.applied) log(`  applied ${migration.id} ${migration.name}`)
   log(`Pending: ${result.pending.length}`)
@@ -337,22 +367,33 @@ export const redo = async (cwd: string): Promise<void> => {
 /** Generate a create-table-only irreversible migration from live schema. @stable @param cwd - Project root. @param name - Migration name. @returns Nothing. */
 export const generate = async (cwd: string, name: string): Promise<void> => {
   if (!name) throw new Error("Usage: thor generate <name>")
-  if (!/^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)*$/.test(name)) throw new Error("Migration name must start with a lowercase letter and contain only lowercase letters, numbers, '_' or '-'")
+  if (!/^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)*$/.test(name))
+    throw new Error(
+      "Migration name must start with a lowercase letter and contain only lowercase letters, numbers, '_' or '-'"
+    )
   const cfg = loadConfig(cwd)
   const migratorConfig = await loadMigratorConfig(cwd, cfg)
-  const result = await runWithDatabase(requireDatabase(cfg), Effect.gen(function* () {
-    const database = yield* Database
-    const introspector = yield* makeIntrospector()
-    const live = yield* introspector.currentSchema()
-    const migrator = yield* makeMigrator(migratorConfig)
-    const plan = yield* migrator.generate(name, live.tables.map((table) => table.name))
-    return { plan, sql: compilePlan(plan, database.dialect) }
-  }))
+  const result = await runWithDatabase(
+    requireDatabase(cfg),
+    Effect.gen(function* () {
+      const database = yield* Database
+      const introspector = yield* makeIntrospector()
+      const live = yield* introspector.currentSchema()
+      const migrator = yield* makeMigrator(migratorConfig)
+      const plan = yield* migrator.generate(
+        name,
+        live.tables.map((table) => table.name)
+      )
+      return { plan, sql: compilePlan(plan, database.dialect) }
+    })
+  )
   if (result.plan.operations.length === 0) return log("No create-table schema changes detected.")
   mkdirSync(join(cwd, cfg.migrationsDir), { recursive: true })
   const file = `${result.plan.id}.ts`
   writeFileSync(join(cwd, cfg.migrationsDir, file), generatedMigration(result.plan, result.sql))
-  log(`Generated ${cfg.migrationsDir}/${file} (${result.plan.operations.length} create-table operation(s), irreversible)`)
+  log(
+    `Generated ${cfg.migrationsDir}/${file} (${result.plan.operations.length} create-table operation(s), irreversible)`
+  )
 }
 
 /**
@@ -379,7 +420,9 @@ export const inspect = async (cwd: string, args: ReadonlyArray<string>): Promise
   const sub = args[0]
   if (sub === "schema") return introspect(cwd)
   if (sub === "routines") {
-    log("Routine introspection is not available yet; introspection currently covers tables, columns, keys, and indexes.")
+    log(
+      "Routine introspection is not available yet; introspection currently covers tables, columns, keys, and indexes."
+    )
     return
   }
   throw new Error("Usage: thor inspect <schema|routines>")
@@ -412,7 +455,9 @@ export const drift = async (cwd: string): Promise<void> => {
   const tables = await loadSchemaTables(cwd, cfg.schema)
   const report = await runWithDatabase(
     database,
-    Effect.flatMap(makeIntrospector(), (introspector) => introspector.drift(tables))
+    Effect.flatMap(makeIntrospector(), (introspector) =>
+      introspector.drift(tables, { ignoreTables: [cfg.journalTable ?? "_thor_migrations"] })
+    )
   )
   if (report.inSync) {
     log("No drift: the database matches the schema.")
@@ -440,7 +485,11 @@ export const doctor = async (cwd: string): Promise<void> => {
   const cfg = loadConfig(cwd)
 
   add("ok", "runtime", detectRuntimeCapabilities().runtime)
-  add(existsSync(join(cwd, CONFIG_FILE)) ? "ok" : "warn", "config", existsSync(join(cwd, CONFIG_FILE)) ? CONFIG_FILE : `${CONFIG_FILE} missing (defaults)`)
+  add(
+    existsSync(join(cwd, CONFIG_FILE)) ? "ok" : "warn",
+    "config",
+    existsSync(join(cwd, CONFIG_FILE)) ? CONFIG_FILE : `${CONFIG_FILE} missing (defaults)`
+  )
 
   if (!cfg.database) {
     add("fail", "database", "no database configured")
@@ -453,7 +502,13 @@ export const doctor = async (cwd: string): Promise<void> => {
         acc[status] = (acc[status] ?? 0) + 1
         return acc
       }, {})
-      add("ok", "capabilities", Object.entries(counts).map(([status, count]) => `${count} ${status}`).join(", "))
+      add(
+        "ok",
+        "capabilities",
+        Object.entries(counts)
+          .map(([status, count]) => `${count} ${status}`)
+          .join(", ")
+      )
     }
     try {
       const tables = await loadSchemaTables(cwd, cfg.schema)
@@ -464,7 +519,11 @@ export const doctor = async (cwd: string): Promise<void> => {
         Effect.gen(function* () {
           const database = yield* Database
           const introspector = yield* makeIntrospector()
-          const migrator = yield* makeMigrator({ migrations, schema: tables, ...(cfg.journalTable ? { journalTable: cfg.journalTable } : {}) })
+          const migrator = yield* makeMigrator({
+            migrations,
+            schema: tables,
+            ...(cfg.journalTable ? { journalTable: cfg.journalTable } : {})
+          })
           yield* migrator.check()
           return {
             schema: yield* introspector.currentSchema(),
@@ -477,8 +536,14 @@ export const doctor = async (cwd: string): Promise<void> => {
       add("ok", "connectivity", "connected")
       add("ok", "journal", `${applied.length} applied migration(s)`)
       add("ok", "pending", `${pending.length} migration(s)`)
-      add(runtimeMissing.length === 0 ? "ok" : "fail", "compatibility", runtimeMissing.length === 0 ? "runtime requirements satisfied" : `missing ${runtimeMissing.join(", ")}`)
-      const report = detectDrift(tables, schema)
+      add(
+        runtimeMissing.length === 0 ? "ok" : "fail",
+        "compatibility",
+        runtimeMissing.length === 0 ? "runtime requirements satisfied" : `missing ${runtimeMissing.join(", ")}`
+      )
+      const report = detectDrift(tables, schema, {
+        ignoreTables: [cfg.journalTable ?? "_thor_migrations"]
+      })
       add(report.inSync ? "ok" : "fail", "drift", report.inSync ? "in sync" : `${report.changes.length} change(s)`)
     } catch (error) {
       add("fail", "connectivity", (error as Error).message)

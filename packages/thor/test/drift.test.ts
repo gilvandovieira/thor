@@ -3,7 +3,12 @@ import { Effect } from "effect"
 import { pg, sqlite } from "@gilvandovieira/thor"
 import { SQLiteLayer } from "@gilvandovieira/thor/sqlite"
 import { makeMigrator, tableToCreateOp } from "@gilvandovieira/thor/migrate"
-import { type IntrospectedSchema, type IntrospectedTable, detectDrift, makeIntrospector } from "@gilvandovieira/thor/introspect"
+import {
+  type IntrospectedSchema,
+  type IntrospectedTable,
+  detectDrift,
+  makeIntrospector
+} from "@gilvandovieira/thor/introspect"
 
 const supportsNodeSqlite = Number(process.versions.node.split(".")[0]) >= 22
 
@@ -43,8 +48,17 @@ describe("Epic P2 — drift detection (spec §16.5)", () => {
     expect(detectDrift([], live(liveUsers)).changes).toEqual([
       expect.objectContaining({ _tag: "ExtraTable", table: "users" })
     ])
-    const journal: IntrospectedTable = { name: "_thor_migrations", columns: [], primaryKey: [], foreignKeys: [], indexes: [] }
+    const journal: IntrospectedTable = {
+      name: "_thor_migrations",
+      columns: [],
+      primaryKey: [],
+      foreignKeys: [],
+      indexes: []
+    }
     expect(detectDrift([], live(journal)).inSync).toBe(true)
+    expect(detectDrift([], live({ ...journal, name: "app_journal" }), { ignoreTables: ["app_journal"] }).inSync).toBe(
+      true
+    )
   })
 
   it("detects missing and extra columns", () => {
@@ -68,15 +82,27 @@ describe("Epic P2 — drift detection (spec §16.5)", () => {
       primaryKey: ["email"]
     }
     const changes = detectDrift([users], live(emailNullable)).changes
-    expect(changes).toContainEqual(expect.objectContaining({ _tag: "NullabilityChanged", column: "email", expectedNullable: false, actualNullable: true }))
-    expect(changes).toContainEqual(expect.objectContaining({ _tag: "PrimaryKeyChanged", table: "users", expected: ["id"], actual: ["email"] }))
+    expect(changes).toContainEqual(
+      expect.objectContaining({
+        _tag: "NullabilityChanged",
+        column: "email",
+        expectedNullable: false,
+        actualNullable: true
+      })
+    )
+    expect(changes).toContainEqual(
+      expect.objectContaining({ _tag: "PrimaryKeyChanged", table: "users", expected: ["id"], actual: ["email"] })
+    )
   })
 
   it("detects a missing foreign key", () => {
     const authors = pg.table("authors", { id: pg.uuid("id").primaryKey(), name: pg.text("name").notNull() })
     const posts = pg.table("posts", {
       id: pg.uuid("id").primaryKey(),
-      authorId: pg.uuid("author_id").notNull().references(() => authors.id)
+      authorId: pg
+        .uuid("author_id")
+        .notNull()
+        .references(() => authors.id)
     })
     const livePosts: IntrospectedTable = {
       name: "posts",
@@ -93,10 +119,53 @@ describe("Epic P2 — drift detection (spec §16.5)", () => {
     ])
   })
 
+  it("detects changed composite foreign-key pairing and referential actions", () => {
+    const children = pg.table(
+      "children",
+      {
+        left: pg.uuid("left_id").notNull(),
+        right: pg.uuid("right_id").notNull()
+      },
+      {
+        foreignKeys: [
+          {
+            columns: ["left", "right"],
+            references: { table: "parents", columns: ["left_id", "right_id"] },
+            onDelete: "cascade"
+          }
+        ]
+      }
+    )
+    const liveChildren: IntrospectedTable = {
+      name: "children",
+      columns: [
+        { name: "left_id", type: "uuid", nullable: false, default: null },
+        { name: "right_id", type: "uuid", nullable: false, default: null }
+      ],
+      primaryKey: [],
+      foreignKeys: [
+        {
+          columns: ["left_id", "right_id"],
+          references: { table: "parents", columns: ["right_id", "left_id"] },
+          onDelete: "restrict"
+        }
+      ],
+      indexes: []
+    }
+
+    const changes = detectDrift([children], live(liveChildren)).changes
+    expect(changes).toContainEqual(expect.objectContaining({ _tag: "MissingForeignKey", table: "children" }))
+    expect(changes).toContainEqual(expect.objectContaining({ _tag: "ExtraForeignKey", table: "children" }))
+  })
+
   it("detects missing and extra indexes", () => {
-    const indexed = pg.table("indexed", { id: pg.uuid("id").primaryKey(), slug: pg.text("slug").notNull() }, {
-      indexes: [{ name: "indexed_slug_idx", columns: ["slug"], unique: true }]
-    })
+    const indexed = pg.table(
+      "indexed",
+      { id: pg.uuid("id").primaryKey(), slug: pg.text("slug").notNull() },
+      {
+        indexes: [{ name: "indexed_slug_idx", columns: ["slug"], unique: true }]
+      }
+    )
     const liveNoIndex: IntrospectedTable = {
       name: "indexed",
       columns: [
@@ -110,9 +179,41 @@ describe("Epic P2 — drift detection (spec §16.5)", () => {
     expect(detectDrift([indexed], live(liveNoIndex)).changes).toEqual([
       expect.objectContaining({ _tag: "MissingIndex", table: "indexed", index: "indexed_slug_idx" })
     ])
-    const liveExtra: IntrospectedTable = { ...liveNoIndex, indexes: [{ name: "indexed_slug_idx", columns: ["slug"], unique: true }, { name: "stray_idx", columns: ["id"], unique: false }] }
+    const liveExtra: IntrospectedTable = {
+      ...liveNoIndex,
+      indexes: [
+        { name: "indexed_slug_idx", columns: ["slug"], unique: true },
+        { name: "stray_idx", columns: ["id"], unique: false }
+      ]
+    }
     expect(detectDrift([indexed], live(liveExtra)).changes).toEqual([
       expect.objectContaining({ _tag: "ExtraIndex", table: "indexed", index: "stray_idx" })
+    ])
+  })
+
+  it("detects changed index order or uniqueness", () => {
+    const indexed = pg.table(
+      "indexed",
+      {
+        a: pg.text("a").notNull(),
+        b: pg.text("b").notNull()
+      },
+      {
+        indexes: [{ name: "indexed_ab_idx", columns: ["a", "b"], unique: true }]
+      }
+    )
+    const liveChanged: IntrospectedTable = {
+      name: "indexed",
+      columns: [
+        { name: "a", type: "text", nullable: false, default: null },
+        { name: "b", type: "text", nullable: false, default: null }
+      ],
+      primaryKey: [],
+      foreignKeys: [],
+      indexes: [{ name: "indexed_ab_idx", columns: ["b", "a"], unique: false }]
+    }
+    expect(detectDrift([indexed], live(liveChanged)).changes).toEqual([
+      expect.objectContaining({ _tag: "IndexChanged", table: "indexed", index: "indexed_ab_idx" })
     ])
   })
 })
@@ -124,7 +225,10 @@ describe.skipIf(!supportsNodeSqlite)("Epic P2 — live SQLite drift", () => {
   })
   const posts = sqlite.table("posts", {
     id: sqlite.uuid("id").primaryKey(),
-    authorId: sqlite.uuid("author_id").notNull().references(() => authors.id)
+    authorId: sqlite
+      .uuid("author_id")
+      .notNull()
+      .references(() => authors.id)
   })
 
   it("is in sync right after migrating, and reports drift against a changed schema", async () => {
@@ -142,7 +246,10 @@ describe.skipIf(!supportsNodeSqlite)("Epic P2 — live SQLite drift", () => {
             // A schema-as-code model with an extra expected column the DB lacks.
             const postsV2 = sqlite.table("posts", {
               id: sqlite.uuid("id").primaryKey(),
-              authorId: sqlite.uuid("author_id").notNull().references(() => authors.id),
+              authorId: sqlite
+                .uuid("author_id")
+                .notNull()
+                .references(() => authors.id),
               published: sqlite.boolean("published").notNull()
             })
             const drifted = yield* introspector.drift([authors, postsV2])

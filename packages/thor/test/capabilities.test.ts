@@ -34,11 +34,7 @@ describe("capability bitsets (spec §9, §15.11)", () => {
     const writes = capabilitiesToBits(["insert.returning", "insert.returning", "update.returning"])
     const reads = capabilitiesToBits(["select.cte"])
 
-    expect(bitsToCapabilities(unionBits(writes, reads))).toEqual([
-      "insert.returning",
-      "update.returning",
-      "select.cte"
-    ])
+    expect(bitsToCapabilities(unionBits(writes, reads))).toEqual(["insert.returning", "update.returning", "select.cte"])
   })
 })
 
@@ -70,6 +66,12 @@ describe("capability matrices", () => {
     expect(statusOf(MySQLCapabilities, "insert.returning")).toBe("unsupported")
     expect(statusOf(MySQLCapabilities, "insert.onDuplicateKey")).toBe("native")
     expect(statusOf(MySQLCapabilities, "migration.transactionalDdl")).toBe("unsupported")
+  })
+
+  it("reports streaming as unsupported until a scoped cursor driver contract exists", () => {
+    for (const matrix of [PostgresCapabilities, SQLiteCapabilities, MySQLCapabilities]) {
+      expect(statusOf(matrix, "query.streaming")).toBe("unsupported")
+    }
   })
 
   it.each([

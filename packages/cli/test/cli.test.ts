@@ -25,20 +25,25 @@ const SCHEMA_TS = (extraColumn = false): string =>
   `import { sqlite } from "@gilvandovieira/thor"
 export const users = sqlite.table("users", {
   id: sqlite.uuid("id").primaryKey(),
-  email: sqlite.text("email").notNull()${extraColumn ? ",\n  name: sqlite.text(\"name\").notNull()" : ""}
+  email: sqlite.text("email").notNull()${extraColumn ? ',\n  name: sqlite.text("name").notNull()' : ""}
 })
 `
 const USERS_DDL = 'create table "users" ("id" text not null, "email" text not null, primary key ("id"))'
 
 // A project under packages/cli/ so tsx can resolve @gilvandovieira/thor from the
 // workspace, with a SQLite database created from the given DDL.
-const dbProject = async (schemaSource: string, createUsers = true): Promise<string> => {
+const dbProject = async (schemaSource: string, createUsers = true, journalTable?: string): Promise<string> => {
   const dir = mkdtempSync(join(resolve("packages/cli"), ".dbtest-"))
   directories.push(dir)
   writeFileSync(join(dir, "schema.ts"), schemaSource)
   writeFileSync(
     join(dir, "thor.config.json"),
-    JSON.stringify({ migrationsDir: "migrations", schema: "schema.ts", database: { dialect: "sqlite", url: "app.db" } })
+    JSON.stringify({
+      migrationsDir: "migrations",
+      schema: "schema.ts",
+      database: { dialect: "sqlite", url: "app.db" },
+      ...(journalTable ? { journalTable } : {})
+    })
   )
   const { DatabaseSync } = await import("node:sqlite")
   const db = new DatabaseSync(join(dir, "app.db"))
@@ -51,6 +56,10 @@ const MIGRATION_TS = `import { defineMigration, sql } from "@gilvandovieira/thor
 export default defineMigration({
   id: "20260710000000_create_users",
   name: "create_users",
+  safety: "additive",
+  phase: "expand",
+  downSafety: "destructive",
+  downPhase: "contract",
   up: sql\`${USERS_DDL}\`,
   down: sql\`drop table "users"\`
 })
@@ -59,6 +68,19 @@ export default defineMigration({
 /** @returns A configured empty SQLite project with one users migration. */
 const migrationProject = async (): Promise<string> => {
   const cwd = await dbProject(SCHEMA_TS(), false)
+  // This project exercises a destructive rollback (`down` drops the table), so
+  // it runs under a reviewed destructive policy (Finding 3: `down` is guarded by
+  // its own `downSafety`).
+  writeFileSync(
+    join(cwd, "thor.config.json"),
+    JSON.stringify({
+      migrationsDir: "migrations",
+      schema: "schema.ts",
+      database: { dialect: "sqlite", url: "app.db" },
+      policy: "allow-reviewed-destructive",
+      reviewed: true
+    })
+  )
   mkdirSync(join(cwd, "migrations"), { recursive: true })
   writeFileSync(join(cwd, "migrations", "20260710000000_create_users.ts"), MIGRATION_TS)
   return cwd
@@ -101,7 +123,15 @@ describe("published CLI surface", () => {
         ""
       ].join("\n")
       expect(output).toBe(expected)
-      expect(new Set(output.trim().split("\n").slice(2).map((row) => row.split("\t")[0])).size).toBe(ALL_CAPABILITIES.length)
+      expect(
+        new Set(
+          output
+            .trim()
+            .split("\n")
+            .slice(2)
+            .map((row) => row.split("\t")[0])
+        ).size
+      ).toBe(ALL_CAPABILITIES.length)
     }
   })
 
@@ -171,7 +201,10 @@ describe("published CLI surface", () => {
     expect(unsafe.status).toBe(1)
     expect(unsafe.stderr).toContain("Migration name must")
 
-    const badFormat = spawnSync(process.execPath, [cli, "skills", "export", "--format", "yaml"], { cwd, encoding: "utf8" })
+    const badFormat = spawnSync(process.execPath, [cli, "skills", "export", "--format", "yaml"], {
+      cwd,
+      encoding: "utf8"
+    })
     expect(badFormat.status).toBe(1)
     expect(badFormat.stderr).toContain("Usage: thor skills export")
 
@@ -192,7 +225,9 @@ describe("database-connected commands (spec §16.2, §20.2)", () => {
     expect(status).toContain("Applied: 1")
     expect(status).toContain("Pending: 0")
     expect(execFileSync(process.execPath, [cli, "up"], { cwd, encoding: "utf8" })).toContain("up to date")
-    expect(execFileSync(process.execPath, [cli, "doctor"], { cwd, encoding: "utf8" })).toContain("pending: 0 migration(s)")
+    expect(execFileSync(process.execPath, [cli, "doctor"], { cwd, encoding: "utf8" })).toContain(
+      "pending: 0 migration(s)"
+    )
     expect(execFileSync(process.execPath, [cli, "down"], { cwd, encoding: "utf8" })).toContain("Rolled back")
 
     const { DatabaseSync } = await import("node:sqlite")
@@ -256,6 +291,12 @@ describe("database-connected commands (spec §16.2, §20.2)", () => {
     expect(output).toContain("connectivity: connected")
     expect(output).toContain("drift: in sync")
     expect(output).toContain("dialect: sqlite")
+  })
+
+  it("drift and doctor ignore a configured custom migration journal", async () => {
+    const cwd = await dbProject(SCHEMA_TS(), true, "app_migration_journal")
+    expect(execFileSync(process.execPath, [cli, "doctor"], { cwd, encoding: "utf8" })).toContain("drift: in sync")
+    expect(execFileSync(process.execPath, [cli, "drift"], { cwd, encoding: "utf8" })).toContain("No drift")
   })
 
   it("requires a configured database", () => {

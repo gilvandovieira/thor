@@ -16,10 +16,12 @@ Teach an agent that building a query is pure and only terminal methods produce a
 ## Required Checks
 
 - Terminal methods `all`/`one`/`maybeOne`/`run` return Effects requiring `Database`.
+- Thor does not currently ship `.stream()`; do not describe `.all()` as streaming.
 - Provide a `Database` via a Layer (`PostgresLayer`/`SQLiteLayer`/`MySQLLayer`/`FakeDatabaseLayer`).
 - Wrap related writes in `db.transaction(...)`; nested calls use savepoints.
 - Handle tagged errors with `Effect.catchTag`; do not swallow them.
 - Provide a retry policy explicitly if retries are wanted.
+- Dedicated pool-connection layers retain one connection for layer lifetime; they do not provide per-query pool concurrency.
 
 ## Safe Patterns
 

@@ -15,11 +15,12 @@ Teach an agent to author, plan, and review migrations with policies and expand/c
 
 ## Required Checks
 
-- Preview with `Migrator.diff`/`plan`/`dryRun` before applying.
+- `Migrator.diff`/`plan` are create-table-only; use `dryRun` to preview pending authored steps.
 - Set a `policy` (`safe-only` default); destructive ops need `allow-reviewed-destructive` + `reviewed: true`.
 - Stage breaking changes with `planExpandContract` (expand → backfill → require → contract).
 - Use `backfill(effect)` for typed data steps; give Effect steps a `revision`.
 - Run drift detection (`Introspector.drift`) before migrating.
+- Expect new journal checksums as `sha256:v1`; legacy rows verify without being rewritten.
 
 ## Safe Patterns
 
@@ -31,6 +32,7 @@ Teach an agent to author, plan, and review migrations with policies and expand/c
 
 - Generating `DropTable`/`DropColumn`/type-narrowing as a safe default.
 - Applying a hand-built destructive plan without a reviewed policy.
+- Treating opaque manual SQL as structurally verified or omitting explicit safety/phase metadata.
 - Editing an already-applied migration (checksum mismatch fails).
 
 ## Examples

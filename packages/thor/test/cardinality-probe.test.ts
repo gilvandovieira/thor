@@ -74,4 +74,21 @@ describe("cardinality probe caps .one()/.maybeOne() (P0.5)", () => {
     await run(db.select({ id: users.id }).from(users).all(), driver)
     expect(driver.calls[0]!.sql).not.toMatch(/LIMIT/)
   })
+
+  it("bounds a prepared handle's .one()/.maybeOne() to LIMIT 2 (Finding 5)", async () => {
+    const handle = db.select({ id: users.id }).from(users).prepare("find")
+
+    const oneDriver = new FakeDriver().enqueue({ rows: [{ id: "1" }] })
+    await run(handle.one(), oneDriver)
+    expect(oneDriver.calls[0]!.sql).toMatch(/LIMIT 2$/)
+
+    const maybeDriver = new FakeDriver().enqueue({ rows: [] })
+    await run(handle.maybeOne(), maybeDriver)
+    expect(maybeDriver.calls[0]!.sql).toMatch(/LIMIT 2$/)
+
+    // .all() through the same handle stays uncapped.
+    const allDriver = new FakeDriver().enqueue({ rows: [] })
+    await run(handle.all(), allDriver)
+    expect(allDriver.calls[0]!.sql).not.toMatch(/LIMIT/)
+  })
 })

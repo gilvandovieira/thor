@@ -32,7 +32,7 @@ export const PostgresCapabilities = defineVerifiedCapabilities("postgres", {
   "schema.generatedColumns": "native",
   "schema.identityColumns": "unknown",
 
-  "query.streaming": "unknown",
+  "query.streaming": "unsupported",
   "query.preparedStatements": "native",
 
   "routine.functionCall": "native",

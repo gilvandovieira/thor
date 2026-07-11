@@ -12,16 +12,22 @@
 import { Effect, Option, Schema } from "effect"
 import { type AnyColumn, type Column, columnParamCodec } from "../schema/column.js"
 import { type AnyTable, tableMeta } from "../schema/table.js"
-import { type QueryIR, type SelectionField, collectQueryParams, queryCapabilityBits } from "../ir/query-ir.js"
+import {
+  type QueryIR,
+  type SelectIR,
+  type SelectionField,
+  collectQueryParams,
+  queryCapabilityBits
+} from "../ir/query-ir.js"
 import { type Capability, bitsToCapabilities } from "../capabilities/capability.js"
 import type { Dialect } from "../dialect.js"
 import { PostgresDialect } from "../postgres/dialect.js"
 import type { QueryError, NotFoundError, TooManyRowsError } from "../errors/index.js"
 import { Database } from "../execution/database.js"
 import {
-  atMostOne,
-  exactlyOne,
   executePreparedCommand,
+  executePreparedMaybeOne,
+  executePreparedOne,
   executePreparedRows,
   PreparedExecutionPlan,
   type QueryArgs
@@ -176,6 +182,9 @@ export const inspectIr = (ir: QueryIR) => {
  */
 export class PreparedQuery<A, P extends NamedParams = {}> {
   private readonly plan: PreparedExecutionPlan
+  private readonly fields: SelectionField[]
+  /** Lazily-built cardinality-probe plan capped to two rows (see `probePlan`). */
+  private probePlanCache?: PreparedExecutionPlan
 
   /**
    * @param name - Stable handle name used in diagnostics and tracing.
@@ -187,6 +196,7 @@ export class PreparedQuery<A, P extends NamedParams = {}> {
     ir: QueryIR,
     fields: SelectionField[]
   ) {
+    this.fields = fields
     this.plan = new PreparedExecutionPlan(
       {
         ...ir,
@@ -201,6 +211,27 @@ export class PreparedQuery<A, P extends NamedParams = {}> {
       },
       fields
     )
+  }
+
+  /**
+   * The cardinality-probe plan for `.one()`/`.maybeOne()`: a `SELECT` capped to
+   * at most two rows (preserving any tighter user limit) so a prepared handle
+   * never materializes an unbounded result set to decide cardinality (P0.5 /
+   * Finding 5). Non-`SELECT` handles (or ones already ≤ 2) reuse the base plan.
+   *
+   * @returns The two-row-capped prepared plan.
+   */
+  private get probePlan(): PreparedExecutionPlan {
+    if (this.probePlanCache) return this.probePlanCache
+    const ir = this.plan.ir
+    if (ir._tag === "Select") {
+      const probe = Math.min((ir as SelectIR).limit ?? 2, 2)
+      this.probePlanCache =
+        (ir as SelectIR).limit === probe ? this.plan : new PreparedExecutionPlan({ ...ir, limit: probe }, this.fields)
+    } else {
+      this.probePlanCache = this.plan
+    }
+    return this.probePlanCache
   }
 
   /** @experimental Debugging shape only. @returns Stable query-shape metadata without compiling or executing. */
@@ -238,7 +269,9 @@ export class PreparedQuery<A, P extends NamedParams = {}> {
    * @throws {TooManyRowsError} Through the Effect error channel when multiple rows exist.
    */
   one(...args: ExecutionArguments<P>): Effect.Effect<A, QueryError | NotFoundError | TooManyRowsError, Database> {
-    return Effect.flatMap(this.all(...args), (rows) => exactlyOne(rows, `${this.name}.one`))
+    return Effect.flatMap(Database, (db) =>
+      executePreparedOne<A>(this.probePlan, db, argsFrom(args), `${this.name}.one`)
+    )
   }
 
   /**
@@ -248,7 +281,9 @@ export class PreparedQuery<A, P extends NamedParams = {}> {
    * @throws {TooManyRowsError} Through the Effect error channel when multiple rows exist.
    */
   maybeOne(...args: ExecutionArguments<P>): Effect.Effect<Option.Option<A>, QueryError | TooManyRowsError, Database> {
-    return Effect.flatMap(this.all(...args), (rows) => atMostOne(rows, `${this.name}.maybeOne`))
+    return Effect.flatMap(Database, (db) =>
+      executePreparedMaybeOne<A>(this.probePlan, db, argsFrom(args), `${this.name}.maybeOne`)
+    )
   }
 
   /**

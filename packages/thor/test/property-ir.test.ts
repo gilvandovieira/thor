@@ -8,14 +8,17 @@ import {
   PostgresDialect,
   SQLiteDialect,
   and,
-  collectQueryParams,
   db,
-  normalizeQuery,
   or,
-  queryStructuralHash,
   withMode,
+  type ExecutionMode
+} from "@gilvandovieira/thor"
+import { FakeDatabaseLayer, FakeDriver } from "@gilvandovieira/thor/testing"
+import { normalizeQuery } from "../src/ir/normalize.js"
+import { queryStructuralHash } from "../src/ir/structural-hash.js"
+import {
+  collectQueryParams,
   type DeleteIR,
-  type ExecutionMode,
   type ExprNode,
   type InsertIR,
   type ParamNode,
@@ -23,8 +26,7 @@ import {
   type SelectIR,
   type SelectionField,
   type UpdateIR
-} from "@gilvandovieira/thor"
-import { FakeDatabaseLayer, FakeDriver } from "@gilvandovieira/thor/testing"
+} from "../src/ir/query-ir.js"
 import {
   buildPredicate,
   fuzzRows,
@@ -58,8 +60,7 @@ const dialects = [PostgresDialect, SQLiteDialect, MySQLDialect] as const
  * @param node - Parameter IR node.
  * @returns Stable marker that excludes bound data.
  */
-const parameterIdentity = (node: ParamNode): string =>
-  "value" in node ? "<bound>" : `<named:${node.name}>`
+const parameterIdentity = (node: ParamNode): string => ("value" in node ? "<bound>" : `<named:${node.name}>`)
 
 /**
  * Replaces inline parameter values without changing query structure.
@@ -115,9 +116,7 @@ const rewriteExpressionValues = (node: ExprNode, salt: number): ExprNode => {
       return {
         ...node,
         values: node.values.map((value) =>
-          value._tag === "Param"
-            ? rewriteExpressionValues(value, salt) as ParamNode
-            : value
+          value._tag === "Param" ? (rewriteExpressionValues(value, salt) as ParamNode) : value
         )
       }
     case "ScalarSubquery":
@@ -167,34 +166,42 @@ const rewriteQueryValues = (ir: QueryIR, salt: number): QueryIR => {
     case "Select":
       return {
         ...ir,
-        from: "_tag" in ir.from && ir.from._tag === "SubquerySource"
-          ? { ...ir.from, query: rewriteQueryValues(ir.from.query, salt) as SelectIR }
-          : ir.from,
+        from:
+          "_tag" in ir.from && ir.from._tag === "SubquerySource"
+            ? { ...ir.from, query: rewriteQueryValues(ir.from.query, salt) as SelectIR }
+            : ir.from,
         selection: rewriteSelectionValues(ir.selection, salt)!,
-        ...(ir.ctes ? {
-          ctes: ir.ctes.map((cte) => ({
-            ...cte,
-            query: rewriteQueryValues(cte.query, salt) as SelectIR
-          }))
-        } : {}),
-        ...(ir.joins ? {
-          joins: ir.joins.map((join) => ({
-            ...join,
-            source: "_tag" in join.source && join.source._tag === "SubquerySource"
-              ? { ...join.source, query: rewriteQueryValues(join.source.query, salt) as SelectIR }
-              : join.source,
-            ...(join.on ? { on: rewriteExpressionValues(join.on, salt) } : {})
-          }))
-        } : {}),
+        ...(ir.ctes
+          ? {
+              ctes: ir.ctes.map((cte) => ({
+                ...cte,
+                query: rewriteQueryValues(cte.query, salt) as SelectIR
+              }))
+            }
+          : {}),
+        ...(ir.joins
+          ? {
+              joins: ir.joins.map((join) => ({
+                ...join,
+                source:
+                  "_tag" in join.source && join.source._tag === "SubquerySource"
+                    ? { ...join.source, query: rewriteQueryValues(join.source.query, salt) as SelectIR }
+                    : join.source,
+                ...(join.on ? { on: rewriteExpressionValues(join.on, salt) } : {})
+              }))
+            }
+          : {}),
         ...(ir.where ? { where: rewriteExpressionValues(ir.where, salt) } : {}),
         ...(ir.groupBy ? { groupBy: ir.groupBy.map((item) => rewriteExpressionValues(item, salt)) } : {}),
         ...(ir.having ? { having: rewriteExpressionValues(ir.having, salt) } : {}),
-        ...(ir.setOperations ? {
-          setOperations: ir.setOperations.map((operation) => ({
-            ...operation,
-            query: rewriteQueryValues(operation.query, salt) as SelectIR
-          }))
-        } : {}),
+        ...(ir.setOperations
+          ? {
+              setOperations: ir.setOperations.map((operation) => ({
+                ...operation,
+                query: rewriteQueryValues(operation.query, salt) as SelectIR
+              }))
+            }
+          : {}),
         orderBy: ir.orderBy.map((term) => ({
           ...term,
           expr: rewriteExpressionValues(term.expr, salt)
@@ -204,15 +211,17 @@ const rewriteQueryValues = (ir: QueryIR, salt: number): QueryIR => {
       return {
         ...ir,
         rows: ir.rows.map((row) => row.map((value) => rewriteExpressionValues(value, salt))),
-        ...(ir.conflict ? {
-          conflict: {
-            ...ir.conflict,
-            set: ir.conflict.set.map((assignment) => ({
-              ...assignment,
-              value: rewriteExpressionValues(assignment.value, salt)
-            }))
-          }
-        } : {}),
+        ...(ir.conflict
+          ? {
+              conflict: {
+                ...ir.conflict,
+                set: ir.conflict.set.map((assignment) => ({
+                  ...assignment,
+                  value: rewriteExpressionValues(assignment.value, salt)
+                }))
+              }
+            }
+          : {}),
         ...(ir.returning ? { returning: rewriteSelectionValues(ir.returning, salt)! } : {})
       } satisfies InsertIR
     case "Update":
@@ -342,11 +351,12 @@ describe("Epic H property and fuzz invariants", () => {
         async (operation, mode, email, score) => {
           const driver = new FakeDriver()
           const layer = withMode(FakeDatabaseLayer(driver, { dialect: MySQLDialect }), mode)
-          const query = operation === "insert"
-            ? db.insert(fuzzRows).values({ email, score, active: true }).returning({ id: fuzzRows.id }).run()
-            : operation === "update"
-              ? db.update(fuzzRows).set({ score }).returning({ id: fuzzRows.id }).run()
-              : db.delete(fuzzRows).returning({ id: fuzzRows.id }).run()
+          const query =
+            operation === "insert"
+              ? db.insert(fuzzRows).values({ email, score, active: true }).returning({ id: fuzzRows.id }).run()
+              : operation === "update"
+                ? db.update(fuzzRows).set({ score }).returning({ id: fuzzRows.id }).run()
+                : db.delete(fuzzRows).returning({ id: fuzzRows.id }).run()
           const error = await Effect.runPromise(
             Effect.provide(Effect.flip(query), layer) as Effect.Effect<unknown, never, never>
           )
@@ -372,9 +382,8 @@ describe("Epic H property and fuzz invariants", () => {
               strings: [`volatile_${ids[index]}()`],
               values: []
             }
-            predicate = connectors[(index - 1) % connectors.length] === "and"
-              ? and(predicate, next)
-              : or(predicate, next)
+            predicate =
+              connectors[(index - 1) % connectors.length] === "and" ? and(predicate, next) : or(predicate, next)
           }
 
           const ir = db.select({ id: fuzzRows.id }).from(fuzzRows).where(predicate).ir

@@ -18,15 +18,12 @@ import {
   not,
   or,
   param,
-  pg,
-  type ExprNode,
-  type QueryIR,
-  type SelectIR,
-  type SelectionField
+  pg
 } from "@gilvandovieira/thor"
 import { noCapabilities } from "@gilvandovieira/thor/capabilities"
 import { columnRef } from "@gilvandovieira/thor/sql"
 import { tableMeta } from "@gilvandovieira/thor/schema"
+import type { ExprNode, QueryIR, SelectIR, SelectionField } from "../../src/ir/query-ir.js"
 
 export const fuzzRows = pg.table("property_rows", {
   id: pg.uuid("id").primaryKey().defaultRandom(),
@@ -97,19 +94,29 @@ const buildLeaf = (leaf: PredicateLeaf): ExprNode => {
   switch (leaf.kind) {
     case "numeric":
       switch (leaf.op) {
-        case "=": return eq(fuzzRows.score, leaf.value)
-        case "<>": return ne(fuzzRows.score, leaf.value)
-        case "<": return lt(fuzzRows.score, leaf.value)
-        case "<=": return lte(fuzzRows.score, leaf.value)
-        case ">": return gt(fuzzRows.score, leaf.value)
-        case ">=": return gte(fuzzRows.score, leaf.value)
+        case "=":
+          return eq(fuzzRows.score, leaf.value)
+        case "<>":
+          return ne(fuzzRows.score, leaf.value)
+        case "<":
+          return lt(fuzzRows.score, leaf.value)
+        case "<=":
+          return lte(fuzzRows.score, leaf.value)
+        case ">":
+          return gt(fuzzRows.score, leaf.value)
+        case ">=":
+          return gte(fuzzRows.score, leaf.value)
       }
     case "text":
       switch (leaf.op) {
-        case "=": return eq(fuzzRows.email, leaf.value)
-        case "<>": return ne(fuzzRows.email, leaf.value)
-        case "like": return like(fuzzRows.email, leaf.value)
-        case "ilike": return ilike(fuzzRows.email, leaf.value)
+        case "=":
+          return eq(fuzzRows.email, leaf.value)
+        case "<>":
+          return ne(fuzzRows.email, leaf.value)
+        case "like":
+          return like(fuzzRows.email, leaf.value)
+        case "ilike":
+          return ilike(fuzzRows.email, leaf.value)
       }
     case "named":
       return eq(fuzzRows.score, param(leaf.name, Schema.Number))
@@ -164,11 +171,13 @@ const selectRecipeArbitrary: fc.Arbitrary<SelectRecipe> = fc.record({
 export const selectIrArbitrary: fc.Arbitrary<SelectIR> = selectRecipeArbitrary.map((recipe) => {
   const meta = tableMeta(fuzzRows)
   const selection: ReadonlyArray<SelectionField> = recipe.aggregate
-    ? [{
-        alias: "total",
-        expr: { _tag: "RawExpr", strings: ["count(*)"], values: [] },
-        codec: Schema.Number
-      }]
+    ? [
+        {
+          alias: "total",
+          expr: { _tag: "RawExpr", strings: ["count(*)"], values: [] },
+          codec: Schema.Number
+        }
+      ]
     : [
         { alias: "email", expr: columnRef(fuzzRows.email), codec: fuzzRows.email.def.codec },
         { alias: "score", expr: columnRef(fuzzRows.score), codec: fuzzRows.score.def.codec }
@@ -193,32 +202,25 @@ export const selectIrArbitrary: fc.Arbitrary<SelectIR> = selectRecipeArbitrary.m
 })
 
 const insertIrArbitrary: fc.Arbitrary<QueryIR> = fc
-  .array(
-    fc.record({ email: textArbitrary, score: numberArbitrary, active: fc.boolean() }),
-    { minLength: 1, maxLength: 5 }
-  )
+  .array(fc.record({ email: textArbitrary, score: numberArbitrary, active: fc.boolean() }), {
+    minLength: 1,
+    maxLength: 5
+  })
   .map((rows) => db.insert(fuzzRows).values(rows).returning({ id: fuzzRows.id }).ir)
 
 const updateIrArbitrary: fc.Arbitrary<QueryIR> = fc
   .tuple(numberArbitrary, predicateCaseArbitrary)
-  .map(([score, predicate]) =>
-    db
-      .update(fuzzRows)
-      .set({ score })
-      .where(buildPredicate(predicate))
-      .returning({ id: fuzzRows.id })
-      .ir
+  .map(
+    ([score, predicate]) =>
+      db.update(fuzzRows).set({ score }).where(buildPredicate(predicate)).returning({ id: fuzzRows.id }).ir
   )
 
-const deleteIrArbitrary: fc.Arbitrary<QueryIR> = predicateCaseArbitrary.map((predicate) =>
-  db.delete(fuzzRows).where(buildPredicate(predicate)).returning({ id: fuzzRows.id }).ir
+const deleteIrArbitrary: fc.Arbitrary<QueryIR> = predicateCaseArbitrary.map(
+  (predicate) => db.delete(fuzzRows).where(buildPredicate(predicate)).returning({ id: fuzzRows.id }).ir
 )
 
 const joinIrArbitrary: fc.Arbitrary<QueryIR> = fc
-  .tuple(
-    fc.constantFrom("inner" as const, "left" as const, "right" as const, "full" as const),
-    predicateCaseArbitrary
-  )
+  .tuple(fc.constantFrom("inner" as const, "left" as const, "right" as const, "full" as const), predicateCaseArbitrary)
   .map(([type, predicate]) => {
     const posts = alias(fuzzPosts, "joined_posts")
     const base = db
@@ -227,10 +229,14 @@ const joinIrArbitrary: fc.Arbitrary<QueryIR> = fc
       .where(buildPredicate(predicate))
     const on = eq(fuzzRows.id, posts.rowId)
     switch (type) {
-      case "inner": return base.join(posts, on).ir
-      case "left": return base.leftJoin(posts, on).ir
-      case "right": return base.rightJoin(posts, on).ir
-      case "full": return base.fullJoin(posts, on).ir
+      case "inner":
+        return base.join(posts, on).ir
+      case "left":
+        return base.leftJoin(posts, on).ir
+      case "right":
+        return base.rightJoin(posts, on).ir
+      case "full":
+        return base.fullJoin(posts, on).ir
     }
   })
 

@@ -105,9 +105,9 @@ export const SKILLS: ReadonlyArray<Skill> = [
         "Check dialect capabilities before using generated columns or advanced types."
       ],
       safe: [
-        "`pg.uuid(\"id\").primaryKey().defaultRandom()`",
-        "`pg.text(\"email\").notNull().unique()`",
-        "`authorId: pg.uuid(\"author_id\").notNull().references(() => authors.id, { onDelete: \"cascade\" })`",
+        '`pg.uuid("id").primaryKey().defaultRandom()`',
+        '`pg.text("email").notNull().unique()`',
+        '`authorId: pg.uuid("author_id").notNull().references(() => authors.id, { onDelete: "cascade" })`',
         "Derive types: `type Row = Select<typeof table>`."
       ],
       unsafe: [
@@ -115,7 +115,8 @@ export const SKILLS: ReadonlyArray<Skill> = [
         "Adding dialect-specific column types without a capability check.",
         "Interpolating identifiers into names instead of using the DSL."
       ],
-      examples: "```ts\nconst authors = pg.table(\"authors\", {\n  id: pg.uuid(\"id\").primaryKey().defaultRandom(),\n  name: pg.text(\"name\").notNull()\n})\nconst posts = pg.table(\"posts\", {\n  id: pg.uuid(\"id\").primaryKey().defaultRandom(),\n  authorId: pg.uuid(\"author_id\").notNull().references(() => authors.id),\n  createdAt: pg.timestamp(\"created_at\").notNull().defaultNow()\n})\n```",
+      examples:
+        '```ts\nconst authors = pg.table("authors", {\n  id: pg.uuid("id").primaryKey().defaultRandom(),\n  name: pg.text("name").notNull()\n})\nconst posts = pg.table("posts", {\n  id: pg.uuid("id").primaryKey().defaultRandom(),\n  authorId: pg.uuid("author_id").notNull().references(() => authors.id),\n  createdAt: pg.timestamp("created_at").notNull().defaultNow()\n})\n```',
       verification: [
         "Add compile-time type tests for `Select`/`Insert`/`Update`.",
         "Snapshot the `tableToCreateOp` DDL per dialect.",
@@ -143,7 +144,7 @@ export const SKILLS: ReadonlyArray<Skill> = [
         "Compile a hot path with `.compile()`; bind values at `execute()` time."
       ],
       safe: [
-        "`db.select({ id: users.id }).from(users).where(eq(users.email, param(\"email\", Schema.String)))`",
+        '`db.select({ id: users.id }).from(users).where(eq(users.email, param("email", Schema.String)))`',
         "`db.insert(users).values({ email }).returning({ id: users.id }).one()`",
         "For trusted dynamic text, `unsafeSql(...)` marks the boundary explicitly."
       ],
@@ -152,7 +153,8 @@ export const SKILLS: ReadonlyArray<Skill> = [
         "Using `.one()` where zero or many rows are possible.",
         "Referencing a column from a table not in `from`/`join` scope."
       ],
-      examples: "```ts\nconst FindByEmail = db\n  .select({ id: users.id, email: users.email })\n  .from(users)\n  .where(eq(users.email, param(\"email\", Schema.String)))\n  .one()\n  .compile()\n\nconst user = yield* FindByEmail.execute({ email })\n```",
+      examples:
+        '```ts\nconst FindByEmail = db\n  .select({ id: users.id, email: users.email })\n  .from(users)\n  .where(eq(users.email, param("email", Schema.String)))\n  .one()\n  .compile()\n\nconst user = yield* FindByEmail.execute({ email })\n```',
       verification: [
         "Add type tests for the row shape.",
         "Add per-dialect SQL snapshot tests.",
@@ -169,33 +171,35 @@ export const SKILLS: ReadonlyArray<Skill> = [
     content: skillMarkdown({
       title: "Executing with Effect",
       goal: "Teach an agent that building a query is pure and only terminal methods produce an Effect requiring the `Database` service.",
-      useWhen: [
-        "The user runs queries, wires a database layer, uses transactions, or handles typed errors."
-      ],
+      useWhen: ["The user runs queries, wires a database layer, uses transactions, or handles typed errors."],
       checks: [
         "Terminal methods `all`/`one`/`maybeOne`/`run` return Effects requiring `Database`.",
+        "Thor does not currently ship `.stream()`; do not describe `.all()` as streaming.",
         "Provide a `Database` via a Layer (`PostgresLayer`/`SQLiteLayer`/`MySQLLayer`/`FakeDatabaseLayer`).",
         "Wrap related writes in `db.transaction(...)`; nested calls use savepoints.",
         "Handle tagged errors with `Effect.catchTag`; do not swallow them.",
-        "Provide a retry policy explicitly if retries are wanted."
+        "Provide a retry policy explicitly if retries are wanted.",
+        "Dedicated pool-connection layers retain one connection for layer lifetime; they do not provide per-query pool concurrency."
       ],
       safe: [
         "`Effect.provide(program, PostgresScopedLayer({ acquire, release }))`",
         "`db.transaction(Effect.gen(function* () { ... }))`",
-        "`withMode(layer, \"trusted\")` for validated hot paths."
+        '`withMode(layer, "trusted")` for validated hot paths.'
       ],
       unsafe: [
         "Opening/closing raw client connections in userland.",
-        "`withMode(layer, \"unsafe-hot\")` without an explicit opt-in reason.",
+        '`withMode(layer, "unsafe-hot")` without an explicit opt-in reason.',
         "Catching all errors as untyped exceptions."
       ],
-      examples: "```ts\nconst program = FindByEmail.execute({ email })\nEffect.runPromise(program.pipe(Effect.provide(DatabaseLive)))\n```",
+      examples:
+        "```ts\nconst program = FindByEmail.execute({ email })\nEffect.runPromise(program.pipe(Effect.provide(DatabaseLive)))\n```",
       verification: [
         "Test error channels with `FakeDriver` failures.",
         "Test transaction commit/rollback and savepoint nesting.",
         "Assert resource acquire/release under interruption."
       ],
-      hardRule: "Do not manually manage connections in userland unless building a driver adapter. Use Thor/Effect Layers."
+      hardRule:
+        "Do not manually manage connections in userland unless building a driver adapter. Use Thor/Effect Layers."
     })
   },
   {
@@ -206,33 +210,35 @@ export const SKILLS: ReadonlyArray<Skill> = [
     content: skillMarkdown({
       title: "Migrations",
       goal: "Teach an agent to author, plan, and review migrations with policies and expand/contract staging, never defaulting to destructive operations.",
-      useWhen: [
-        "The user changes the schema, backfills data, or reviews pending migrations."
-      ],
+      useWhen: ["The user changes the schema, backfills data, or reviews pending migrations."],
       checks: [
-        "Preview with `Migrator.diff`/`plan`/`dryRun` before applying.",
+        "`Migrator.diff`/`plan` are create-table-only; use `dryRun` to preview pending authored steps.",
         "Set a `policy` (`safe-only` default); destructive ops need `allow-reviewed-destructive` + `reviewed: true`.",
         "Stage breaking changes with `planExpandContract` (expand → backfill → require → contract).",
         "Use `backfill(effect)` for typed data steps; give Effect steps a `revision`.",
-        "Run drift detection (`Introspector.drift`) before migrating."
+        "Run drift detection (`Introspector.drift`) before migrating.",
+        "Expect new journal checksums as `sha256:v1`; legacy rows verify without being rewritten."
       ],
       safe: [
-        "`MigratorLive({ schema, policy: \"safe-only\" })`",
-        "`planExpandContract(\"rename_name\", { table, add, backfillSql, dropColumn })`",
+        '`MigratorLive({ schema, policy: "safe-only" })`',
+        '`planExpandContract("rename_name", { table, add, backfillSql, dropColumn })`',
         "`up: backfill(db.update(users).set({ ... }).run())` with a `revision`."
       ],
       unsafe: [
         "Generating `DropTable`/`DropColumn`/type-narrowing as a safe default.",
         "Applying a hand-built destructive plan without a reviewed policy.",
+        "Treating opaque manual SQL as structurally verified or omitting explicit safety/phase metadata.",
         "Editing an already-applied migration (checksum mismatch fails)."
       ],
-      examples: "```ts\nconst plan = yield* migrator.plan(\"add_posts\")\nconst report = yield* migrator.dryRun()\nyield* migrator.up() // applies pending under policy\n```",
+      examples:
+        '```ts\nconst plan = yield* migrator.plan("add_posts")\nconst report = yield* migrator.dryRun()\nyield* migrator.up() // applies pending under policy\n```',
       verification: [
         "Snapshot generated DDL per dialect.",
         "Test policy gating (safe-only blocks destructive; reviewed allows it).",
         "Test concurrency/failure paths and checksum validation."
       ],
-      hardRule: "Never generate destructive migrations as safe defaults. Drop table/drop column/type narrowing require explicit approval."
+      hardRule:
+        "Never generate destructive migrations as safe defaults. Drop table/drop column/type narrowing require explicit approval."
     })
   },
   {
@@ -243,9 +249,7 @@ export const SKILLS: ReadonlyArray<Skill> = [
     content: skillMarkdown({
       title: "Capabilities",
       goal: "Teach an agent to gate features on the dialect capability matrix and runtime capabilities, failing conservatively when support is missing.",
-      useWhen: [
-        "The user uses `RETURNING`, CTEs, window functions, upserts, or runtime-specific adapters."
-      ],
+      useWhen: ["The user uses `RETURNING`, CTEs, window functions, upserts, or runtime-specific adapters."],
       checks: [
         "Every capability is `native`, `emulated`, `unsupported`, or `unknown`.",
         "Guards fail with a tagged `CapabilityError` before the driver runs — do not catch and emulate.",
@@ -262,7 +266,8 @@ export const SKILLS: ReadonlyArray<Skill> = [
         "Faking portability by silently rewriting unsupported features.",
         "Ignoring an `unknown` capability."
       ],
-      examples: "```ts\n// MySQL rejects INSERT ... RETURNING before the driver:\nExpect a CapabilityError, not a silent workaround.\n```",
+      examples:
+        "```ts\n// MySQL rejects INSERT ... RETURNING before the driver:\nExpect a CapabilityError, not a silent workaround.\n```",
       verification: [
         "Assert `CapabilityError` before the driver for unsupported features.",
         "Run the capability-aware dialect contract suite.",
@@ -278,7 +283,7 @@ export const SKILLS: ReadonlyArray<Skill> = [
     description: "Use declared functions, aggregates, table functions, and procedures.",
     content: skillMarkdown({
       title: "Routines",
-      goal: "Teach an agent that functions are expressions and procedures are Effect operations, with volatility, transaction, and safety metadata honored.",
+      goal: "Teach an agent that functions are expressions and procedures are Effect operations, while distinguishing enforced transaction/capability behavior from advisory routine metadata.",
       useWhen: [
         "The user calls database functions, aggregates, window functions, table functions, or stored procedures."
       ],
@@ -287,7 +292,7 @@ export const SKILLS: ReadonlyArray<Skill> = [
         "`defineTableFunction(...).call(args, alias)` is a relation source for `from`.",
         "`defineProcedure(...).call(args).run()` is an Effect; a `requiresTransaction` procedure fails outside `db.transaction`.",
         "Routine names are declared and interned; never interpolated.",
-        "Declare volatility so prepared-statement/retry behavior is correct."
+        "Treat volatility, idempotency, mutation lists, and extension requirements as advisory metadata except for enforced `requiresTransaction`."
       ],
       safe: [
         "`db.select({ total: sumScore(users.score).over({ partitionBy: [users.teamId] }) }).from(users)`",
@@ -298,7 +303,8 @@ export const SKILLS: ReadonlyArray<Skill> = [
         "Calling a `requiresTransaction` procedure outside a transaction.",
         "Treating a procedure like a scalar function (or vice versa)."
       ],
-      examples: "```ts\nconst lower = defineFunction(\"lower\", { args: [{ dataType: \"text\", codec: Schema.String }], returns: { dataType: \"text\", codec: Schema.String }, volatility: \"immutable\" })\ndb.select({ email: lower(users.email) }).from(users)\n```",
+      examples:
+        '```ts\nconst lower = defineFunction("lower", { args: [{ dataType: "text", codec: Schema.String }], returns: { dataType: "text", codec: Schema.String }, volatility: "immutable" })\ndb.select({ email: lower(users.email) }).from(users)\n```',
       verification: [
         "Snapshot routine-call SQL and required capabilities.",
         "Test aggregation-scope and window guards.",
@@ -315,9 +321,7 @@ export const SKILLS: ReadonlyArray<Skill> = [
     content: skillMarkdown({
       title: "Testing",
       goal: "Teach an agent to test each feature at the right layer — types, IR, guards, SQL snapshots, fake-driver execution, and integration.",
-      useWhen: [
-        "The user adds or changes a query, schema, migration, dialect, or routine feature."
-      ],
+      useWhen: ["The user adds or changes a query, schema, migration, dialect, or routine feature."],
       checks: [
         "Add type tests for inferred row/param shapes.",
         "Add SQL snapshot tests per dialect via `.toSql(dialect)`.",
@@ -335,7 +339,8 @@ export const SKILLS: ReadonlyArray<Skill> = [
         "Skipping the capability-error branch for unsupported features.",
         "Non-deterministic fuzz seeds."
       ],
-      examples: "```ts\nconst driver = new FakeDriver().enqueue({ rows: [{ id: \"u1\" }] })\nawait Effect.runPromise(Effect.provide(query.all(), FakeDatabaseLayer(driver)))\n```",
+      examples:
+        '```ts\nconst driver = new FakeDriver().enqueue({ rows: [{ id: "u1" }] })\nawait Effect.runPromise(Effect.provide(query.all(), FakeDatabaseLayer(driver)))\n```',
       verification: [
         "Ensure unit + fake-execution + integration coverage for new features.",
         "Assert typed errors, not thrown exceptions.",
@@ -352,9 +357,7 @@ export const SKILLS: ReadonlyArray<Skill> = [
     content: skillMarkdown({
       title: "Dialects",
       goal: "Teach an agent to keep the shared core dialect-neutral and route backend differences through PostgreSQL/SQLite/MySQL adapters.",
-      useWhen: [
-        "The user targets a specific backend or hits a dialect difference in SQL, migrations, or routines."
-      ],
+      useWhen: ["The user targets a specific backend or hits a dialect difference in SQL, migrations, or routines."],
       checks: [
         "The IR, guards, and cache keys are dialect-neutral; only the compiler renders SQL.",
         "Placeholders, quoting, comparison, and capability matrices differ per dialect.",
@@ -388,9 +391,7 @@ export const SKILLS: ReadonlyArray<Skill> = [
     content: skillMarkdown({
       title: "Debugging",
       goal: "Teach an agent to debug in pipeline order — IR → capabilities → SQL → execution → decode — instead of rewriting raw SQL.",
-      useWhen: [
-        "A query fails to compile, decode, guard, or migrate, or produces unexpected SQL."
-      ],
+      useWhen: ["A query fails to compile, decode, guard, or migrate, or produces unexpected SQL."],
       checks: [
         "Read `query.inspect()` for kind/tables/params/cardinality/capabilities.",
         "Read the tagged error: `CapabilityError`, `CompileError`, `DecodeError`, `MigrationError`.",
@@ -407,7 +408,8 @@ export const SKILLS: ReadonlyArray<Skill> = [
         "Suppressing a tagged error instead of reading its fields.",
         "Assuming a decode error is a driver bug (check the codec)."
       ],
-      examples: "```ts\nconsole.log(query.inspect())            // shape metadata\nconsole.log(query.toSql(PostgresDialect).sql)\n```",
+      examples:
+        "```ts\nconsole.log(query.inspect())            // shape metadata\nconsole.log(query.toSql(PostgresDialect).sql)\n```",
       verification: [
         "Reproduce with `FakeDriver` returning the offending row.",
         "Add a regression test at the failing layer.",
@@ -424,27 +426,27 @@ export const SKILLS: ReadonlyArray<Skill> = [
     content: skillMarkdown({
       title: "Safety",
       goal: "Teach an agent that every unsafe path in Thor is opt-in, visible in the API, and testable — never a silent default.",
-      useWhen: [
-        "The user needs raw SQL, unsafe-hot mode, destructive migrations, or parameter logging."
-      ],
+      useWhen: ["The user needs raw SQL, unsafe-hot mode, destructive migrations, or parameter logging."],
       checks: [
         "Dynamic SQL text requires `unsafeSql(...)`; ordinary interpolation is rejected.",
         "`unsafe-hot` execution mode skips decode and is opt-in only via `withMode`.",
         "Destructive migrations require a reviewed policy; production blocks them by default.",
         "Parameter logging defaults to none/redacted; `unsafe-full` is explicit.",
-        "Routine names are never interpolated."
+        "Routine names are never interpolated.",
+        "Custom window frames, SQL defaults, generated/check expressions, and routine DDL syntax require `unsafeSql(...)`."
       ],
       safe: [
         "`unsafeSql(trustedFragment)` for genuinely dynamic, non-request text.",
-        "`withMode(layer, \"unsafe-hot\")` only on pre-validated compiled paths.",
-        "`db.withObservability({ logParams: \"redacted\" })`."
+        '`withMode(layer, "unsafe-hot")` only on pre-validated compiled paths.',
+        '`db.withObservability({ logParams: "redacted" })`.'
       ],
       unsafe: [
         "Passing request data to `unsafeSql`.",
         "Defaulting to `unsafe-hot` or `unsafe-full` param logging.",
         "Auto-applying destructive migrations."
       ],
-      examples: "```ts\n// Explicit, visible, testable:\nconst HotPath = withMode(PostgresLayer(client), \"unsafe-hot\")\n```",
+      examples:
+        '```ts\n// Explicit, visible, testable:\nconst HotPath = withMode(PostgresLayer(client), "unsafe-hot")\n```',
       verification: [
         "Test that ordinary interpolation is rejected without `unsafeSql`.",
         "Assert no raw params/SQL leak by default (observability invariant).",
@@ -526,11 +528,20 @@ export const skillFiles = (format: SkillExportFormat = "md"): ReadonlyArray<Skil
     return [
       {
         path: "thor/skills.json",
-        content: JSON.stringify(
-          { ...skillManifest(), skills: SKILLS.map((skill) => ({ id: skill.id, file: skill.file, description: skill.description, content: skill.content })) },
-          null,
-          2
-        ) + "\n"
+        content:
+          JSON.stringify(
+            {
+              ...skillManifest(),
+              skills: SKILLS.map((skill) => ({
+                id: skill.id,
+                file: skill.file,
+                description: skill.description,
+                content: skill.content
+              }))
+            },
+            null,
+            2
+          ) + "\n"
       }
     ]
   }

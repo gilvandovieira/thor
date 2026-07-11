@@ -51,7 +51,12 @@ APIs still settling — usable, but the shape may change:
 Reachable but not contractual — do not depend on these shapes:
 
 - `QueryIR` and the IR node types
-- `QueryCaches` and the cache-layer internals
+- `normalizeQuery`, `queryStructuralHash`, and guard collectors
+- `QueryCaches`, cache registries/factories, and cache-layer implementations
+
+These symbols are not re-exported from the package root and have no public
+subpath. Tests and repository benchmarks import them from source because they
+verify implementation invariants, not consumer contracts.
 
 ## `inspect()` is stable-for-debug only
 

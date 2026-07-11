@@ -1,8 +1,8 @@
 import { Effect, Schema } from "effect"
-import { db, eq, param, pg, sql } from "../src/index.js"
-import { defineMigration, rawSql } from "../src/migrate/index.js"
+import { db, eq, param, pg, rowNumber, sql } from "../src/index.js"
+import { defineMigration, rawSql, type MigrationOperation } from "../src/migrate/index.js"
 
-type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false
 type Expect<T extends true> = T
 
 const users = pg.table("users", {
@@ -15,7 +15,10 @@ const posts = pg.table("posts", {
   title: pg.text("title").notNull()
 })
 
-const byId = db.select({ email: users.email }).from(users).where(eq(users.id, param("id", Schema.String)))
+const byId = db
+  .select({ email: users.email })
+  .from(users)
+  .where(eq(users.id, param("id", Schema.String)))
 const compiledById = byId.one().compile()
 compiledById.execute({ id: "u1" })
 // @ts-expect-error compiled execution requires the named parameter
@@ -28,9 +31,13 @@ type CompiledByIdOutput = Effect.Effect.Success<ReturnType<typeof compiledById.e
 export type CompiledQueryRetainsOutput = Expect<Equal<CompiledByIdOutput, { email: string }>>
 export type CompiledQueryRetainsCardinality = Expect<Equal<typeof compiledById.cardinality, "one">>
 const idParam = param("id", Schema.String)
-export type ParamCarriesString = Expect<Equal<import("../src/sql/expressions.js").ParamsOf<typeof idParam>, { readonly id: string }>>
+export type ParamCarriesString = Expect<
+  Equal<import("../src/sql/expressions.js").ParamsOf<typeof idParam>, { readonly id: string }>
+>
 const idPredicate = eq(users.id, idParam)
-export type PredicateCarriesString = Expect<Equal<import("../src/sql/expressions.js").ParamsOf<typeof idPredicate>, { readonly id: string }>>
+export type PredicateCarriesString = Expect<
+  Equal<import("../src/sql/expressions.js").ParamsOf<typeof idPredicate>, { readonly id: string }>
+>
 byId.all({ id: "u1" })
 const byIdTerminal = byId.all()
 byIdTerminal.compile()
@@ -49,17 +56,23 @@ create.run({ id: "u1", email: "a@example.com" })
 // @ts-expect-error mutation parameters are threaded into terminal methods
 create.run({ id: "u1" })
 
-const left = db.select({ email: users.email, title: posts.title }).from(users)
+const left = db
+  .select({ email: users.email, title: posts.title })
+  .from(users)
   .leftJoin(posts, eq(users.id, posts.userId))
 type LeftRows = Effect.Effect.Success<ReturnType<typeof left.all>>
 export type LeftJoinIsNullable = Expect<Equal<LeftRows, ReadonlyArray<{ email: string; title: string | null }>>>
 
-const right = db.select({ email: users.email, title: posts.title }).from(users)
+const right = db
+  .select({ email: users.email, title: posts.title })
+  .from(users)
   .rightJoin(posts, eq(users.id, posts.userId))
 type RightRows = Effect.Effect.Success<ReturnType<typeof right.all>>
 export type RightJoinIsNullable = Expect<Equal<RightRows, ReadonlyArray<{ email: string | null; title: string }>>>
 
-const full = db.select({ email: users.email, title: posts.title }).from(users)
+const full = db
+  .select({ email: users.email, title: posts.title })
+  .from(users)
   .fullJoin(posts, eq(users.id, posts.userId))
 type FullRows = Effect.Effect.Success<ReturnType<typeof full.all>>
 export type FullJoinIsNullable = Expect<Equal<FullRows, ReadonlyArray<{ email: string | null; title: string | null }>>>
@@ -71,3 +84,31 @@ defineMigration({ id: "0001_backfill", name: "backfill", up: rawSql`select 1` })
 sql`${"untrusted"}`
 // @ts-expect-error migration SQL cannot interpolate ordinary runtime values
 rawSql`select ${"untrusted"}`
+// @ts-expect-error custom window-frame SQL requires unsafeSql(...); use rowsBetween(...) for structured frames
+rowNumber().over({ frame: "rows between unbounded preceding and current row" })
+const invalidRoutineSql: MigrationOperation = {
+  _tag: "CreateRoutine",
+  routine: "function",
+  name: "unsafe_body",
+  args: [],
+  // @ts-expect-error routine language syntax requires an explicit unsafeSql boundary
+  language: "sql",
+  // @ts-expect-error routine body syntax requires an explicit unsafeSql boundary
+  body: "select 1",
+  destructive: false,
+  reversible: true,
+  capabilities: []
+}
+void invalidRoutineSql
+// @ts-expect-error generated SQL expressions require unsafeSql(...)
+pg.integer("generated").generatedAlwaysAs("value + 1")
+// @ts-expect-error SQL defaults require unsafeSql(...)
+pg.integer("defaulted").defaultSql("42")
+pg.table(
+  "unsafe_checks",
+  { id: pg.integer("id") },
+  {
+    // @ts-expect-error check-constraint SQL requires unsafeSql(...)
+    checks: [{ expression: "id > 0" }]
+  }
+)

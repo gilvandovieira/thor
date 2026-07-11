@@ -69,7 +69,11 @@ try {
     "@gilvandovieira/thor/migrate",
     "@gilvandovieira/thor/testing",
     "@gilvandovieira/thor/routine",
-    "@gilvandovieira/thor/capabilities"
+    "@gilvandovieira/thor/capabilities",
+    "@gilvandovieira/thor/relations",
+    "@gilvandovieira/thor/observability",
+    "@gilvandovieira/thor/introspect",
+    "@gilvandovieira/thor/skills"
   ]
   writeFileSync(
     join(consumer, "import-check.mjs"),
@@ -78,6 +82,10 @@ try {
       "for (const name of modules) {",
       "  const loaded = await import(name)",
       "  if (Object.keys(loaded).length === 0) throw new Error(name + ' has no exports')",
+      "}",
+      "const root = await import('@gilvandovieira/thor')",
+      `for (const name of ${JSON.stringify(["QueryCaches", "WeakCacheLayer", "BoundedLruCache", "makeQueryCaches", "defaultQueryCaches", "normalizeQuery", "queryStructuralHash", "collectQueryParams", "queryCapabilityBits", "QueryIR"])}) {`,
+      "  if (name in root) throw new Error(name + ' leaked through the stable root')",
       "}"
     ].join("\n")
   )
@@ -90,7 +98,8 @@ try {
     ["node_modules/@gilvandovieira/cli/dist/index.js", "capabilities", "sqlite"],
     consumer
   )
-  if (!capabilities.includes("query.streaming\tunknown")) throw new Error("Packed CLI capability output is incomplete")
+  if (!capabilities.includes("query.streaming\tunsupported"))
+    throw new Error("Packed CLI capability output is incomplete")
   if (capabilities.split("\n").length !== 38) throw new Error("Packed CLI did not print every capability")
 
   if (process.argv.includes("--bun")) {
@@ -102,11 +111,30 @@ try {
       ["node_modules/@gilvandovieira/cli/dist/index.js", "capabilities", "sqlite"],
       consumer
     )
-    if (!bunCapabilities.includes("query.streaming\tunknown"))
+    if (!bunCapabilities.includes("query.streaming\tunsupported"))
       throw new Error("Packed CLI capabilities do not run under Bun")
   }
 
   const manifest = JSON.parse(readFileSync(join(consumer, "node_modules/@gilvandovieira/thor/package.json"), "utf8"))
+  const expectedExports = [
+    ".",
+    "./schema",
+    "./sql",
+    "./postgres",
+    "./sqlite",
+    "./mysql",
+    "./migrate",
+    "./testing",
+    "./routine",
+    "./relations",
+    "./capabilities",
+    "./observability",
+    "./introspect",
+    "./skills"
+  ]
+  if (JSON.stringify(Object.keys(manifest.exports)) !== JSON.stringify(expectedExports)) {
+    throw new Error(`Unexpected Thor export map: ${Object.keys(manifest.exports).join(", ")}`)
+  }
   if (manifest.dependencies?.effect) throw new Error("effect must not be duplicated as a direct Thor dependency")
   const cliManifest = JSON.parse(readFileSync(join(consumer, "node_modules/@gilvandovieira/cli/package.json"), "utf8"))
   if (!cliManifest.dependencies?.["@gilvandovieira/thor"])

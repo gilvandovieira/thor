@@ -59,12 +59,22 @@ independent repository review.
 
 | # | Status | Task | Evidence | Effort | Acceptance |
 |---|---|---|---|---|---|
-| P1-7a | ✅ | Scoped, resource-safe client layers | `PostgresScopedLayer`/`PostgresPoolLayer`, `MySQLScopedLayer`/`MySQLPoolLayer`, and `SQLiteScopedLayer`; `scoped-layers.test.ts` covers cleanup and failure causes | L | retain low-level bring-your-own-client constructors; add documented `Layer.scoped` paths that acquire/connect and release/end; acquire dedicated pooled connections where affinity is required; test acquisition/release failure, interruption, cancellation where supported, and pool exhaustion |
+| P1-7a | ✅ | Scoped, resource-safe client layers | `PostgresScopedLayer`/`PostgresDedicatedPoolConnectionLayer`, `MySQLScopedLayer`/`MySQLDedicatedPoolConnectionLayer`, and `SQLiteScopedLayer`; `scoped-layers.test.ts` covers cleanup and failure causes | L | retain low-level bring-your-own-client constructors; add documented `Layer.scoped` paths that acquire/connect and release/end; acquire dedicated pooled connections where affinity is required; test acquisition/release failure, interruption, cancellation where supported, and pool exhaustion |
 | P1-7b | ✅ | Transaction-scoped driver/database API | `execution/transaction.ts` backs `db.transaction` and the migrator; `transaction.test.ts` covers savepoints, isolation, retry boundaries, interruption, and combined causes | L | explicit scoped transaction driver used by `db.transaction` and the migrator; savepoints/isolation levels and retry boundaries; commit/rollback/release failures preserved; affinity tests across supported drivers (also unblocks a correct future libSQL adapter) |
 | P1-8a | ✅ | Publication metadata and clean tarballs | package metadata/READMEs/LICENSE, SECURITY, CHANGELOG, `prepack`, peer-only published Effect policy, and `test-packages.mjs` Node+Bun consumers | M | ship LICENSE in each package, add SECURITY policy, changelog/release notes, package READMEs/metadata/engines, `files`, and build-before-pack; resolve the `effect` dependency policy; packed tarballs contain only intended artifacts; every export and the `thor` binary work from clean Node and Bun consumer projects |
 | P1-8b | ✅ | Align and test the runtime support policy | root/packages/README declare Node ≥22; CI tests oldest supported Node 22 and current Node 26; declarations compile with `@types/node` 22 | M | either raise the baseline or test the oldest declared Node plus current; package engines and docs agree; type surface does not exceed the supported baseline |
 | P1-9 | ✅ | Make CI enforce documented invariants | separate static, Node 22/26 coverage, packed Node, Bun, PostgreSQL/MySQL, and performance jobs; immutable action SHAs, deterministic fast-check seed, minimal permissions/concurrency | M | static, unit/property, safe integration, runtime, package/CLI, and performance lanes; deterministic seeds/failure replay; minimal permissions and concurrency cancellation; actions pinned to immutable SHAs |
 | P1-10 | ✅ | Tighten raw SQL and migration trust boundaries | `RawExpr` retains structural params/columns; dialect compiler quotes/binds; `unsafeSql` is required for dynamic text in queries and migrations; dialect/type/injection tests | M | parameters and identifiers remain structural nodes quoted by the active dialect; ordinary value interpolation rejected; arbitrary text requires an explicit `unsafeSql` brand; the same explicit unsafe boundary applies to migrations; cross-dialect and injection tests |
+
+### Independent-review Priority 1 remediation
+
+| Finding | Status | Decision/evidence |
+|---|---|---|
+| P1.1 pool layers | ✅ reframed | The existing layers intentionally retain one affinity-safe pool connection. Misleading `PostgresPoolLayer`/`MySQLPoolLayer` names were replaced by `PostgresDedicatedPoolConnectionLayer`/`MySQLDedicatedPoolConnectionLayer`; scoped acquisition, interruption, exhaustion, and one-release behavior are tested. |
+| P1.2 prepared resources | ✅ confirmed/fixed | `Driver.releasePrepared`/`clearPrepared` connect bounded LRU admission to real connection resources. SQLite finalizes where supported; mysql2 calls `unprepare`; scoped disposal clears registries; drivers without safe public deallocation stop admitting at the bound. Collision and per-connection tests cover reuse safety. |
+| P1.3 MySQL preparation | ✅ confirmed/fixed | `preparedStatements: false` now selects mysql2 `query(sql, values)`; enabled preparation selects `execute(sql, values)`. Reuse and parameter-free paths have call-path tests. |
+| P1.4 migration checksums | ✅ confirmed/fixed | New entries use canonical `sha256:v1` fingerprints including identity, both directions, revision, irreversible, safety, and phase metadata. Legacy FNV rows verify without rewrite; unknown algorithms fail clearly. |
+| P1.5 unsafe SQL boundaries | ✅ confirmed/fixed | Window frames have a structured DSL; custom frames, SQL defaults, generated/check expressions, and routine DDL syntax require `unsafeSql`. Type-level, runtime-cast, and cross-dialect injection tests cover the boundary. |
 
 ### Maintenance follow-up (P2)
 
@@ -73,6 +83,16 @@ independent repository review.
 | P2-11 | ✅ (feature-suite split follow-up) | Split oversized modules and add code-quality tooling | IR traversal moved to `query-analysis.ts` (reducing `query-ir.ts` to declarations); Biome incrementally gates new seams, Knip gates the workspace, and dead placeholder exports/files were removed. The two hot-path modules were split along their statement/execution seams with **no public API churn**: `sql/query-builder.ts` (1415→707) into `query-builder-support` (shared typing + `PreparedQuery`) / `mutation-builder` / select+`db` barrel, and `execution/run.ts` (908→428) into `run-pipeline` / `prepared-plan` / `run` orchestrator. Remaining large files are authored content (`skills/index.ts`) or the SQL feature-matrix test fixture (`testing/sql-features.ts`); that feature-suite split stays a follow-up | L | split along existing statement/execution/feature seams without public API churn; add formatter/linter plus dead-export/dependency checks and enforce them in CI |
 | P2-12 | ✅ | Make documentation executable and claims generated | `pnpm docs:check` syntax-checks all README TS fences, executes the canonical cross-dialect query, and rejects stale capability summaries generated from the authoritative matrices; `docs/README.md` identifies the v1 spec as current and v0 as archived; packed Node/Bun consumers verify published examples and runtime claims | M | examples are tested or executable; feature/status tables derive from capability/schema metadata; one current spec plus clearly archived versions; README claims match live behavior |
 | P2-13 | ✅ | Enforce the narrowed milestone scope | release-work registry below names prerequisites/owner/tests/claim; Part II remains deferred; MariaDB/libSQL are explicitly unscheduled candidates | S | no new v1 surface begins before P0 is green; each resumed epic names prerequisites, owner, tests, and a release claim it closes; MariaDB/libSQL remain unscheduled candidates until dialect and transaction foundations are hardened |
+
+### Independent-review Priority 2 reconciliation
+
+| Finding | Status | Decision/evidence |
+|---|---|---|
+| P2.1 `stream()` | ⛔ deferred | No terminal, scoped cursor driver contract, per-row decoder, or live adapter support exists. `query.streaming` is explicitly `unsupported`; the stable v1 terminal list excludes it. |
+| P2.2 public subpaths | ✅ reconciled | `/ir`, `/guards`, `/bench`, and `/runtime` are intentionally not public. IR/guards/cache internals are sealed out of the root; runtime capability APIs remain experimental under `/capabilities`; `/skills` is published. |
+| P2.3 migration claims | 🟡 partial | Manual journaled execution and create-table generation are real. General schema diff, CLI expand/contract generation, seed workflows, and broad catalog/alteration generation are deferred. |
+| P2.4 drift semantics | 🟡 compatibility cleanup | `Introspector.drift` is canonical structural drift. Legacy `Migrator.drift` remains create-missing-table discovery and is documented as such pending a breaking rename. CLI paths share custom-journal handling. |
+| P2.5 routines | 🟡 partial | Core expression/source/command lowering and transaction guard exist. Declared input-codec enforcement, true named/default/overloaded/OUT args, procedure decoding, extension verification, retry semantics, introspection, and advanced DDL remain. |
 
 ### Release-work registry
 
@@ -475,9 +495,9 @@ runtime/platform/architecture-specific baselines and gates cover both hosts. ✅
 | # | Status | Task | Spec | Acceptance |
 |---|---|---|---|---|
 | O1 | ✅ | `Migrator.dryRun()` + `Migrator.plan(schema)` | §15.3 | `diff`/`plan`/`dryRun` added: `diff` returns raw ops, `plan` a policy-guarded plan (alias `generate`), `dryRun` previews the pending `up()` set with compiled SQL and applies nothing |
-| O2 | ✅ | Expand/contract generator (`--strategy expand-contract`) | §15.5 | `planExpandContract` emits ordered expand → backfill → require → contract plans; the contract (drop) plan stays blocked unless the run is reviewed-destructive |
+| O2 | 🟡 | Programmatic expand/contract helper | §15.5 | `planExpandContract` emits one narrow add → backfill → require → contract column-replacement sequence. No CLI `--strategy` generator exists, and the full sequence currently compiles only for PostgreSQL |
 | O3 | ✅ | Migration policies incl. `expand-only`, `allow-reviewed-destructive` | §15.4 | full policy set (`disabled`/`validate-only`/`safe-only`/`expand-only`/`allow-reviewed-destructive`, deprecated `allow-destructive`); `migrationPhase` classifier; `apply` is now policy-guarded; default `safe-only` blocks destructive auto-migration |
-| O4 | ✅ | Seed/backfill helpers | §15.1 | `backfill(effect)` wraps a typed data effect (`db.update(...).run()`) as a migration step, normalizing failures to `MigrationError` |
+| O4 | 🟡 | Typed backfill helper | §15.1 | `backfill(effect)` wraps a typed data effect as a migration step; dedicated repeatable/environment-specific seed workflows are not implemented |
 | O5 | ✅ | Transactional-DDL capability awareness | §15.1 | migrator wraps each step in a transaction on transactional-DDL dialects (PG/SQLite) and applies without one where unsupported (MySQL); covered by `migration-hardening.test.ts` + `migrator.test.ts` |
 | O6 | ✅ | Generated-migration tests + routine/function DDL support | §15.1 | `CreateRoutine`/`DropRoutine` IR ops compile to PostgreSQL and MySQL function/procedure DDL, are rejected before the driver on SQLite, and are phase-classified (create=expand, drop=contract/destructive); generated-migration snapshot + behavior tests cover all three dialects |
 
@@ -498,9 +518,11 @@ verified. ✅
 | P4 | ✅ | CLI `thor pull` / `introspect` / `inspect schema` / `inspect routines` | §16.2 | `thor introspect`/`inspect schema` print the live Schema IR, `pull` writes a `thor.introspected.json` snapshot; `inspect routines` reports the pending routine-introspection scope; SQLite E2E subprocess tests |
 | P5 | ✅ | Wire `drift` into `thor doctor` + migration flow | §16.5, §20.2 | `thor drift` loads schema-as-code (via tsx) and reports live-vs-code drift, exiting non-zero on drift; `thor doctor` surfaces drift alongside connectivity/journal/capabilities |
 
-> **P1–P5 ✅.** The Introspector reads everything schema-as-code models
-> (tables/columns/PKs/FKs/indexes) across all three dialects, and drift compares
-> the full structural surface. **Views/enums/routines/extensions** are catalog
+> **P1–P5 core complete.** The Introspector reads tables, columns, PKs, FKs, and
+> indexes across all three dialects. Drift compares presence, nullability, key
+> structure/actions, and explicit index shape; types/defaults, unique/check
+> constraints, generated/identity metadata, and constraint-backed MySQL indexes
+> remain limited. **Views/enums/routines/extensions** are catalog
 > objects the schema DSL does not model, so `thor pull` records the currently
 > modeled Schema IR and reports routine inspection as follow-up scope. Live PostgreSQL/MySQL
 > E2E for P1 tracked with the e2e lane.
@@ -533,7 +555,8 @@ parent row. ✅
 > in `from` (R4), procedure `.run()` execution (R3 core), and capability + return-decode
 > safety (R5). **R6 landed with O6; R2 (windowable declared functions) and R3
 > (procedure `requiresTransaction` honoring) are done.** Follow-up only: OUT
-> parameters and idempotency-driven retry.
+> parameters and idempotency-driven retry. Declared argument codecs and exact
+> argument shapes are also not yet enforced.
 
 | # | Status | Task | Spec | Acceptance |
 |---|---|---|---|---|
@@ -541,14 +564,16 @@ parent row. ✅
 | R2 | ✅ | Aggregate + window function nodes (⟵ J aggregation) | §14.2 | declared aggregates already hit the aggregation-scope guard; declared functions are now **windowable** (`fn(col).over({ partitionBy, orderBy })` via the shared `windowable` path), adding `select.windowFunctions` and staying capability-gated |
 | R3 | ✅ | Procedure execution through Effect | §14.5 | `procedure.call(args).run()` → typed Effect; **`requiresTransaction` honored** — a procedure needing a transaction fails with a `GuardError` before the driver unless run inside `db.transaction` (transaction detected via `isInTransaction`). Follow-up: OUT parameters and idempotency-driven retry |
 | R4 | ✅ | Table-valued functions in `from` | §14.2 | `defineTableFunction` usable as a source |
-| R5 | ✅ | Routine safety + capability gating | §14.6 | names never interpolated; required extensions/capabilities enforced |
+| R5 | 🟡 | Routine safety + capability gating | §14.6 | names never interpolated and Thor capabilities are enforced; extension names and several safety metadata fields are retained but not operationally verified |
 | R6 | ✅ | Routine DDL in migrations (create/drop function/procedure) | §15.1 | **done via O6** — `CreateRoutine`/`DropRoutine` IR ops compile to PostgreSQL/MySQL function/procedure DDL, rejected before the driver on SQLite, phase-classified |
 
-**Release-work record:** R1-R6 are complete. Declared routines lower through
+**Release-work record:** the core R1-R4/R6 lowering surface is implemented. Declared routines lower through
 typed IR, preserve capability and safety metadata, decode function results through
 the normal query pipeline, and enforce procedure transaction requirements before
 execution. Procedure OUT parameters and metadata-driven retry remain explicitly
-scoped follow-up work rather than part of the v1 acceptance criteria. ✅
+scoped follow-up work. Routine completeness remains partial until the normative
+metadata and argument contracts above are either implemented or explicitly
+removed from the stable specification. 🟡
 
 ## Epic S — Observability (§17, beta)
 

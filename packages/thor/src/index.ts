@@ -4,7 +4,8 @@
  *   import { pg, db, sql, eq, and, param } from "@gilvandovieira/thor"
  *
  * Deeper surfaces live under subpaths: `/schema`, `/sql`, `/postgres`, `/sqlite`, `/mysql`,
- * `/migrate`, `/testing`, `/routine`, `/relations`, `/capabilities`.
+ * `/migrate`, `/testing`, `/routine`, `/relations`, `/capabilities`, `/observability`,
+ * `/introspect`, and `/skills`.
  *
  * @module thor
  */
@@ -16,7 +17,7 @@ export {
   PostgresDriverRuntime,
   PostgresJsDriverRuntime,
   PostgresLayer,
-  PostgresPoolLayer,
+  PostgresDedicatedPoolConnectionLayer,
   PostgresScopedLayer,
   makePostgresDriver,
   type PgClient,
@@ -49,7 +50,7 @@ export {
   MySQLDialect,
   MySQLDriverRuntime,
   MySQLLayer,
-  MySQLPoolLayer,
+  MySQLDedicatedPoolConnectionLayer,
   MySQLScopedLayer,
   makeMySQLDriver,
   type MySQLClient,
@@ -101,6 +102,7 @@ export { param, asc, desc, type Expr, type Param } from "./sql/expressions.js"
 export {
   avg,
   count,
+  currentRow,
   denseRank,
   excluded,
   exists,
@@ -109,10 +111,17 @@ export {
   min,
   notExists,
   notInSubquery,
+  following,
+  groupsBetween,
+  preceding,
+  rangeBetween,
   rank,
   rowNumber,
+  rowsBetween,
   scalar,
   sum,
+  unboundedFollowing,
+  unboundedPreceding,
   type ExpressionInput,
   type SelectExpressionSource,
   type WindowSpec,
@@ -134,7 +143,7 @@ export {
 
 // Execution
 export { Database, type DatabaseService } from "./execution/database.js"
-export { type Driver, type CompiledStatement, type CommandResult, type RawRow } from "./execution/driver.js"
+export type { Driver, CompiledStatement, CommandResult, RawRow } from "./execution/driver.js"
 export type {
   CompiledQuery,
   CompiledCardinality,
@@ -160,17 +169,7 @@ export {
   DEFAULT_EXECUTION_MODE,
   DEFAULT_DECODE_MODE
 } from "./execution/plan.js"
-export {
-  type QueryCacheOptions,
-  type CacheStrategy,
-  type CacheLayer,
-  type CacheLayerStats,
-  QueryCaches,
-  WeakCacheLayer,
-  BoundedLruCache,
-  makeQueryCaches,
-  defaultQueryCaches
-} from "./execution/cache.js"
+export type { QueryCacheOptions, CacheStrategy } from "./execution/cache.js"
 export {
   withObservability,
   type LifecycleObservabilityEvent,
@@ -188,30 +187,3 @@ export {
 // Capabilities & errors
 export * as Capabilities from "./capabilities/index.js"
 export * from "./errors/index.js"
-
-// IR
-export { queryStructuralHash } from "./ir/structural-hash.js"
-export { normalizeQuery } from "./ir/normalize.js"
-export { collectQueryParams, queryCapabilityBits } from "./ir/query-ir.js"
-export type {
-  QueryIR,
-  SelectIR,
-  InsertIR,
-  UpdateIR,
-  DeleteIR,
-  CallIR,
-  ExprNode,
-  ParamNode,
-  SelectionField,
-  QuerySource,
-  SubquerySource,
-  CteSource,
-  TableFunctionSource,
-  JoinTerm,
-  JoinType,
-  CommonTableExpression,
-  SetOperation,
-  InsertConflict,
-  QueryAnnotations,
-  Cardinality
-} from "./ir/index.js"

@@ -5,6 +5,10 @@ You describe your tables and queries in plain, fluent TypeScript; Thor gives you
 back fully-typed results and runs them against **PostgreSQL, SQLite, or MySQL** —
 the same code, three databases.
 
+Thor is currently an **early beta**, not a production-ready stable release. The
+core pipeline is substantial, but streaming and several migration, routine,
+resource-lifecycle, and release-gate guarantees remain under remediation.
+
 Two ideas make it different from most query builders:
 
 - **Nothing touches your database until you ask it to.** Building a query is a
@@ -262,9 +266,12 @@ const program = Effect.gen(function* () {
   const m = yield* Migrator
   yield* m.up()      // apply each pending migration under the dialect policy
   yield* m.check()   // verify order + checksums
-  yield* m.drift()   // what would it take to match your schema to the DB?
+  yield* m.drift()   // legacy: create-table ops for missing expected tables only
 })
 ```
+
+Use `Introspector.drift()` for full supported structural diagnostics (tables,
+columns, nullability, primary/foreign keys, and explicit indexes).
 
 For reviewable planning (`diff`/`plan`/`dryRun`), environment policies,
 expand/contract staging, and typed backfills, see
@@ -304,7 +311,8 @@ typed builder → runtime IR → capability check → compile → execute → de
 | Testing helpers & cross-dialect contract suite | ✅ Done |
 | Migrations (live migrator + CLI) | ✅ Journaled programmatic migrator plus configured `generate`/`check`/`status`/`up`/`down`/`redo`/`drift`/`pull`/`doctor` commands; generation is currently create-table-only |
 | SQL feature-matrix tests | ✅ Implemented Levels 1–10 surfaces covered across query, codec, transaction, and migration/DDL scenarios |
-| Stored routines (functions/procedures) | 🟡 Scalar/aggregate expressions, table-function sources, procedure commands, capability guards, and return decoding done; advanced named/out arguments and routine DDL remain |
+| Stored routines (functions/procedures) | 🟡 Scalar/aggregate expressions, PostgreSQL table-function sources, procedure commands, capability guards, selected-result decoding, and basic PostgreSQL/MySQL migration DDL; declared input codecs, true named/default/overloaded/OUT arguments, procedure output decoding, extension verification, and routine introspection remain |
+| Streaming | ⛔ Deferred; no `.stream()` terminal or scoped cursor driver contract is shipped |
 
 The compact dialect summary below is generated from the executable capability
 matrices (36 declared capabilities), rather than maintained by hand.
@@ -312,9 +320,9 @@ matrices (36 declared capabilities), rather than maintained by hand.
 <!-- capabilities:generated:start -->
 | Dialect | Native | Emulated | Unsupported | Unknown |
 |---|---:|---:|---:|---:|
-| PostgreSQL | 23 | 1 | 1 | 11 |
-| SQLite | 15 | 5 | 15 | 1 |
-| MySQL 8 | 17 | 1 | 14 | 4 |
+| PostgreSQL | 23 | 1 | 2 | 10 |
+| SQLite | 15 | 5 | 16 | 0 |
+| MySQL 8 | 17 | 1 | 15 | 3 |
 <!-- capabilities:generated:end -->
 
 See [`docs/dialects.md`](docs/dialects.md) for live lanes, MySQL's explicit

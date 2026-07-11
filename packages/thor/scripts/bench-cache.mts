@@ -12,8 +12,9 @@
  *   pnpm bench:cache
  */
 import { Effect, Layer, ManagedRuntime, Schema } from "effect"
-import { Database, db, eq, makeQueryCaches, param, pg, type QueryCaches } from "@gilvandovieira/thor"
+import { Database, db, eq, param, pg } from "@gilvandovieira/thor"
 import { PostgresDialect } from "@gilvandovieira/thor/postgres"
+import { makeQueryCaches, type QueryCaches } from "../src/execution/cache.js"
 import {
   formatDuration,
   formatRange,
@@ -71,14 +72,23 @@ const time = (label: string, description: string, iters: number, fn: () => void)
 })
 
 const samples: Sample[] = [
-  time("cache.cold", "rebuild the query every time", 100_000, () =>
-    void coldRt.runSync(pointQuery().one({ email: "a@b.c" }))
+  time(
+    "cache.cold",
+    "rebuild the query every time",
+    100_000,
+    () => void coldRt.runSync(pointQuery().one({ email: "a@b.c" }))
   ),
-  time("cache.warm", "reuse the same query (layers hit)", 100_000, () =>
-    void warmRt.runSync(warmQuery.one({ email: "a@b.c" }))
+  time(
+    "cache.warm",
+    "reuse the same query (layers hit)",
+    100_000,
+    () => void warmRt.runSync(warmQuery.one({ email: "a@b.c" }))
   ),
-  time("cache.prepared", "compiled + prepared handle", 100_000, () =>
-    void preparedRt.runSync(preparedHandle.execute({ email: "a@b.c" }))
+  time(
+    "cache.prepared",
+    "compiled + prepared handle",
+    100_000,
+    () => void preparedRt.runSync(preparedHandle.execute({ email: "a@b.c" }))
   )
 ]
 
@@ -102,7 +112,9 @@ console.log(
 // --- per-layer hit/miss counters (spec §9, L6) ------------------------------
 const statsTable = (title: string, caches: QueryCaches) => {
   console.log(`\n${title}`)
-  console.log(`  ${"layer".padEnd(12)} ${"hits".padStart(10)} ${"misses".padStart(10)} ${"evictions".padStart(10)} ${"size".padStart(8)} ${"maxSize".padStart(8)}`)
+  console.log(
+    `  ${"layer".padEnd(12)} ${"hits".padStart(10)} ${"misses".padStart(10)} ${"evictions".padStart(10)} ${"size".padStart(8)} ${"maxSize".padStart(8)}`
+  )
   for (const s of caches.stats()) {
     console.log(
       `  ${s.name.padEnd(12)} ${String(s.hits).padStart(10)} ${String(s.misses).padStart(10)} ${String(s.evictions).padStart(10)} ${String(s.size ?? "—").padStart(8)} ${String(s.maxSize ?? "—").padStart(8)}`
@@ -116,7 +128,10 @@ const boundedCaches = makeQueryCaches({ maxSize: 4, strategy: "lru" })
 const boundedRt = ManagedRuntime.make(layerFor(boundedCaches, rows))
 for (let i = 0; i < 32; i++) {
   // A fresh selection shape each iteration → the compile layer overflows its bound.
-  const q = db.select({ id: users.id, name: users.name }).from(users).where(eq(users.email, param(`p${i}`, Schema.String)))
+  const q = db
+    .select({ id: users.id, name: users.name })
+    .from(users)
+    .where(eq(users.email, param(`p${i}`, Schema.String)))
   boundedRt.runSync(q.one({ [`p${i}`]: "a@b.c" }))
 }
 statsTable("Bounded registry (maxSize 4) — 32 distinct shapes force evictions:", boundedCaches)

@@ -7,7 +7,7 @@ description: "Use declared functions, aggregates, table functions, and procedure
 
 ## Goal
 
-Teach an agent that functions are expressions and procedures are Effect operations, with volatility, transaction, and safety metadata honored.
+Teach an agent that functions are expressions and procedures are Effect operations, while distinguishing enforced transaction/capability behavior from advisory routine metadata.
 
 ## Use When
 
@@ -19,7 +19,7 @@ Teach an agent that functions are expressions and procedures are Effect operatio
 - `defineTableFunction(...).call(args, alias)` is a relation source for `from`.
 - `defineProcedure(...).call(args).run()` is an Effect; a `requiresTransaction` procedure fails outside `db.transaction`.
 - Routine names are declared and interned; never interpolated.
-- Declare volatility so prepared-statement/retry behavior is correct.
+- Treat volatility, idempotency, mutation lists, and extension requirements as advisory metadata except for enforced `requiresTransaction`.
 
 ## Safe Patterns
 

@@ -20,6 +20,7 @@ Teach an agent that every unsafe path in Thor is opt-in, visible in the API, and
 - Destructive migrations require a reviewed policy; production blocks them by default.
 - Parameter logging defaults to none/redacted; `unsafe-full` is explicit.
 - Routine names are never interpolated.
+- Custom window frames, SQL defaults, generated/check expressions, and routine DDL syntax require `unsafeSql(...)`.
 
 ## Safe Patterns
 

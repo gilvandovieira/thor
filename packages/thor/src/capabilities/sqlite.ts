@@ -27,7 +27,7 @@ export const SQLiteCapabilities = defineVerifiedCapabilities("sqlite", {
   "schema.enum": "emulated",
   "schema.generatedColumns": "native",
   "schema.identityColumns": "emulated",
-  "query.streaming": "unknown",
+  "query.streaming": "unsupported",
   "query.preparedStatements": "native",
   "routine.functionCall": "unsupported",
   "routine.procedureCall": "unsupported",
