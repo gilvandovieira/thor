@@ -144,6 +144,7 @@ const nullableField = (field: SelectionField): SelectionField => ({ ...field, co
  *
  * @param clause - `"limit"` or `"offset"`, used in the error message.
  * @param n - Candidate pagination value.
+ * @returns Nothing; throws when the value is invalid.
  * @throws {GuardError} When `n` is not a finite, non-negative safe integer.
  */
 const assertPaginationValue = (clause: "limit" | "offset", n: number): void => {
