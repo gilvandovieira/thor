@@ -129,10 +129,10 @@ export const withMode = (
  * @param options - Cache options; omit `maxSize` for an unbounded dedicated registry.
  * @returns A layer providing `Database` with the cache installed.
  */
-export const withQueryCache = (
-  layer: Layer.Layer<Database>,
+export const withQueryCache = <E, R>(
+  layer: Layer.Layer<Database, E, R>,
   options: QueryCacheOptions = {}
-): Layer.Layer<Database> =>
+): Layer.Layer<Database, E, R> =>
   Layer.effect(
     Database,
     Effect.map(Database, (db): DatabaseService => ({ ...db, queryCache: makeQueryCaches(options) }))
