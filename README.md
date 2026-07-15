@@ -1,17 +1,21 @@
 # Thor
 
-Thor is a database toolkit for TypeScript, built for [Effect](https://effect.website).
-You describe your tables and queries in plain, fluent TypeScript; Thor gives you
-back fully-typed results and runs them against **PostgreSQL, SQLite, or MySQL** —
-the same code, three databases.
+Thor is an experimental database toolkit for TypeScript, built to explore what
+a database toolkit designed around [Effect](https://effect.website) can look
+like. You describe tables and queries in plain, fluent TypeScript; Thor returns
+fully typed results and can run the same code against **PostgreSQL, SQLite, or
+MySQL**.
 
-Thor is currently **`0.1.0-alpha.1`** — an alpha, not a production-ready stable
-release. The core pipeline is substantial and the completed adversarial
-remediation is regression-tested, but streaming is deferred and migration
-generation, routines, relation scaling, and live resource-stress coverage remain
-partial. See
-[docs/limitations.md](docs/limitations.md) for the exact conformance state, and
-reserve `1.0.0` for a deliberate stable release after external application use.
+> [!IMPORTANT]
+> This is an experimentation repository, not a supported product. Thor works and
+> its core pipeline is extensively tested, but there are no compatibility,
+> roadmap, or support commitments for downstream use cases. If the project is
+> useful or interesting to you, please explore it, fork it, and adapt it to your
+> needs.
+
+Some areas—including streaming, migration generation, routines, relation
+scaling, and live resource-stress coverage—remain partial or deferred. See
+[docs/limitations.md](docs/limitations.md) for the exact conformance state.
 
 Two ideas make it different from most query builders:
 
@@ -30,21 +34,25 @@ Your tables  →  a query you build  →  checked against the database's abiliti
              →  compiled to SQL     →  run as an Effect  →  typed rows back
 ```
 
-## Install
+## Try it
+
+Clone this repository and work with Thor directly from the workspace:
 
 ```sh
-pnpm add @gilvandovieira/thor effect
+pnpm install
+pnpm build
+pnpm test
 ```
 
 Thor supports maintained Node.js releases starting at Node 22. The native
 `node:sqlite` adapter requires Node 22.5 or newer; SQLite also has a Bun-native
 runtime lane.
 
-Everything ships from one package. The common things (`db`, `pg`, `eq`, `param`,
-…) come from the top level; deeper surfaces live under subpaths like
-`@gilvandovieira/thor/postgres`, `/sqlite`, `/mysql`, `/migrate`,
-`/relations`, `/introspect`, `/observability`, `/skills`, `/capabilities`, and
-`/testing`.
+The core library lives in `packages/thor/src`. Its common APIs include `db`,
+`pg`, `eq`, and `param`, with dedicated modules for database adapters,
+migrations, relations, introspection, observability, capabilities, and testing.
+The snippets below omit Thor import paths because the project is intended to be
+used from this repository rather than installed as a published package.
 
 ## A quick tour
 
@@ -54,8 +62,6 @@ Here's the whole journey — from describing the tables to reading real data bac
 ### 1. Describe your tables
 
 ```ts
-import { pg } from "@gilvandovieira/thor"
-
 const authors = pg.table("authors", {
   id: pg.uuid("id").primaryKey().defaultRandom(),
   name: pg.text("name").notNull()
@@ -72,8 +78,6 @@ const posts = pg.table("posts", {
 Your row types come for free — no code generation, no manual interfaces:
 
 ```ts
-import type { Select, Insert } from "@gilvandovieira/thor"
-
 type Post    = Select<typeof posts>  // { id: string; authorId: string; title: string; createdAt: Date }
 type NewPost = Insert<typeof posts>  // { authorId: string; title: string; id?: string; createdAt?: Date }
 ```
@@ -81,7 +85,6 @@ type NewPost = Insert<typeof posts>  // { authorId: string; title: string; id?: 
 ### 2. Write a query — and look at it before running anything
 
 ```ts
-import { db, eq, param } from "@gilvandovieira/thor"
 import { Schema } from "effect"
 
 const postsByAuthor = db
@@ -124,7 +127,7 @@ default; see [the observability guide](docs/observability.md).
 Relations remain explicit about loading: declare `one`/`many` edges and choose
 `join`, batched `query`, or `manual` per included edge. See the
 [relations guide](docs/relations.md). Live schema inspection and structural drift
-are available through `@gilvandovieira/thor/introspect` and the `thor` CLI; see
+are available through the introspection module and the `thor` CLI; see
 [introspection](docs/introspection.md). Thor also ships 10 agent guidance files —
 install them into your agent with `npx skills add gilvandovieira/thor`, or reach
 them through `/skills` and `thor skills export`; see [LLM skills](docs/skills.md).
@@ -137,7 +140,6 @@ typed result; `.all()` returns every match; `.run()` is for writes.
 ```ts
 import { Effect } from "effect"
 import { Client } from "pg"
-import { PostgresScopedLayer } from "@gilvandovieira/thor/postgres"
 
 const program = postsByAuthor.all({ authorId: "ada-id" })
 //    Effect<ReadonlyArray<{ id: string; title: string }>, DbError, Database>
@@ -160,8 +162,6 @@ Now the payoff. Which authors are most prolific? Join posts to their author and
 count per name — the same fluent builder, still fully typed:
 
 ```ts
-import { count } from "@gilvandovieira/thor"
-
 const leaderboard = db
   .select({ author: authors.name, posts: count() })
   .from(posts)
@@ -197,9 +197,6 @@ The builder never changes — only the layer you provide at execution, and
 
 ```ts
 // SQLite
-import { db, sqlite } from "@gilvandovieira/thor"
-import { SQLiteDialect, SQLiteLayer } from "@gilvandovieira/thor/sqlite"
-
 const notes = sqlite.table("notes", {
   id: sqlite.uuid("id").primaryKey().defaultRandom(),
   body: sqlite.text("body").notNull()
@@ -214,9 +211,6 @@ db.select({ body: notes.body }).from(notes).toSql(SQLiteDialect)
 
 ```ts
 // MySQL (uses the mysql2 promise API; no runtime dependency on it)
-import { db, mysql } from "@gilvandovieira/thor"
-import { MySQLLayer } from "@gilvandovieira/thor/mysql"
-
 const users = mysql.table("users", {
   id: mysql.uuid("id").primaryKey().defaultRandom(),
   email: mysql.text("email").notNull()
@@ -235,8 +229,6 @@ You don't need Postgres running to test your queries. `FakeDriver` records what
 was compiled and hands back rows you queue up:
 
 ```ts
-import { FakeDriver, FakeDatabaseLayer, expectSql } from "@gilvandovieira/thor/testing"
-
 expectSql(postsByAuthor).sql               // assert the compiled SQL
 const driver = new FakeDriver().enqueue({ rows: [{ id: "p1", title: "Hello" }] })
 Effect.provide(postsByAuthor.all({ authorId: "ada-id" }), FakeDatabaseLayer(driver))
@@ -255,8 +247,6 @@ per-migration transactions; MySQL DDL is non-transactional and a failure can
 leave already-executed DDL in place even though the failed step is not journaled.
 
 ```ts
-import { Migrator, MigratorLive, defineMigration, sql } from "@gilvandovieira/thor/migrate"
-
 const migrations = [
   defineMigration({
     id: "0001_create_authors",

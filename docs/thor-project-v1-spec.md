@@ -1,23 +1,27 @@
-# Thor Project v1 Specification
+# Thor Project v1 Experiment Specification
 
-> **✅ Current — authoritative specification.** This v1 spec supersedes the
-> archived [v0 specification](./thor-project-spec-v0.md), which is retained only
-> as the acceptance reference for the delivered Epics A–J foundation. See
+> **✅ Current design record.** This document supersedes the archived
+> [v0 specification](./thor-project-spec-v0.md), which is retained as the
+> acceptance reference for the delivered Epics A–J foundation. See
 > [`README.md`](./README.md) for the full docs index.
 
-**Status:** Current — authoritative alpha contract (supersedes the v0 spec)
-**Project placeholder name:** Thor Project
-**Package scope placeholder:** `@gilvandovieira`
-**Primary package:** `@gilvandovieira/thor`
-**CLI package:** `@gilvandovieira/cli`
+> [!IMPORTANT]
+> This specification records an experiment in building an Effect-native database
+> toolkit. It is not a product roadmap, release promise, compatibility guarantee,
+> or commitment to support downstream use cases. The implementation is real and
+> tested, but readers should fork and adapt it if they want to build on it.
+
+**Status:** Current experimental design record (supersedes the v0 spec)
+**Project name:** Thor
 **CLI binary:** `thor`
-**Primary v1 goal:** Production-readiness work for the Effect-native ORM/database toolkit defined in the v0 specification. This document distinguishes shipped alpha behavior from deferred stable-release requirements.
+**Primary v1 goal:** Explore how far the Effect-native database-toolkit architecture defined in v0 can be taken while keeping its behavior measurable, explicit, and testable.
 
 ---
 
 ## 1. v1 Thesis
 
-Thor v1 is the **production-readiness release**, not a feature dump.
+Thor v1 is an experiment in **production-shaped architecture**, not a release
+target or feature dump.
 
 v0 establishes the foundation:
 
@@ -39,19 +43,19 @@ Effect Executor
 Decoded Result
 ```
 
-v1 proves that foundation can support real applications:
+v1 tests whether that foundation can exercise application-shaped workloads:
 
 ```txt
 Compiled queries
 Explicit relations
-Production migrations
+Migration safety workflows
 Multi-dialect contracts
 Node + Bun runtime lanes
 Observability
 Full-feature SQL testing
 Hot-path benchmarks
 LLM skills
-Public API stability
+API boundary classification
 ```
 
 Thor remains:
@@ -106,22 +110,22 @@ LLM skills are guidance; Thor guards remain the source of truth.
 
 ## 3. v1 Goals
 
-Thor v1 should focus on these pillars:
+The v1 experiment focuses on these pillars:
 
 ```txt
-1. Production-grade query API
-2. Stable compiled query API
+1. Application-shaped query API
+2. Compiled query API with explicit in-repository stability labels
 3. Explicit relational layer
 4. Real dialect contract suite for Postgres, SQLite, and MySQL
 5. Runtime compatibility for Node and Bun
-6. Production migration workflows
+6. Migration-safety workflows
 7. Schema introspection and drift detection
-8. Mature function/procedure support
+8. Mature function/procedure experiments
 9. First-class observability
 10. Full-feature SQL test matrix
 11. Hot-path benchmark discipline
 12. LLM skill files for safe agent usage
-13. Public API stability boundaries
+13. Explicit API boundary classifications
 ```
 
 ---
@@ -149,90 +153,60 @@ Thor should remain explicit, typed, testable, benchmarked, and capability-aware.
 
 ---
 
-## 5. Package Identity and Layout
+## 5. Repository Module Layout
 
-### 5.1 Placeholder packages
+### 5.1 Workspace areas
 
-Initial package names remain:
-
-```txt
-@gilvandovieira/thor
-@gilvandovieira/cli
-```
-
-The CLI binary remains:
+The experiment remains organized as two workspace areas:
 
 ```txt
-thor
+packages/thor  — core toolkit
+packages/cli   — repository CLI
 ```
 
-### 5.2 Flat package principle
+The CLI binary remains `thor`. No publication name is assigned or promised.
 
-Thor should keep the flat package strategy from v0.
+### 5.2 Cohesive-module principle
 
-Prefer:
+Keep the toolkit cohesive while the architecture is being explored. Prefer
+focused source modules inside the core workspace over premature workspace
+splitting.
 
-```txt
-@gilvandovieira/thor
-@gilvandovieira/cli
-```
-
-With subpath exports:
-
-```ts
-import { pg } from "@gilvandovieira/thor/postgres"
-import { sqlite } from "@gilvandovieira/thor/sqlite"
-import { mysql } from "@gilvandovieira/thor/mysql"
-import { defineMigration } from "@gilvandovieira/thor/migrate"
-import { FakeDatabaseLayer } from "@gilvandovieira/thor/testing"
-import { defineFunction } from "@gilvandovieira/thor/routine"
-```
-
-Avoid premature package splitting:
-
-```txt
-@gilvandovieira/core
-@gilvandovieira/schema
-@gilvandovieira/postgres
-@gilvandovieira/testing
-```
-
-Splitting may happen later only if one of these becomes true:
+Splitting should be reconsidered only if one of these becomes true:
 
 ```txt
 - dependency weight becomes too high
-- independent versioning becomes necessary
-- users clearly need isolated installation
-- runtime-specific code pollutes the main package
-- benchmarks show subpath/package isolation materially helps
+- an experiment needs an independent lifecycle
+- runtime-specific code pollutes the core workspace
+- benchmarks show module isolation materially helps
 ```
 
-### 5.3 v1 subpath exports
+### 5.3 v1 source modules
 
-Shipped v1 subpaths:
+The repository-facing source areas are:
 
 ```txt
-@gilvandovieira/thor
-@gilvandovieira/thor/schema
-@gilvandovieira/thor/sql
-@gilvandovieira/thor/capabilities
-@gilvandovieira/thor/postgres
-@gilvandovieira/thor/sqlite
-@gilvandovieira/thor/mysql
-@gilvandovieira/thor/migrate
-@gilvandovieira/thor/testing
-@gilvandovieira/thor/routine
-@gilvandovieira/thor/relations
-@gilvandovieira/thor/introspect
-@gilvandovieira/thor/observability
-@gilvandovieira/thor/skills
+src/index.ts
+src/schema
+src/sql
+src/capabilities
+src/postgres
+src/sqlite
+src/mysql
+src/migrate
+src/testing
+src/routine
+src/relations
+src/introspect
+src/observability
+src/skills
 ```
 
 Low-level IR, guard collectors, cache implementations, and normalization/hash
-helpers are internal and intentionally have no public subpath. Guard assertions
-for consumers live under `/testing`. Benchmarks are repository commands rather
-than an importable package API. Experimental runtime capability APIs live under
-`/capabilities`; a separate `/runtime` route is deferred.
+helpers remain internal. Guard assertions live in the testing module. Benchmarks
+are repository commands rather than an importable API. Runtime capability APIs
+remain experimental within the capabilities module; a separate runtime module is
+deferred.
 
 ### 5.4 Suggested v1 repository layout
 
@@ -2049,9 +2023,8 @@ Example:
 ```json
 {
   "name": "thor",
-  "version": "1.0.0-draft",
+  "status": "experimental",
   "project": "Thor Project",
-  "scope": "@gilvandovieira",
   "skills": [
     {
       "id": "thor.schema",
@@ -2158,9 +2131,13 @@ Every advanced feature should include:
 
 ---
 
-## 24. v1 Milestone Plan
+## 24. v1 Experiment Plan
 
-### v1-alpha.1 — Compiled Query and Cache Foundation
+These stages record the order in which the design questions were explored. They
+are not release versions, publication targets, or commitments to future work.
+Completed items describe repository state at the time of writing.
+
+### Stage 1 — Compiled Query and Cache Foundation
 
 ```txt
 - compiled query API
@@ -2172,7 +2149,7 @@ Every advanced feature should include:
 - cache tests
 ```
 
-### v1-alpha.2 — Dialect Contract Expansion
+### Stage 2 — Dialect Contract Expansion
 
 ```txt
 - shared dialect contract suite
@@ -2182,7 +2159,7 @@ Every advanced feature should include:
 - unsupported feature tests
 ```
 
-### v1-alpha.3 — Runtime Lanes
+### Stage 3 — Runtime Lanes
 
 ```txt
 - Node runtime lane
@@ -2192,7 +2169,7 @@ Every advanced feature should include:
 - runtime benchmarks
 ```
 
-### v1-alpha.4 — Migration Hardening and Introspection
+### Stage 4 — Migration Hardening and Introspection
 
 ```txt
 - drift detection
@@ -2203,7 +2180,7 @@ Every advanced feature should include:
 - thor doctor migration checks
 ```
 
-### v1-alpha.5 — Relation Layer
+### Stage 5 — Relation Layer
 
 ```txt
 - defineRelations()
@@ -2214,22 +2191,22 @@ Every advanced feature should include:
 - relation planner tests
 ```
 
-### v1-beta — Observability, Skills, API Stability
+### Stage 6 — Observability, Skills, and API Boundaries
 
 ```txt
 - observability metadata/spans/metrics
 - LLM skill files
 - thor skills export
-- public API stability pass
+- API boundary classification pass
 - docs pass
 - benchmark gates stabilized
 ```
 
 ---
 
-## 25. v1 Acceptance Criteria
+## 25. v1 Experiment Completion Checklist
 
-Thor v1 is ready when:
+The v1 experiment covers its intended questions when:
 
 ```txt
 - Compiled query API exists and is documented.
@@ -2242,7 +2219,7 @@ Thor v1 is ready when:
 - Bun runtime test lane passes for supported adapters.
 - Migration CLI supports generate/create/up/down/status/drift/pull/inspect.
 - Programmatic migrator works through Effect.
-- Migration policies block destructive production behavior by default.
+- Migration policies block destructive behavior by default.
 - Introspection and drift detection are implemented for supported dialects.
 - Relation layer supports explicit loading strategies and no hidden N+1 behavior.
 - Functions/procedures are typed, guarded, and capability-aware.
@@ -2252,22 +2229,23 @@ Thor v1 is ready when:
 - Benchmarks establish cold/warm/hot baselines under Node and Bun.
 - LLM skill files exist for schema, queries, migrations, capabilities, routines, testing, benchmarks, dialects, debugging, and safety.
 - CLI can export LLM skills into an agent workspace.
-- Public tagged errors are stable and documented.
-- Stable/experimental/internal API boundaries are documented.
+- Tagged errors are classified and documented.
+- Stable/experimental/internal labels are documented as repository API boundaries.
 ```
 
 ---
 
-## 26. Working v1 Statement
+## 26. Working v1 Experiment Statement
 
 ```txt
-Thor v1 is the production-readiness release.
-
-It keeps the v0 foundation of typed/runtime IR, guards, capabilities, Effect
-execution, tests, and benchmarks, then adds mature dialect support, compiled
-queries, explicit relations, production migrations, introspection, runtime
-support for Node and Bun, safe routine handling, observability, LLM skills,
-and benchmarked hot paths.
+Thor v1 explores whether the v0 foundation of typed/runtime IR, guards,
+capabilities, Effect execution, tests, and benchmarks can be extended with
+multi-dialect behavior, compiled queries, explicit relations, migration safety,
+introspection, Node and Bun runtime paths, safe routine handling, observability,
+LLM skills, and benchmarked hot paths.
 ```
 
-Thor v1 should prove that the architecture is not only safe and expressive, but also fast, portable, testable, and usable by both humans and agents.
+The experiment asks whether the architecture can be safe, expressive, fast,
+portable, and testable for both humans and agents. Answering that question does
+not turn the repository into a supported product; anyone who wants to carry the
+work forward should fork and adapt it.
